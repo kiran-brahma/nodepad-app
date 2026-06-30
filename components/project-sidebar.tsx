@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
+import { useTheme } from "next-themes"
 import {
   Plus,
   Settings,
@@ -19,6 +20,8 @@ import {
   Save,
   FolderInput,
   Search,
+  Sun,
+  Moon,
 } from "lucide-react"
 import {
   AI_PROVIDER_PRESETS,
@@ -82,7 +85,11 @@ export function ProjectSidebar({
   const [modelSearch, setModelSearch] = useState("")
   // local draft for settings (only save on "Save")
   const [draft, setDraft] = useState<AISettings>(aiSettings)
+  const [mounted, setMounted] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const { theme, setTheme } = useTheme()
+
+  useEffect(() => { setMounted(true) }, [])
 
   useEffect(() => {
     if (editingId && inputRef.current) {
@@ -180,7 +187,7 @@ export function ProjectSidebar({
         opacity: isOpen ? 1 : 0,
         visibility: isOpen ? "visible" : "hidden"
       }}
-      className="relative z-50 transition-all duration-200 ease-in-out overflow-hidden border-r border-border bg-black/20 backdrop-blur-3xl flex flex-col h-full"
+      className="relative z-50 transition-all duration-200 ease-in-out overflow-hidden border-r border-border bg-muted/20 backdrop-blur-3xl flex flex-col h-full"
     >
       <div style={{ width: showSettings ? 320 : 240 }} className="flex flex-col h-full">
         {/* Header */}
@@ -207,7 +214,7 @@ export function ProjectSidebar({
           </div>
           <button
             onClick={handleClose}
-            className="p-1 px-1.5 hover:bg-white/5 rounded-sm transition-colors text-muted-foreground hover:text-foreground"
+            className="p-1 px-1.5 hover:bg-muted/50 rounded-sm transition-colors text-muted-foreground hover:text-foreground"
           >
             <X className="h-3.5 w-3.5" />
           </button>
@@ -226,12 +233,12 @@ export function ProjectSidebar({
                 className="absolute inset-0 overflow-y-auto px-2 py-2 space-y-0.5 custom-scrollbar"
               >
                 {projects.map((project) => (
-                  <div 
+                  <div
                     key={project.id}
                     className={`group relative rounded-sm transition-all duration-150 ${
-                      activeProjectId === project.id 
-                        ? "bg-primary/10 shadow-[inset_0_1px_0px_rgba(255,255,255,0.05)]" 
-                        : "hover:bg-white/5"
+                      activeProjectId === project.id
+                        ? "bg-primary/10 shadow-[inset_0_1px_0px_rgba(255,255,255,0.05)]"
+                        : "hover:bg-muted/50"
                     }`}
                   >
                     <div className="flex items-center p-2 px-2.5">
@@ -272,7 +279,7 @@ export function ProjectSidebar({
                                 setEditName(project.name)
                                 setEditingId(project.id)
                               }}
-                              className="p-1 hover:bg-white/10 rounded-sm text-muted-foreground hover:text-primary transition-colors"
+                              className="p-1 hover:bg-muted/50 rounded-sm text-muted-foreground hover:text-primary transition-colors"
                             >
                               <Edit3 className="h-3 w-3" />
                             </button>
@@ -306,13 +313,13 @@ export function ProjectSidebar({
                             Delete Space?
                           </span>
                           <div className="flex items-center gap-1">
-                            <button 
+                            <button
                               onClick={() => handleDelete(project.id)}
                               className="p-1 bg-white/20 hover:bg-white/30 rounded-full text-white transition-colors"
                             >
                               <Check className="h-3 w-3" />
                             </button>
-                            <button 
+                            <button
                               onClick={() => setDeletingId(null)}
                               className="p-1 bg-black/30 hover:bg-black/40 rounded-full text-white transition-colors"
                             >
@@ -342,7 +349,7 @@ export function ProjectSidebar({
                   <div className="relative">
                     <button
                       onClick={() => setProviderOpen(v => !v)}
-                      className="flex w-full items-center justify-between rounded-md border border-white/10 bg-white/[0.04] px-2.5 py-2 text-left hover:bg-white/[0.07] focus:outline-none transition-colors"
+                      className="flex w-full items-center justify-between rounded-md border border-border bg-muted/20 px-2.5 py-2 text-left hover:bg-muted/30 focus:outline-none transition-colors"
                     >
                       <span className="font-mono text-[11px] font-bold text-foreground">{currentPreset.label}</span>
                       <ChevronDown className={`h-3 w-3 text-muted-foreground transition-transform ${providerOpen ? "rotate-180" : ""}`} />
@@ -354,7 +361,7 @@ export function ProjectSidebar({
                           animate={{ opacity: 1, y: 0 }}
                           exit={{ opacity: 0, y: -4 }}
                           transition={{ duration: 0.1 }}
-                          className="absolute top-full left-0 right-0 z-20 mt-1 overflow-hidden rounded-md border border-white/10 bg-[#0d0d10] shadow-xl"
+                          className="absolute top-full left-0 right-0 z-20 mt-1 overflow-hidden rounded-md border border-border bg-popover shadow-xl"
                         >
                           {AI_PROVIDER_PRESETS.map(preset => (
                             <button
@@ -373,10 +380,10 @@ export function ProjectSidebar({
                                 }))
                                 setProviderOpen(false)
                               }}
-                              className="flex w-full items-center gap-2.5 px-2.5 py-2 text-left hover:bg-white/5 transition-colors"
+                              className="flex w-full items-center gap-2.5 px-2.5 py-2 text-left hover:bg-muted/50 transition-colors"
                             >
                               <div className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border ${
-                                draft.provider === preset.id ? "border-primary bg-primary/20" : "border-white/10"
+                                draft.provider === preset.id ? "border-primary bg-primary/20" : "border-border"
                               }`}>
                                 {draft.provider === preset.id && <Check className="h-2.5 w-2.5 text-primary" />}
                               </div>
@@ -394,7 +401,7 @@ export function ProjectSidebar({
                   <label className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-muted-foreground">
                     API Key
                   </label>
-                  <div className="flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.04] px-2.5 py-2 focus-within:border-primary/50 transition-colors">
+                  <div className="flex items-center gap-2 rounded-md border border-border bg-muted/20 px-2.5 py-2 focus-within:border-primary/50 transition-colors">
                     <Key className="h-3 w-3 shrink-0 text-muted-foreground" />
                     <input
                       type="text"
@@ -426,7 +433,7 @@ export function ProjectSidebar({
                   <label className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-muted-foreground">
                     Custom Base URL
                   </label>
-                  <div className="flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.04] px-2.5 py-2 focus-within:border-primary/50 transition-colors">
+                  <div className="flex items-center gap-2 rounded-md border border-border bg-muted/20 px-2.5 py-2 focus-within:border-primary/50 transition-colors">
                     <input
                       type="text"
                       value={draft.customBaseUrl ?? ""}
@@ -448,7 +455,7 @@ export function ProjectSidebar({
                     Model
                   </label>
                   {models.length === 0 ? (
-                    <div className="flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.04] px-2.5 py-2 focus-within:border-primary/50 transition-colors">
+                    <div className="flex items-center gap-2 rounded-md border border-border bg-muted/20 px-2.5 py-2 focus-within:border-primary/50 transition-colors">
                       <input
                         type="text"
                         value={draft.modelId}
@@ -463,7 +470,7 @@ export function ProjectSidebar({
                     <div>
                       <button
                         onClick={() => { setModelOpen(v => { if (v) setModelSearch(""); return !v }) }}
-                        className="flex w-full items-center justify-between rounded-md border border-white/10 bg-white/[0.04] px-2.5 py-2 text-left hover:bg-white/[0.07] focus:outline-none transition-colors"
+                        className="flex w-full items-center justify-between rounded-md border border-border bg-muted/20 px-2.5 py-2 text-left hover:bg-muted/30 focus:outline-none transition-colors"
                       >
                         <div>
                           <div className="font-mono text-[11px] font-bold text-foreground">{selectedModel?.label ?? draft.modelId}</div>
@@ -478,10 +485,10 @@ export function ProjectSidebar({
                             animate={{ opacity: 1, height: "auto" }}
                             exit={{ opacity: 0, height: 0 }}
                             transition={{ duration: 0.15 }}
-                            className="mt-1 overflow-hidden rounded-md border border-white/10 bg-[#0d0d10] shadow-xl"
+                            className="mt-1 overflow-hidden rounded-md border border-border bg-popover shadow-xl"
                           >
                             {/* Search input */}
-                            <div className="flex items-center gap-2 px-2.5 py-2 border-b border-white/5">
+                            <div className="flex items-center gap-2 px-2.5 py-2 border-b border-border">
                               <Search className="h-3 w-3 shrink-0 text-muted-foreground/50" />
                               <input
                                 type="text"
@@ -505,10 +512,10 @@ export function ProjectSidebar({
                                       setModelOpen(false)
                                       setModelSearch("")
                                     }}
-                                    className="flex w-full items-center gap-2.5 px-2.5 py-2 text-left hover:bg-white/5 transition-colors"
+                                    className="flex w-full items-center gap-2.5 px-2.5 py-2 text-left hover:bg-muted/50 transition-colors"
                                   >
                                     <div className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border ${
-                                      draft.modelId === model.id ? "border-primary bg-primary/20" : "border-white/10"
+                                      draft.modelId === model.id ? "border-primary bg-primary/20" : "border-border"
                                     }`}>
                                       {draft.modelId === model.id && <Check className="h-2.5 w-2.5 text-primary" />}
                                     </div>
@@ -523,7 +530,7 @@ export function ProjectSidebar({
                               {/* Fetched models from provider API */}
                               {fetchedModels.length > 0 && (
                                 <>
-                                  <div className="px-2.5 py-1.5 border-t border-white/5">
+                                  <div className="px-2.5 py-1.5 border-t border-border">
                                     <span className="font-sans text-[8px] font-semibold uppercase tracking-widest text-muted-foreground/50">
                                       All available models ({fetchedModels.length})
                                     </span>
@@ -552,10 +559,10 @@ export function ProjectSidebar({
                                             setModelOpen(false)
                                             setModelSearch("")
                                           }}
-                                          className="flex w-full items-center gap-2.5 px-2.5 py-1.5 text-left hover:bg-white/5 transition-colors"
+                                          className="flex w-full items-center gap-2.5 px-2.5 py-1.5 text-left hover:bg-muted/50 transition-colors"
                                         >
                                           <div className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border ${
-                                            draft.modelId === fm.id ? "border-primary bg-primary/20" : "border-white/10"
+                                            draft.modelId === fm.id ? "border-primary bg-primary/20" : "border-border"
                                           }`}>
                                             {draft.modelId === fm.id && <Check className="h-2.5 w-2.5 text-primary" />}
                                           </div>
@@ -583,7 +590,7 @@ export function ProjectSidebar({
                                 </div>
                               )}
                               {fetchError && !fetchingModels && (
-                                <div className="px-2.5 py-2 border-t border-white/5">
+                                <div className="px-2.5 py-2 border-t border-border">
                                   <span className="font-sans text-[9px] text-destructive/70">{fetchError}</span>
                                 </div>
                               )}
@@ -607,7 +614,7 @@ export function ProjectSidebar({
 
                 {/* Web Grounding (OpenRouter + OpenAI) */}
                 {(draft.provider === "openrouter" || draft.provider === "openai") && selectedModel && (
-                  <div className="flex items-start justify-between gap-3 rounded-md border border-white/5 bg-white/[0.02] px-2.5 py-2.5">
+                  <div className="flex items-start justify-between gap-3 rounded-md border border-border bg-muted/10 px-2.5 py-2.5">
                     <div className="flex items-start gap-2">
                       <Globe className="h-3.5 w-3.5 mt-0.5 text-primary/60 shrink-0" />
                       <div>
@@ -625,7 +632,7 @@ export function ProjectSidebar({
                       onClick={() => selectedModel.supportsGrounding && setDraft(d => ({ ...d, webGrounding: !d.webGrounding }))}
                       disabled={!selectedModel.supportsGrounding}
                       className={`relative shrink-0 h-5 w-9 rounded-full transition-all duration-200 ${
-                        draft.webGrounding && selectedModel.supportsGrounding ? "bg-primary" : "bg-white/10"
+                        draft.webGrounding && selectedModel.supportsGrounding ? "bg-primary" : "bg-muted"
                       } disabled:opacity-30 disabled:cursor-not-allowed`}
                     >
                       <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all duration-200 ${
@@ -639,9 +646,9 @@ export function ProjectSidebar({
                 <div className={`flex items-center gap-2 rounded-md px-2.5 py-2 font-mono text-[9px] ${
                   draft.apiKey
                     ? "bg-primary/10 border border-primary/20 text-primary"
-                    : "bg-white/5 border border-white/5 text-muted-foreground"
+                    : "bg-muted/20 border border-border text-muted-foreground"
                 }`}>
-                  <span className={`h-1.5 w-1.5 rounded-full ${draft.apiKey ? "bg-primary animate-pulse" : "bg-white/30"}`} />
+                  <span className={`h-1.5 w-1.5 rounded-full ${draft.apiKey ? "bg-primary animate-pulse" : "bg-muted-foreground/40"}`} />
                   {draft.apiKey ? `${currentPreset.label} — API key configured` : "No API key — AI disabled"}
                 </div>
               </motion.div>
@@ -650,7 +657,7 @@ export function ProjectSidebar({
         </div>
 
         {/* Footer */}
-        <div className="p-3 border-t border-white/5 bg-black/10 shrink-0">
+        <div className="p-3 border-t border-border bg-muted/10 shrink-0">
           {showSettings ? (
             <div className="flex flex-col gap-1.5">
               <button
@@ -662,10 +669,20 @@ export function ProjectSidebar({
               </button>
               <button
                 onClick={() => setShowSettings(false)}
-                className="flex items-center justify-center w-full h-8 px-2.5 rounded-sm bg-white/5 hover:bg-white/10 text-muted-foreground font-mono text-[9px] font-bold uppercase tracking-[0.1em] transition-all active:scale-[0.98] border border-white/5"
+                className="flex items-center justify-center w-full h-8 px-2.5 rounded-sm bg-muted/30 hover:bg-muted/50 text-muted-foreground font-mono text-[9px] font-bold uppercase tracking-[0.1em] transition-all active:scale-[0.98] border border-border"
               >
                 Cancel
               </button>
+              {/* Theme toggle */}
+              {mounted && (
+                <button
+                  onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+                  className="flex items-center justify-between w-full h-8 px-2.5 rounded-sm bg-muted/30 hover:bg-muted/50 text-muted-foreground hover:text-foreground font-mono text-[9px] font-bold uppercase tracking-[0.1em] transition-all active:scale-[0.98] border border-border"
+                >
+                  <span>{theme === "dark" ? "Light Mode" : "Dark Mode"}</span>
+                  {theme === "dark" ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+                </button>
+              )}
             </div>
           ) : (
             <div className="flex flex-col gap-1.5">
@@ -678,7 +695,7 @@ export function ProjectSidebar({
               </button>
               <button
                 onClick={onImportProject}
-                className="flex items-center justify-between w-full h-8 px-2.5 rounded-sm bg-white/5 hover:bg-white/10 text-muted-foreground hover:text-foreground font-mono text-[9px] font-bold uppercase tracking-[0.1em] transition-all active:scale-[0.98] border border-white/5"
+                className="flex items-center justify-between w-full h-8 px-2.5 rounded-sm bg-muted/20 hover:bg-muted/40 text-muted-foreground hover:text-foreground font-mono text-[9px] font-bold uppercase tracking-[0.1em] transition-all active:scale-[0.98] border border-border"
                 title="Import a .nodepad file"
               >
                 <span>Import .nodepad</span>
@@ -686,7 +703,7 @@ export function ProjectSidebar({
               </button>
               <button
                 onClick={() => setShowSettings(true)}
-                className="flex items-center justify-between w-full h-8 px-2.5 rounded-sm bg-white/5 hover:bg-white/10 text-muted-foreground hover:text-foreground font-mono text-[9px] font-bold uppercase tracking-[0.1em] transition-all active:scale-[0.98] border border-white/5"
+                className="flex items-center justify-between w-full h-8 px-2.5 rounded-sm bg-muted/20 hover:bg-muted/40 text-muted-foreground hover:text-foreground font-mono text-[9px] font-bold uppercase tracking-[0.1em] transition-all active:scale-[0.98] border border-border"
               >
                 <span>Settings</span>
                 <Settings className="h-3.5 w-3.5" />

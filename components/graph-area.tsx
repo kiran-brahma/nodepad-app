@@ -419,7 +419,7 @@ export function GraphArea({
                 ))}
               </div>
 
-              <p className="text-[13px] text-white uppercase tracking-[0.15em] whitespace-nowrap">
+              <p className="text-[13px] text-foreground uppercase tracking-[0.15em] whitespace-nowrap">
                 {`type anything · #type to classify · ${mod}K for commands`}
               </p>
             </div>
@@ -468,7 +468,7 @@ export function GraphArea({
             dominantBaseline="central"
             fontSize={Math.max(11, 11 * tk)}
             fontFamily="monospace"
-            fill="white"
+            fill="currentColor"
             fillOpacity={Math.max(0, 0.06 - (nodesRef.current.length * 0.002))}
             style={{ pointerEvents: "none", userSelect: "none", letterSpacing: "0.08em" }}
           >
@@ -498,7 +498,7 @@ export function GraphArea({
                   <path
                     key={i}
                     d={d}
-                    stroke="white"
+                    stroke="currentColor"
                     strokeWidth={isSynth ? 0.5 : highlighted ? 2 : 1.2}
                     strokeDasharray={isSynth ? "3 7" : undefined}
                     strokeOpacity={
@@ -658,7 +658,7 @@ export function GraphArea({
                         textAnchor="middle"
                         dominantBaseline="central"
                         fontSize={13}
-                        fill="white"
+                        fill="currentColor"
                         fillOpacity={0.9}
                         style={{ pointerEvents: "none" }}
                       >
@@ -701,7 +701,7 @@ export function GraphArea({
               style={{ left: tipX, top: tipY, transform: "translateY(-100%)" }}
             >
               <div
-                className="rounded-sm shadow-[0_4px_24px_rgba(0,0,0,0.55)] border border-white/10 overflow-hidden"
+                className="rounded-sm shadow-[0_4px_24px_rgba(0,0,0,0.55)] border border-border overflow-hidden"
                 style={{ minWidth: 190, maxWidth: 300 }}
               >
                 <div className="flex items-center gap-2 px-2.5 py-1.5" style={{ background: accent }}>
@@ -709,16 +709,16 @@ export function GraphArea({
                     className: "h-3 w-3 flex-shrink-0",
                     style: { color: "black", opacity: 0.7 },
                   })}
-                  <span className="font-mono text-[9px] font-black uppercase tracking-widest text-black/70">
+                  <span className="font-mono text-[9px] font-black uppercase tracking-widest text-foreground/70">
                     {node.isSynthesis ? "Synthesis" : config?.label}
                   </span>
                   {node.block?.category && (
-                    <span className="ml-auto font-mono text-[8px] text-black/50 truncate max-w-[90px]">
+                    <span className="ml-auto font-mono text-[8px] text-foreground/50 truncate max-w-[90px]">
                       {node.block.category}
                     </span>
                   )}
                   {node.degree > 0 && (
-                    <span className="ml-auto font-mono text-[8px] text-black/40">
+                    <span className="ml-auto font-mono text-[8px] text-foreground/40">
                       {node.degree} link{node.degree !== 1 ? "s" : ""}
                     </span>
                   )}
@@ -728,7 +728,7 @@ export function GraphArea({
                 </div>
               </div>
               <div
-                className="mx-4 h-2 w-2 rotate-45 border-b border-r border-white/10 bg-card/95"
+                className="mx-4 h-2 w-2 rotate-45 border-b border-r border-border bg-card/95"
                 style={{ marginTop: -1 }}
               />
             </div>
