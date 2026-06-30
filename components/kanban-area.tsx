@@ -118,9 +118,10 @@ export function KanbanArea({
   return (
     <div className="relative h-full w-full bg-background overflow-hidden">
       {/* Scrollable Container */}
-      <div 
+      <div
         ref={containerRef}
         className="flex h-full w-full overflow-x-auto custom-scrollbar p-6 pb-6 gap-8"
+        style={{ willChange: 'transform' }}
       >
         <AnimatePresence mode="popLayout">
           {columns.map(([key, col]) => (
