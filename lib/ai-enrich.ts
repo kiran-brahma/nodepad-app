@@ -58,12 +58,27 @@ const ENGLISH_STOPWORDS = new Set([
 ])
 
 function detectScript(text: string): string {
-  if (/[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]/.test(text)) return "Arabic"
-  if (/[\u0590-\u05FF]/.test(text))                             return "Hebrew"
-  if (/[\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/.test(text)) return "Chinese, Japanese, or Korean"
-  if (/[\u0400-\u04FF]/.test(text))                             return "Russian"
-  if (/[\u0900-\u097F]/.test(text))                             return "Hindi"
-  if (/^https?:\/\//i.test(text.trim()))                        return "English"
+  // URLs are Latin-script identifiers - treat as English before counting.
+  if (/^https?:\/\//i.test(text.trim())) return "English"
+
+  // Count characters per script rather than testing for mere presence. A few
+  // foreign characters interspersed in an otherwise-English note (e.g. a couple
+  // of Japanese words in a long English wiki page) must NOT flip the whole
+  // note's response language - only a script that actually dominates should.
+  const scripts = [
+    { name: "Arabic",                       count: (text.match(/[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]/g) ?? []).length },
+    { name: "Hebrew",                       count: (text.match(/[\u0590-\u05FF]/g) ?? []).length },
+    { name: "Chinese, Japanese, or Korean", count: (text.match(/[\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/g) ?? []).length },
+    { name: "Russian",                      count: (text.match(/[\u0400-\u04FF]/g) ?? []).length },
+    { name: "Hindi",                        count: (text.match(/[\u0900-\u097F]/g) ?? []).length },
+  ]
+  const latinCount = (text.match(/[a-zA-Z]/g) ?? []).length
+  const dominant   = scripts.reduce((a, b) => (b.count > a.count ? b : a))
+
+  // Honour a non-Latin directive only when that script is at least as prevalent
+  // as the Latin characters. Ties favour the non-Latin script, since CJK and
+  // similar scripts pack more meaning per character than Latin.
+  if (dominant.count > 0 && dominant.count >= latinCount) return dominant.name
 
   const words = text.toLowerCase().match(/\b[a-z]{2,}\b/g) ?? []
   if (words.length === 0) return "English"
