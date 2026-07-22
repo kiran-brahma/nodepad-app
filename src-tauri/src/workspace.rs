@@ -8,7 +8,30 @@ use uuid::Uuid;
 const DEFAULT_WORKSPACE_NAME: &str = "My Thinking Workspace";
 /// Names are bounded in Unicode scalar values, never bytes or grapheme clusters.
 const MAX_WORKSPACE_NAME_SCALARS: usize = 120;
+/// Annotations are bounded in Unicode scalar values for the same reason.
+const MAX_ANNOTATION_SCALARS: usize = 2_000;
 const ACTIVE_WORKSPACE_PREFERENCE: &str = "active_workspace_id";
+const DEFAULT_NOTE_TYPE: &str = "general";
+/// The fixed structural classifications a Note may carry. Nothing outside this
+/// set is durable, in the schema or in the interface.
+const NOTE_TYPES: [&str; 14] = [
+    "claim",
+    "question",
+    "task",
+    "idea",
+    "entity",
+    "quote",
+    "reference",
+    "definition",
+    "opinion",
+    "reflection",
+    "narrative",
+    "comparison",
+    "thesis",
+    "general",
+];
+/// Undo is a bounded in-memory convenience, never a durable log.
+const MAX_REVERSIBLE_COMMANDS: usize = 20;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,6 +42,31 @@ pub struct ThinkingWorkspace {
     updated_at: String,
 }
 
+/// Who last decided a value. Manual authorship is durable so a later AI slice
+/// cannot overwrite a thinker's choice silently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Provenance {
+    Default,
+    Manual,
+}
+
+impl Provenance {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Manual => "manual",
+        }
+    }
+
+    fn from_str(value: &str) -> Self {
+        match value {
+            "manual" => Self::Manual,
+            _ => Self::Default,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Note {
@@ -26,9 +74,88 @@ pub struct Note {
     workspace_id: String,
     markdown: String,
     note_type: String,
+    note_type_provenance: Provenance,
+    annotation: Option<String>,
+    annotation_provenance: Provenance,
     created_at: String,
     updated_at: String,
     pinned: bool,
+}
+
+/// The only shapes a Note row may change in. Every Note intent and every undo
+/// is one of these, so an undo is an ordinary committed mutation rather than a
+/// rewind of the database file.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum NoteMutation {
+    Insert(Note),
+    Replace(Note),
+    Delete { note_id: String },
+}
+
+impl NoteMutation {
+    fn workspace_id(&self) -> &str {
+        match self {
+            Self::Insert(note) | Self::Replace(note) => &note.workspace_id,
+            Self::Delete { .. } => "",
+        }
+    }
+}
+
+/// Bounded per-Workspace history of compensating mutations for this session.
+/// It is deliberately in memory: restart clears undo without touching durable
+/// state.
+#[derive(Debug, Default)]
+pub(crate) struct UndoHistory {
+    commands: Vec<(String, NoteMutation)>,
+}
+
+impl UndoHistory {
+    fn push(&mut self, workspace_id: &str, compensation: NoteMutation) {
+        self.commands
+            .push((workspace_id.to_owned(), compensation));
+        // The bound is per Workspace, so only this Workspace's oldest command is
+        // dropped when it overflows.
+        let mut kept = 0;
+        let mut retain: Vec<bool> = vec![true; self.commands.len()];
+        for index in (0..self.commands.len()).rev() {
+            if self.commands[index].0 == workspace_id {
+                kept += 1;
+                retain[index] = kept <= MAX_REVERSIBLE_COMMANDS;
+            }
+        }
+        let mut index = 0;
+        self.commands.retain(|_| {
+            let keep = retain[index];
+            index += 1;
+            keep
+        });
+    }
+
+    fn take_last(&mut self, workspace_id: &str) -> Option<NoteMutation> {
+        let position = self
+            .commands
+            .iter()
+            .rposition(|(id, _)| id == workspace_id)?;
+        Some(self.commands.remove(position).1)
+    }
+
+    /// Returns a taken command to its place after a failed undo, so a storage
+    /// failure never silently costs the thinker a reversible step.
+    fn restore(&mut self, workspace_id: &str, compensation: NoteMutation) {
+        self.commands
+            .push((workspace_id.to_owned(), compensation));
+    }
+
+    fn clear(&mut self, workspace_id: &str) {
+        self.commands.retain(|(id, _)| id != workspace_id);
+    }
+
+    fn depth(&self, workspace_id: &str) -> usize {
+        self.commands
+            .iter()
+            .filter(|(id, _)| id == workspace_id)
+            .count()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -37,6 +164,9 @@ pub struct WorkspaceSnapshot {
     workspaces: Vec<ThinkingWorkspace>,
     notes: Vec<Note>,
     active_workspace_id: String,
+    /// How many mutations in the active Workspace can still be undone in this
+    /// session. Always zero right after a restart.
+    undoable_commands: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -44,6 +174,7 @@ pub struct WorkspaceSnapshot {
 pub enum WorkspaceFailureCode {
     Validation,
     NotFound,
+    NothingToUndo,
     Storage,
 }
 
@@ -98,8 +229,16 @@ pub(crate) enum WorkspaceError {
     WorkspaceNameTooLong,
     #[error("A Note needs Markdown text.")]
     EmptyNote,
+    #[error("An Annotation may not exceed {MAX_ANNOTATION_SCALARS} characters.")]
+    AnnotationTooLong,
+    #[error("That is not a Note Type Nodepad recognizes.")]
+    UnknownNoteType,
     #[error("The selected Thinking Workspace no longer exists.")]
     WorkspaceNotFound,
+    #[error("That Note no longer exists.")]
+    NoteNotFound,
+    #[error("There is nothing left to undo in this Thinking Workspace.")]
+    NothingToUndo,
     #[error("Local storage could not commit this change. Please try again.")]
     Storage(#[source] rusqlite::Error),
 }
@@ -107,10 +246,13 @@ pub(crate) enum WorkspaceError {
 impl WorkspaceError {
     fn failure(&self) -> WorkspaceFailure {
         let code = match self {
-            Self::EmptyWorkspaceName | Self::WorkspaceNameTooLong | Self::EmptyNote => {
-                WorkspaceFailureCode::Validation
-            }
-            Self::WorkspaceNotFound => WorkspaceFailureCode::NotFound,
+            Self::EmptyWorkspaceName
+            | Self::WorkspaceNameTooLong
+            | Self::EmptyNote
+            | Self::AnnotationTooLong
+            | Self::UnknownNoteType => WorkspaceFailureCode::Validation,
+            Self::WorkspaceNotFound | Self::NoteNotFound => WorkspaceFailureCode::NotFound,
+            Self::NothingToUndo => WorkspaceFailureCode::NothingToUndo,
             Self::Storage(_) => WorkspaceFailureCode::Storage,
         };
         WorkspaceFailure {
@@ -131,13 +273,160 @@ pub trait ThinkingWorkspaceInterface {
         workspace_id: &str,
         name: &str,
     ) -> Result<WorkspaceSnapshot, WorkspaceError>;
-    fn delete_workspace(&mut self, workspace_id: &str)
+    /// Removes a Workspace without touching undo history; callers use
+    /// `delete_workspace`, which also drops the now-meaningless history.
+    fn remove_workspace(&mut self, workspace_id: &str)
         -> Result<WorkspaceSnapshot, WorkspaceError>;
+    /// Commits exactly one Note row change, atomically.
+    fn apply_note_mutation(&mut self, mutation: &NoteMutation) -> Result<(), WorkspaceError>;
+    fn history(&mut self) -> &mut UndoHistory;
+
+    fn delete_workspace(
+        &mut self,
+        workspace_id: &str,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        let snapshot = self.remove_workspace(workspace_id)?;
+        // Its Notes are gone, so every compensation naming them is void.
+        self.history().clear(workspace_id);
+        self.snapshot().or(Ok(snapshot))
+    }
+
+    fn note(&self, note_id: &str) -> Result<Note, WorkspaceError> {
+        self.snapshot()?
+            .notes
+            .into_iter()
+            .find(|note| note.id == note_id)
+            .ok_or(WorkspaceError::NoteNotFound)
+    }
+
     fn create_note(
         &mut self,
         workspace_id: &str,
         markdown: &str,
-    ) -> Result<WorkspaceSnapshot, WorkspaceError>;
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        let markdown = validated_markdown(markdown)?;
+        require_workspace(&self.snapshot()?.workspaces, workspace_id)?;
+        let now = timestamp();
+        let note = Note {
+            id: id(),
+            workspace_id: workspace_id.to_owned(),
+            markdown,
+            note_type: DEFAULT_NOTE_TYPE.to_owned(),
+            note_type_provenance: Provenance::Default,
+            annotation: None,
+            annotation_provenance: Provenance::Default,
+            created_at: now.clone(),
+            updated_at: now,
+            pinned: false,
+        };
+        let note_id = note.id.clone();
+        self.commit_note(NoteMutation::Insert(note), NoteMutation::Delete { note_id })
+    }
+
+    fn edit_note_text(
+        &mut self,
+        note_id: &str,
+        markdown: &str,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        let markdown = validated_markdown(markdown)?;
+        let previous = self.note(note_id)?;
+        let mut edited = previous.clone();
+        edited.markdown = markdown;
+        edited.updated_at = timestamp();
+        self.commit_note(
+            NoteMutation::Replace(edited),
+            NoteMutation::Replace(previous),
+        )
+    }
+
+    fn set_note_type(
+        &mut self,
+        note_id: &str,
+        note_type: &str,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        let note_type = validated_note_type(note_type)?;
+        let previous = self.note(note_id)?;
+        let mut typed = previous.clone();
+        typed.note_type = note_type;
+        typed.note_type_provenance = Provenance::Manual;
+        typed.updated_at = timestamp();
+        self.commit_note(NoteMutation::Replace(typed), NoteMutation::Replace(previous))
+    }
+
+    /// Blank Annotation text clears the Annotation; both are manual authorship.
+    fn set_note_annotation(
+        &mut self,
+        note_id: &str,
+        annotation: &str,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        let annotation = validated_annotation(annotation)?;
+        let previous = self.note(note_id)?;
+        let mut annotated = previous.clone();
+        annotated.annotation = annotation;
+        annotated.annotation_provenance = Provenance::Manual;
+        annotated.updated_at = timestamp();
+        self.commit_note(
+            NoteMutation::Replace(annotated),
+            NoteMutation::Replace(previous),
+        )
+    }
+
+    fn set_note_pinned(
+        &mut self,
+        note_id: &str,
+        pinned: bool,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        let previous = self.note(note_id)?;
+        let mut repinned = previous.clone();
+        repinned.pinned = pinned;
+        repinned.updated_at = timestamp();
+        self.commit_note(
+            NoteMutation::Replace(repinned),
+            NoteMutation::Replace(previous),
+        )
+    }
+
+    fn delete_note(&mut self, note_id: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        let previous = self.note(note_id)?;
+        self.commit_note(
+            NoteMutation::Delete {
+                note_id: note_id.to_owned(),
+            },
+            // Restoring the whole row keeps the Note's identity and fields.
+            NoteMutation::Insert(previous),
+        )
+    }
+
+    /// Undo commits a new compensating transaction; it never rewinds storage.
+    fn undo(&mut self, workspace_id: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        let compensation = self
+            .history()
+            .take_last(workspace_id)
+            .ok_or(WorkspaceError::NothingToUndo)?;
+        match self.apply_note_mutation(&compensation) {
+            Ok(()) => self.snapshot(),
+            Err(error) => {
+                self.history().restore(workspace_id, compensation);
+                Err(error)
+            }
+        }
+    }
+
+    /// Commits an intent and records its compensation only after the commit, so
+    /// a failed mutation leaves neither durable state nor history changed.
+    fn commit_note(
+        &mut self,
+        mutation: NoteMutation,
+        compensation: NoteMutation,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        let workspace_id = match mutation.workspace_id() {
+            "" => compensation.workspace_id().to_owned(),
+            id => id.to_owned(),
+        };
+        self.apply_note_mutation(&mutation)?;
+        self.history().push(&workspace_id, compensation);
+        self.snapshot()
+    }
 
     fn snapshot_outcome(&self) -> WorkspaceCommandResult {
         outcome(self.snapshot())
@@ -165,11 +454,34 @@ pub trait ThinkingWorkspaceInterface {
     ) -> WorkspaceCommandResult {
         outcome(self.create_note(workspace_id, markdown))
     }
+    fn edit_note_text_outcome(&mut self, note_id: &str, markdown: &str) -> WorkspaceCommandResult {
+        outcome(self.edit_note_text(note_id, markdown))
+    }
+    fn set_note_type_outcome(&mut self, note_id: &str, note_type: &str) -> WorkspaceCommandResult {
+        outcome(self.set_note_type(note_id, note_type))
+    }
+    fn set_note_annotation_outcome(
+        &mut self,
+        note_id: &str,
+        annotation: &str,
+    ) -> WorkspaceCommandResult {
+        outcome(self.set_note_annotation(note_id, annotation))
+    }
+    fn set_note_pinned_outcome(&mut self, note_id: &str, pinned: bool) -> WorkspaceCommandResult {
+        outcome(self.set_note_pinned(note_id, pinned))
+    }
+    fn delete_note_outcome(&mut self, note_id: &str) -> WorkspaceCommandResult {
+        outcome(self.delete_note(note_id))
+    }
+    fn undo_outcome(&mut self, workspace_id: &str) -> WorkspaceCommandResult {
+        outcome(self.undo(workspace_id))
+    }
 }
 
 #[derive(Debug)]
 pub struct WorkspaceStore {
     connection: Connection,
+    history: UndoHistory,
 }
 
 impl WorkspaceStore {
@@ -208,7 +520,12 @@ impl WorkspaceStore {
         prepare(&mut connection).map_err(|error| {
             StorageOpenFailure::from_error(StorageOpenFailureCategory::Migration, error)
         })?;
-        let mut store = Self { connection };
+        // A fresh process starts with no undo history, which is exactly what a
+        // restart must leave behind.
+        let mut store = Self {
+            connection,
+            history: UndoHistory::default(),
+        };
         store.ensure_ready().map_err(|error| {
             StorageOpenFailure::from_error(StorageOpenFailureCategory::Initialization, error)
         })?;
@@ -237,7 +554,13 @@ impl WorkspaceStore {
 
 impl ThinkingWorkspaceInterface for WorkspaceStore {
     fn snapshot(&self) -> Result<WorkspaceSnapshot, WorkspaceError> {
-        read_snapshot(&self.connection)
+        let mut snapshot = read_snapshot(&self.connection)?;
+        snapshot.undoable_commands = self.history.depth(&snapshot.active_workspace_id);
+        Ok(snapshot)
+    }
+
+    fn history(&mut self) -> &mut UndoHistory {
+        &mut self.history
     }
 
     fn create_workspace(&mut self, name: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
@@ -292,7 +615,7 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
         self.snapshot()
     }
 
-    fn delete_workspace(
+    fn remove_workspace(
         &mut self,
         workspace_id: &str,
     ) -> Result<WorkspaceSnapshot, WorkspaceError> {
@@ -340,26 +663,50 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
         self.snapshot()
     }
 
-    fn create_note(
-        &mut self,
-        workspace_id: &str,
-        markdown: &str,
-    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
-        if markdown.trim().is_empty() {
-            return Err(WorkspaceError::EmptyNote);
-        }
-        require_workspace(&read_workspaces(&self.connection)?, workspace_id)?;
-        let now = timestamp();
+    fn apply_note_mutation(&mut self, mutation: &NoteMutation) -> Result<(), WorkspaceError> {
         let transaction = self
             .connection
             .transaction()
             .map_err(WorkspaceError::Storage)?;
-        transaction.execute(
-            "INSERT INTO notes (id, workspace_id, markdown, note_type, created_at, updated_at, pinned) VALUES (?1, ?2, ?3, 'general', ?4, ?4, 0)",
-            params![id(), workspace_id, markdown, now],
-        ).map_err(WorkspaceError::Storage)?;
-        transaction.commit().map_err(WorkspaceError::Storage)?;
-        self.snapshot()
+        let changed = match mutation {
+            NoteMutation::Insert(note) => transaction.execute(
+                "INSERT INTO notes (id, workspace_id, markdown, note_type, note_type_provenance, annotation, annotation_provenance, created_at, updated_at, pinned) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    note.id,
+                    note.workspace_id,
+                    note.markdown,
+                    note.note_type,
+                    note.note_type_provenance.as_str(),
+                    note.annotation,
+                    note.annotation_provenance.as_str(),
+                    note.created_at,
+                    note.updated_at,
+                    i64::from(note.pinned),
+                ],
+            ),
+            NoteMutation::Replace(note) => transaction.execute(
+                "UPDATE notes SET markdown = ?2, note_type = ?3, note_type_provenance = ?4, annotation = ?5, annotation_provenance = ?6, updated_at = ?7, pinned = ?8 WHERE id = ?1",
+                params![
+                    note.id,
+                    note.markdown,
+                    note.note_type,
+                    note.note_type_provenance.as_str(),
+                    note.annotation,
+                    note.annotation_provenance.as_str(),
+                    note.updated_at,
+                    i64::from(note.pinned),
+                ],
+            ),
+            NoteMutation::Delete { note_id } => {
+                transaction.execute("DELETE FROM notes WHERE id = ?1", params![note_id])
+            }
+        }
+        .map_err(WorkspaceError::Storage)?;
+        if changed == 0 {
+            // The transaction is dropped unfinished, so nothing is committed.
+            return Err(WorkspaceError::NoteNotFound);
+        }
+        transaction.commit().map_err(WorkspaceError::Storage)
     }
 }
 
@@ -381,6 +728,46 @@ fn validated_workspace_name(name: &str) -> Result<String, WorkspaceError> {
         return Err(WorkspaceError::WorkspaceNameTooLong);
     }
     Ok(name.to_owned())
+}
+
+/// Note text is required after trimming but stored exactly as authored, so the
+/// thinker's Markdown layout survives a round trip.
+fn validated_markdown(markdown: &str) -> Result<String, WorkspaceError> {
+    if markdown.trim().is_empty() {
+        return Err(WorkspaceError::EmptyNote);
+    }
+    Ok(markdown.to_owned())
+}
+
+fn validated_note_type(note_type: &str) -> Result<String, WorkspaceError> {
+    NOTE_TYPES
+        .contains(&note_type)
+        .then(|| note_type.to_owned())
+        .ok_or(WorkspaceError::UnknownNoteType)
+}
+
+/// Annotation is plain commentary: trimmed, bounded, and blank means cleared.
+fn validated_annotation(annotation: &str) -> Result<Option<String>, WorkspaceError> {
+    let annotation = annotation.trim();
+    if annotation.is_empty() {
+        return Ok(None);
+    }
+    if annotation.chars().count() > MAX_ANNOTATION_SCALARS {
+        return Err(WorkspaceError::AnnotationTooLong);
+    }
+    Ok(Some(annotation.to_owned()))
+}
+
+/// Pinned Notes come first; creation order is stable inside each group, and the
+/// id breaks ties so every adapter and every restart agrees.
+fn sort_notes(notes: &mut [Note]) {
+    notes.sort_by(|left, right| {
+        (!left.pinned, &left.created_at, &left.id).cmp(&(
+            !right.pinned,
+            &right.created_at,
+            &right.id,
+        ))
+    });
 }
 
 fn require_workspace(
@@ -420,6 +807,7 @@ fn migrate(connection: &mut Connection) -> Result<(), WorkspaceError> {
     let migrations = [
         (1_i64, include_str!("../migrations/0001_initial.sql")),
         (2_i64, include_str!("../migrations/0002_preferences.sql")),
+        (3_i64, include_str!("../migrations/0003_note_controls.sql")),
     ];
     for (version, sql) in migrations {
         let transaction = connection.transaction().map_err(WorkspaceError::Storage)?;
@@ -492,9 +880,22 @@ fn write_active_workspace_id(
 
 fn read_snapshot(connection: &Connection) -> Result<WorkspaceSnapshot, WorkspaceError> {
     let workspaces = read_workspaces(connection)?;
-    let notes = connection.prepare("SELECT id, workspace_id, markdown, note_type, created_at, updated_at, pinned FROM notes ORDER BY created_at")
-        .map_err(WorkspaceError::Storage)?.query_map([], |row| Ok(Note { id: row.get(0)?, workspace_id: row.get(1)?, markdown: row.get(2)?, note_type: row.get(3)?, created_at: row.get(4)?, updated_at: row.get(5)?, pinned: row.get::<_, i64>(6)? != 0 }))
+    let mut notes = connection.prepare("SELECT id, workspace_id, markdown, note_type, note_type_provenance, annotation, annotation_provenance, created_at, updated_at, pinned FROM notes")
+        .map_err(WorkspaceError::Storage)?
+        .query_map([], |row| Ok(Note {
+            id: row.get(0)?,
+            workspace_id: row.get(1)?,
+            markdown: row.get(2)?,
+            note_type: row.get(3)?,
+            note_type_provenance: Provenance::from_str(&row.get::<_, String>(4)?),
+            annotation: row.get(5)?,
+            annotation_provenance: Provenance::from_str(&row.get::<_, String>(6)?),
+            created_at: row.get(7)?,
+            updated_at: row.get(8)?,
+            pinned: row.get::<_, i64>(9)? != 0,
+        }))
         .map_err(WorkspaceError::Storage)?.collect::<Result<Vec<_>, _>>().map_err(WorkspaceError::Storage)?;
+    sort_notes(&mut notes);
     let active_workspace_id = read_active_workspace_id(connection)?
         .filter(|id| workspaces.iter().any(|workspace| &workspace.id == id))
         .or_else(|| workspaces.first().map(|workspace| workspace.id.clone()))
@@ -503,6 +904,7 @@ fn read_snapshot(connection: &Connection) -> Result<WorkspaceSnapshot, Workspace
         workspaces,
         notes,
         active_workspace_id,
+        undoable_commands: 0,
     })
 }
 
@@ -537,6 +939,7 @@ mod tests {
         workspaces: Vec<ThinkingWorkspace>,
         notes: Vec<Note>,
         active_workspace_id: String,
+        history: UndoHistory,
     }
 
     impl MemoryStore {
@@ -545,6 +948,7 @@ mod tests {
                 workspaces: vec![],
                 notes: vec![],
                 active_workspace_id: String::new(),
+                history: UndoHistory::default(),
             };
             store.create_workspace(DEFAULT_WORKSPACE_NAME).unwrap();
             store
@@ -553,11 +957,18 @@ mod tests {
 
     impl ThinkingWorkspaceInterface for MemoryStore {
         fn snapshot(&self) -> Result<WorkspaceSnapshot, WorkspaceError> {
+            let mut notes = self.notes.clone();
+            sort_notes(&mut notes);
             Ok(WorkspaceSnapshot {
                 workspaces: self.workspaces.clone(),
-                notes: self.notes.clone(),
+                notes,
                 active_workspace_id: self.active_workspace_id.clone(),
+                undoable_commands: self.history.depth(&self.active_workspace_id),
             })
+        }
+
+        fn history(&mut self) -> &mut UndoHistory {
+            &mut self.history
         }
 
         fn create_workspace(&mut self, name: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
@@ -599,7 +1010,7 @@ mod tests {
             self.snapshot()
         }
 
-        fn delete_workspace(
+        fn remove_workspace(
             &mut self,
             workspace_id: &str,
         ) -> Result<WorkspaceSnapshot, WorkspaceError> {
@@ -626,26 +1037,29 @@ mod tests {
             self.snapshot()
         }
 
-        fn create_note(
-            &mut self,
-            workspace_id: &str,
-            markdown: &str,
-        ) -> Result<WorkspaceSnapshot, WorkspaceError> {
-            if markdown.trim().is_empty() {
-                return Err(WorkspaceError::EmptyNote);
+        fn apply_note_mutation(&mut self, mutation: &NoteMutation) -> Result<(), WorkspaceError> {
+            match mutation {
+                NoteMutation::Insert(note) => {
+                    require_workspace(&self.workspaces, &note.workspace_id)?;
+                    self.notes.push(note.clone());
+                }
+                NoteMutation::Replace(note) => {
+                    let existing = self
+                        .notes
+                        .iter_mut()
+                        .find(|candidate| candidate.id == note.id)
+                        .ok_or(WorkspaceError::NoteNotFound)?;
+                    *existing = note.clone();
+                }
+                NoteMutation::Delete { note_id } => {
+                    let before = self.notes.len();
+                    self.notes.retain(|note| &note.id != note_id);
+                    if self.notes.len() == before {
+                        return Err(WorkspaceError::NoteNotFound);
+                    }
+                }
             }
-            require_workspace(&self.workspaces, workspace_id)?;
-            let now = timestamp();
-            self.notes.push(Note {
-                id: id(),
-                workspace_id: workspace_id.into(),
-                markdown: markdown.into(),
-                note_type: "general".into(),
-                created_at: now.clone(),
-                updated_at: now,
-                pinned: false,
-            });
-            self.snapshot()
+            Ok(())
         }
     }
 
@@ -688,6 +1102,199 @@ mod tests {
                 }
             }
         )
+    }
+
+    fn note_in(snapshot: &WorkspaceSnapshot, note_id: &str) -> Note {
+        snapshot
+            .notes
+            .iter()
+            .find(|note| note.id == note_id)
+            .unwrap_or_else(|| panic!("no Note {note_id}"))
+            .clone()
+    }
+
+    fn is_nothing_to_undo(result: &WorkspaceCommandResult) -> bool {
+        matches!(
+            result,
+            WorkspaceCommandResult::Failed {
+                failure: WorkspaceFailure {
+                    code: WorkspaceFailureCode::NothingToUndo,
+                    ..
+                }
+            }
+        )
+    }
+
+    /// Every manual Note control and its compensating undo, at the interface.
+    /// `workspace_id` must be the active Workspace and `note_id` a Note in it.
+    fn note_control_conformance(
+        workspace: &mut impl ThinkingWorkspaceInterface,
+        workspace_id: &str,
+        note_id: &str,
+    ) {
+        let original = note_in(&committed(workspace.snapshot_outcome()), note_id);
+
+        // Text edits keep identity and creation order and are reversible.
+        let edited = committed(workspace.edit_note_text_outcome(note_id, "  # Revised thought  "));
+        assert_eq!(note_in(&edited, note_id).markdown, "  # Revised thought  ");
+        assert_eq!(note_in(&edited, note_id).created_at, original.created_at);
+        assert!(is_validation_failure(
+            &workspace.edit_note_text_outcome(note_id, " \n\t ")
+        ));
+        assert!(is_not_found_failure(
+            &workspace.edit_note_text_outcome("missing", "Nope")
+        ));
+        let undone = committed(workspace.undo_outcome(workspace_id));
+        assert_eq!(note_in(&undone, note_id), original);
+
+        // Every fixed Note Type is accepted and records manual authorship.
+        for note_type in NOTE_TYPES {
+            let typed = committed(workspace.set_note_type_outcome(note_id, note_type));
+            let note = note_in(&typed, note_id);
+            assert_eq!(note.note_type, note_type);
+            assert_eq!(note.note_type_provenance, Provenance::Manual);
+        }
+        assert!(is_validation_failure(
+            &workspace.set_note_type_outcome(note_id, "todo")
+        ));
+        assert!(is_validation_failure(
+            &workspace.set_note_type_outcome(note_id, "CLAIM")
+        ));
+        let untyped = committed(workspace.undo_outcome(workspace_id));
+        assert_eq!(
+            note_in(&untyped, note_id).note_type,
+            NOTE_TYPES[NOTE_TYPES.len() - 2]
+        );
+        committed(workspace.set_note_type_outcome(note_id, "question"));
+
+        // Annotation is written, edited, and cleared independently of the text.
+        let annotated =
+            committed(workspace.set_note_annotation_outcome(note_id, "  Where did this come from? 🧠  "));
+        let note = note_in(&annotated, note_id);
+        assert_eq!(note.annotation.as_deref(), Some("Where did this come from? 🧠"));
+        assert_eq!(note.annotation_provenance, Provenance::Manual);
+        assert_eq!(note.markdown, original.markdown);
+        assert_eq!(note.note_type, "question");
+        let bound = "🧠".repeat(MAX_ANNOTATION_SCALARS);
+        assert_eq!(
+            note_in(
+                &committed(workspace.set_note_annotation_outcome(note_id, &bound)),
+                note_id
+            )
+            .annotation
+            .as_deref(),
+            Some(bound.as_str())
+        );
+        assert!(is_validation_failure(&workspace.set_note_annotation_outcome(
+            note_id,
+            &"🧠".repeat(MAX_ANNOTATION_SCALARS + 1)
+        )));
+        let cleared = committed(workspace.set_note_annotation_outcome(note_id, "   "));
+        assert_eq!(note_in(&cleared, note_id).annotation, None);
+        // Undo restores the previous Annotation rather than the Note text.
+        let restored = committed(workspace.undo_outcome(workspace_id));
+        assert_eq!(note_in(&restored, note_id).annotation.as_deref(), Some(bound.as_str()));
+
+        // Pinned Notes sort first while creation order holds inside each group.
+        let second = committed(workspace.create_note_outcome(workspace_id, "Second thought"));
+        let second_id = second
+            .notes
+            .iter()
+            .find(|note| note.markdown == "Second thought")
+            .expect("the second Note is committed")
+            .id
+            .clone();
+        let ordered = |snapshot: &WorkspaceSnapshot| -> Vec<String> {
+            snapshot
+                .notes
+                .iter()
+                .filter(|note| note.workspace_id == workspace_id)
+                .map(|note| note.id.clone())
+                .collect()
+        };
+        assert_eq!(ordered(&second), vec![note_id.to_owned(), second_id.clone()]);
+        let pinned = committed(workspace.set_note_pinned_outcome(&second_id, true));
+        assert!(note_in(&pinned, &second_id).pinned);
+        assert_eq!(ordered(&pinned), vec![second_id.clone(), note_id.to_owned()]);
+        let unpinned = committed(workspace.undo_outcome(workspace_id));
+        assert!(!note_in(&unpinned, &second_id).pinned);
+        assert_eq!(ordered(&unpinned), vec![note_id.to_owned(), second_id.clone()]);
+
+        // Deleting a Note is reversible with the same identity and fields.
+        let before_delete = note_in(&committed(workspace.snapshot_outcome()), &second_id);
+        let after_delete = committed(workspace.delete_note_outcome(&second_id));
+        assert!(!after_delete.notes.iter().any(|note| note.id == second_id));
+        assert!(is_not_found_failure(&workspace.delete_note_outcome(&second_id)));
+        let after_undo = committed(workspace.undo_outcome(workspace_id));
+        assert_eq!(note_in(&after_undo, &second_id), before_delete);
+
+        // An undone create removes the Note again, and history is per Workspace.
+        let elsewhere = workspace_id_named(
+            &committed(workspace.create_workspace_outcome("Undo isolation")),
+            "Undo isolation",
+        );
+        assert!(is_nothing_to_undo(&workspace.undo_outcome(&elsewhere)));
+        committed(workspace.create_note_outcome(&elsewhere, "Only reversible here"));
+        let isolated = committed(workspace.undo_outcome(&elsewhere));
+        assert!(!isolated
+            .notes
+            .iter()
+            .any(|note| note.workspace_id == elsewhere));
+        assert!(is_nothing_to_undo(&workspace.undo_outcome(&elsewhere)));
+        // The other Workspace's history is untouched by all of that: its next
+        // undo is still the create of the second Note.
+        let after_isolated_undo = committed(workspace.undo_outcome(workspace_id));
+        assert!(!after_isolated_undo
+            .notes
+            .iter()
+            .any(|note| note.id == second_id));
+
+        // History is bounded, so only the newest 20 commands stay reversible.
+        committed(workspace.select_workspace_outcome(&elsewhere));
+        let mut deep = committed(workspace.create_note_outcome(&elsewhere, "Overflow"));
+        let overflow_id = deep
+            .notes
+            .iter()
+            .find(|note| note.markdown == "Overflow")
+            .expect("the Note is committed")
+            .id
+            .clone();
+        for step in 0..MAX_REVERSIBLE_COMMANDS + 5 {
+            deep = committed(workspace.edit_note_text_outcome(&overflow_id, &format!("Edit {step}")));
+        }
+        assert_eq!(deep.undoable_commands, MAX_REVERSIBLE_COMMANDS);
+        for _ in 0..MAX_REVERSIBLE_COMMANDS {
+            committed(workspace.undo_outcome(&elsewhere));
+        }
+        let exhausted = committed(workspace.snapshot_outcome());
+        assert_eq!(exhausted.undoable_commands, 0);
+        // The create and the oldest edits fell out of the bound, so the Note is
+        // still here with the oldest text the bound could still reach.
+        assert_eq!(note_in(&exhausted, &overflow_id).markdown, "Edit 4");
+        assert!(is_nothing_to_undo(&workspace.undo_outcome(&elsewhere)));
+        assert_eq!(committed(workspace.snapshot_outcome()), exhausted);
+
+        // Deleting a Workspace drops its history, because its Notes are gone.
+        committed(workspace.create_note_outcome(&elsewhere, "Goes with its Workspace"));
+        committed(workspace.delete_workspace_outcome(&elsewhere));
+        assert!(is_nothing_to_undo(&workspace.undo_outcome(&elsewhere)));
+
+        // The surviving Workspace still undoes its own most recent change.
+        committed(workspace.select_workspace_outcome(workspace_id));
+        let temporary = committed(workspace.create_note_outcome(workspace_id, "Temporary thought"));
+        let temporary_id = temporary
+            .notes
+            .iter()
+            .find(|note| note.markdown == "Temporary thought")
+            .expect("the Note is committed")
+            .id
+            .clone();
+        committed(workspace.delete_note_outcome(&temporary_id));
+        assert!(committed(workspace.undo_outcome(workspace_id))
+            .notes
+            .iter()
+            .any(|note| note.id == temporary_id));
+        committed(workspace.delete_note_outcome(&temporary_id));
     }
 
     fn conformance(mut workspace: impl ThinkingWorkspaceInterface) {
@@ -747,6 +1354,13 @@ mod tests {
         assert!(is_not_found_failure(
             &workspace.create_note_outcome("missing", "Nope")
         ));
+        let note_id = with_note.notes[0].id.clone();
+        assert_eq!(with_note.notes[0].note_type_provenance, Provenance::Default);
+        assert_eq!(with_note.notes[0].annotation, None);
+        // Creating a Note is itself reversible in the Workspace that received it.
+        assert_eq!(with_note.undoable_commands, 1);
+
+        note_control_conformance(&mut workspace, &research, &note_id);
 
         // Deleting the active Workspace selects the most recently updated
         // survivor. The survivor here is neither the newest, the oldest, the
@@ -955,6 +1569,171 @@ mod tests {
             WorkspaceCommandResult::Failed { .. }
         ));
         assert_eq!(store.snapshot().unwrap(), before_delete);
+        drop(store);
+        remove_database(&path);
+    }
+
+    /// An existing database predates Annotation and the wider Note Type set, so
+    /// the migration must carry its Notes forward instead of dropping them.
+    #[test]
+    fn the_note_controls_migration_preserves_notes_written_by_an_earlier_version() {
+        let path = temporary_path();
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(include_str!("../migrations/0001_initial.sql"))
+                .unwrap();
+            connection
+                .execute_batch(include_str!("../migrations/0002_preferences.sql"))
+                .unwrap();
+            connection.execute_batch("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY NOT NULL, applied_at TEXT NOT NULL); INSERT INTO schema_migrations VALUES (1, 'then'), (2, 'then');").unwrap();
+            connection
+                .execute(
+                    "INSERT INTO thinking_workspaces (id, name, created_at, updated_at) VALUES ('w', 'Earlier', 'then', 'then')",
+                    [],
+                )
+                .unwrap();
+            connection.execute("INSERT INTO notes (id, workspace_id, markdown, note_type, created_at, updated_at, pinned) VALUES ('n', 'w', 'Written before Annotation existed', 'general', 'then', 'then', 1)", []).unwrap();
+        }
+
+        let snapshot = WorkspaceStore::open(&path).unwrap().snapshot().unwrap();
+        let note = snapshot.notes.iter().find(|note| note.id == "n").unwrap();
+        assert_eq!(note.markdown, "Written before Annotation existed");
+        assert_eq!(note.note_type, DEFAULT_NOTE_TYPE);
+        assert_eq!(note.note_type_provenance, Provenance::Default);
+        assert_eq!(note.annotation, None);
+        assert_eq!(note.annotation_provenance, Provenance::Default);
+        assert!(note.pinned);
+        remove_database(&path);
+    }
+
+    #[test]
+    fn manual_note_control_survives_reopen_while_undo_history_does_not() {
+        let path = temporary_path();
+        let (workspace_id, note_id, other_id) = {
+            let mut store = WorkspaceStore::open(&path).unwrap();
+            let workspace_id = store.snapshot().unwrap().active_workspace_id;
+            let note_id = store
+                .create_note(&workspace_id, "# Original")
+                .unwrap()
+                .notes[0]
+                .id
+                .clone();
+            store.edit_note_text(&note_id, "# Edited *in place*").unwrap();
+            store.set_note_type(&note_id, "thesis").unwrap();
+            store
+                .set_note_annotation(&note_id, "Source: a walk 🧠")
+                .unwrap();
+            store.set_note_pinned(&note_id, true).unwrap();
+            let other_id = store
+                .create_note(&workspace_id, "Unpinned and later")
+                .unwrap()
+                .notes
+                .iter()
+                .find(|note| note.markdown == "Unpinned and later")
+                .unwrap()
+                .id
+                .clone();
+            assert!(store.snapshot().unwrap().undoable_commands > 0);
+            (workspace_id, note_id, other_id)
+        };
+
+        let reopened = WorkspaceStore::open(&path).unwrap();
+        let snapshot = reopened.snapshot().unwrap();
+        let note = snapshot
+            .notes
+            .iter()
+            .find(|note| note.id == note_id)
+            .unwrap();
+        assert_eq!(note.markdown, "# Edited *in place*");
+        assert_eq!(note.note_type, "thesis");
+        assert_eq!(note.note_type_provenance, Provenance::Manual);
+        assert_eq!(note.annotation.as_deref(), Some("Source: a walk 🧠"));
+        assert_eq!(note.annotation_provenance, Provenance::Manual);
+        assert!(note.pinned);
+        // Pinned first, then creation order, identically after a restart.
+        assert_eq!(
+            snapshot
+                .notes
+                .iter()
+                .map(|note| note.id.clone())
+                .collect::<Vec<_>>(),
+            vec![note_id, other_id]
+        );
+
+        // Restart cleared undo without changing anything durable.
+        assert_eq!(snapshot.undoable_commands, 0);
+        let mut reopened = reopened;
+        assert!(matches!(
+            reopened.undo_outcome(&workspace_id),
+            WorkspaceCommandResult::Failed {
+                failure: WorkspaceFailure {
+                    code: WorkspaceFailureCode::NothingToUndo,
+                    ..
+                }
+            }
+        ));
+        assert_eq!(reopened.snapshot().unwrap(), snapshot);
+        drop(reopened);
+        remove_database(&path);
+    }
+
+    #[test]
+    fn a_failed_note_edit_or_undo_changes_neither_storage_nor_undo_availability() {
+        let path = temporary_path();
+        let mut store = WorkspaceStore::open(&path).unwrap();
+        let workspace_id = store.snapshot().unwrap().active_workspace_id;
+        let note_id = store.create_note(&workspace_id, "Committed").unwrap().notes[0]
+            .id
+            .clone();
+        store.set_note_type(&note_id, "claim").unwrap();
+        let before = store.snapshot().unwrap();
+
+        store.connection.execute_batch("CREATE TRIGGER reject_note_updates BEFORE UPDATE ON notes BEGIN SELECT RAISE(FAIL, 'injected'); END;").unwrap();
+        assert!(matches!(
+            store.edit_note_text_outcome(&note_id, "Must not persist"),
+            WorkspaceCommandResult::Failed {
+                failure: WorkspaceFailure {
+                    code: WorkspaceFailureCode::Storage,
+                    ..
+                }
+            }
+        ));
+        // A rejected edit leaves the Note and the reversible history alone.
+        assert_eq!(store.snapshot().unwrap(), before);
+
+        // The pending undo is the Note Type change, which the same trigger
+        // rejects. A failed undo must keep that step reversible.
+        assert!(matches!(
+            store.undo_outcome(&workspace_id),
+            WorkspaceCommandResult::Failed {
+                failure: WorkspaceFailure {
+                    code: WorkspaceFailureCode::Storage,
+                    ..
+                }
+            }
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+        store
+            .connection
+            .execute_batch("DROP TRIGGER reject_note_updates;")
+            .unwrap();
+        let undone = committed(store.undo_outcome(&workspace_id));
+        assert_eq!(undone.notes[0].note_type, DEFAULT_NOTE_TYPE);
+        assert_eq!(undone.notes[0].note_type_provenance, Provenance::Default);
+
+        // A rejected delete leaves the Note and its history intact too.
+        let before_delete = store.snapshot().unwrap();
+        store.connection.execute_batch("CREATE TRIGGER reject_note_deletes BEFORE DELETE ON notes BEGIN SELECT RAISE(FAIL, 'injected'); END;").unwrap();
+        assert!(matches!(
+            store.delete_note_outcome(&note_id),
+            WorkspaceCommandResult::Failed { .. }
+        ));
+        assert_eq!(store.snapshot().unwrap(), before_delete);
+        store
+            .connection
+            .execute_batch("DROP TRIGGER reject_note_deletes;")
+            .unwrap();
         drop(store);
         remove_database(&path);
     }
