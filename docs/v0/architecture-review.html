@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Architecture review — nodepad</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose", flowchart: { curve: "basis" } });
+    </script>
+    <style>
+      :root { color-scheme: light; }
+      .seam { border-style: dashed; }
+      .deep { background: linear-gradient(145deg, #0f172a, #1e293b); }
+      .paper { background-image: radial-gradient(#cbd5e1 0.65px, transparent 0.65px); background-size: 15px 15px; }
+      .arrow { color: #94a3b8; font-size: 1.35rem; line-height: 1; }
+      .leak-arrow { color: #dc2626; font-size: 1.35rem; line-height: 1; }
+      .mass-interface { background: #e0e7ff; border: 1px solid #a5b4fc; }
+      .mass-implementation { background: #f8fafc; border: 1px solid #cbd5e1; }
+    </style>
+  </head>
+  <body class="bg-stone-50 text-slate-900 font-sans">
+    <main class="max-w-6xl mx-auto px-5 py-12 space-y-12">
+      <header class="border-b border-slate-300 pb-7 flex flex-col md:flex-row md:items-end md:justify-between gap-5">
+        <div>
+          <p class="text-xs uppercase tracking-[0.24em] text-indigo-700 font-semibold">Architecture review · 22 July 2026</p>
+          <h1 class="mt-2 text-4xl md:text-5xl font-serif tracking-tight">nodepad → local desktop thinking tool</h1>
+        </div>
+        <div class="flex flex-wrap gap-4 text-xs text-slate-600">
+          <span class="flex items-center gap-2"><i class="block h-4 w-6 border border-slate-500 bg-white"></i> module</span>
+          <span class="flex items-center gap-2"><i class="block h-4 w-6 border border-dashed border-slate-500 bg-white"></i> seam</span>
+          <span class="flex items-center gap-2"><i class="block h-1 w-6 bg-red-600"></i> leakage</span>
+          <span class="flex items-center gap-2"><i class="block h-4 w-6 bg-slate-900"></i> deep module</span>
+        </div>
+      </header>
+
+      <aside class="rounded-xl border border-amber-300 bg-amber-50 px-5 py-4 text-sm text-amber-950">
+        <span class="font-semibold">Domain record missing.</span> No <code class="font-mono">CONTEXT.md</code> or ADRs exist. Current language mixes Project, Space, Workspace, note, node, block, and canvas; candidate names use “Thinking Workspace” and “Thinking Graph” provisionally.
+      </aside>
+
+      <section id="candidates" class="space-y-12">
+        <article id="workspace" class="rounded-2xl border border-slate-300 bg-white shadow-sm overflow-hidden">
+          <div class="p-6 md:p-8 space-y-6">
+            <div class="flex flex-wrap items-start justify-between gap-4">
+              <div><p class="text-xs uppercase tracking-wider text-slate-500">Candidate 01</p><h2 class="text-2xl font-serif mt-1">Deepen the Durable Thinking Workspace</h2></div>
+              <div class="flex gap-2"><span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-1 text-xs font-semibold">Strong</span><span class="rounded-full bg-indigo-100 text-indigo-800 px-3 py-1 text-xs">ports &amp; adapters</span></div>
+            </div>
+            <div class="font-mono text-xs text-slate-600 leading-6">app/page.tsx · components/tile-card.tsx · lib/initial-data.ts · lib/nodepad-format.ts</div>
+
+            <div class="grid md:grid-cols-2 gap-5">
+              <figure class="rounded-xl border border-slate-200 bg-slate-50 p-5 paper min-h-[330px]">
+                <figcaption class="text-xs uppercase tracking-wider text-red-700 font-semibold mb-5">Before · whole-tree persistence leaks everywhere</figcaption>
+                <div class="space-y-3 text-center text-xs">
+                  <div class="mx-auto w-4/5 border border-slate-400 bg-white p-3">Views + callbacks</div>
+                  <div class="leak-arrow">↓</div>
+                  <div class="mx-auto w-full border-2 border-red-500 bg-red-50 p-4">
+                    <strong class="block text-sm">1,069-line Page module</strong>
+                    types · mutations · undo · migration · enrichment · UI
+                  </div>
+                  <div class="flex justify-center gap-5"><span class="leak-arrow">↙</span><span class="leak-arrow">↘</span></div>
+                  <div class="grid grid-cols-2 gap-3">
+                    <div class="border border-slate-400 bg-white p-3">nodepad-projects<br><span class="text-slate-500">full JSON</span></div>
+                    <div class="border border-slate-400 bg-white p-3">nodepad-backup<br><span class="text-slate-500">full JSON again</span></div>
+                  </div>
+                </div>
+              </figure>
+              <figure class="rounded-xl border border-slate-200 bg-slate-50 p-5 paper min-h-[330px]">
+                <figcaption class="text-xs uppercase tracking-wider text-emerald-700 font-semibold mb-5">After · durable behavior behind one seam</figcaption>
+                <div class="space-y-3 text-center text-xs">
+                  <div class="mx-auto w-3/5 border border-slate-400 bg-white p-3">UI intent</div>
+                  <div class="arrow">↓</div>
+                  <div class="deep text-white rounded-lg p-5 border-4 border-slate-900">
+                    <strong class="block text-base">Thinking Workspace module</strong>
+                    <span class="text-slate-300">lifecycle · rules · undo · migration · recovery</span>
+                    <div class="mt-4 border-t border-dashed border-slate-500 pt-3 text-[11px] uppercase tracking-wider">small durable seam</div>
+                  </div>
+                  <div class="flex justify-center gap-5"><span class="arrow">↙</span><span class="arrow">↘</span></div>
+                  <div class="grid grid-cols-2 gap-3">
+                    <div class="border border-indigo-400 bg-indigo-50 p-3">SQLite adapter<br><span class="text-slate-500">Tauri</span></div>
+                    <div class="border border-indigo-400 bg-indigo-50 p-3">In-memory adapter<br><span class="text-slate-500">conformance tests</span></div>
+                  </div>
+                </div>
+              </figure>
+            </div>
+
+            <div class="grid md:grid-cols-2 gap-6 text-sm">
+              <div><h3 class="text-xs uppercase tracking-wider text-slate-500 mb-2">Problem</h3><p>Page owns the Thinking Workspace interface and implementation; every edit rewrites all workspaces twice in browser storage.</p></div>
+              <div><h3 class="text-xs uppercase tracking-wider text-slate-500 mb-2">Solution</h3><p>Concentrate workspace and note lifecycle, atomic persistence, migration, recovery, and undo in one deep module; use SQLite and in-memory adapters at its storage seam.</p></div>
+            </div>
+            <ul class="grid sm:grid-cols-2 lg:grid-cols-4 gap-2 text-sm">
+              <li class="bg-slate-100 rounded px-3 py-2">Locality: rules live together</li><li class="bg-slate-100 rounded px-3 py-2">Leverage: every view benefits</li><li class="bg-slate-100 rounded px-3 py-2">Tests hit one interface</li><li class="bg-slate-100 rounded px-3 py-2">Atomic SQLite commits</li>
+            </ul>
+          </div>
+        </article>
+
+        <article id="graph" class="rounded-2xl border border-slate-300 bg-white shadow-sm overflow-hidden">
+          <div class="p-6 md:p-8 space-y-6">
+            <div class="flex flex-wrap items-start justify-between gap-4">
+              <div><p class="text-xs uppercase tracking-wider text-slate-500">Candidate 02</p><h2 class="text-2xl font-serif mt-1">Deepen the Thinking Graph</h2></div>
+              <div class="flex gap-2"><span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-1 text-xs font-semibold">Strong</span><span class="rounded-full bg-slate-100 text-slate-700 px-3 py-1 text-xs">in-process</span></div>
+            </div>
+            <div class="font-mono text-xs text-slate-600 leading-6">app/page.tsx · lib/ai-enrich.ts · lib/utils.ts · components/graph-area.tsx · components/tiling-area.tsx · components/kanban-area.tsx</div>
+            <div class="grid md:grid-cols-2 gap-5">
+              <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 min-h-[330px]"><p class="text-xs uppercase tracking-wider text-red-700 font-semibold mb-2">Before · relation semantics split</p><pre class="mermaid">
+flowchart TB
+  AI[AI result: context indices] --> P[Page remaps IDs]
+  P --> B[influencedBy arrays]
+  B --> U[getRelatedIds]
+  B --> G[Graph degree + links]
+  B --> V[Tiling + Kanban dimming]
+  M[Move / delete / merge] -. dangling IDs .-> B
+  classDef leak fill:#fef2f2,stroke:#dc2626,stroke-width:2px;
+  class M,B leak;
+              </pre></div>
+              <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 min-h-[330px]"><p class="text-xs uppercase tracking-wider text-emerald-700 font-semibold mb-2">After · invariant ownership</p><pre class="mermaid">
+flowchart TB
+  E[Enrichment] --> TG[Thinking Graph module]
+  W[Workspace mutations] --> TG
+  TG --> R[(relation rows)]
+  TG --> P1[Tiling projection]
+  TG --> P2[Kanban projection]
+  TG --> P3[Graph projection]
+  classDef deep fill:#0f172a,color:#fff,stroke:#0f172a,stroke-width:4px;
+  class TG deep;
+              </pre></div>
+            </div>
+            <div class="grid md:grid-cols-2 gap-6 text-sm">
+              <div><h3 class="text-xs uppercase tracking-wider text-slate-500 mb-2">Problem</h3><p>Relationship meaning leaks into enrichment, mutations, utilities, and three views; delete and move can leave dangling IDs while projections disagree.</p></div>
+              <div><h3 class="text-xs uppercase tracking-wider text-slate-500 mb-2">Solution</h3><p>Concentrate relationship maintenance, merge effects, degree calculation, and view projections inside a deep Thinking Graph module.</p></div>
+            </div>
+            <ul class="grid sm:grid-cols-2 lg:grid-cols-4 gap-2 text-sm"><li class="bg-slate-100 rounded px-3 py-2">Locality: one graph truth</li><li class="bg-slate-100 rounded px-3 py-2">Leverage: three projections</li><li class="bg-slate-100 rounded px-3 py-2">Dangling IDs stop</li><li class="bg-slate-100 rounded px-3 py-2">Tests survive view changes</li></ul>
+          </div>
+        </article>
+
+        <article id="enrichment" class="rounded-2xl border border-slate-300 bg-white shadow-sm overflow-hidden">
+          <div class="p-6 md:p-8 space-y-6">
+            <div class="flex flex-wrap items-start justify-between gap-4">
+              <div><p class="text-xs uppercase tracking-wider text-slate-500">Candidate 03</p><h2 class="text-2xl font-serif mt-1">Deepen the Enrichment Workflow</h2></div>
+              <div class="flex gap-2"><span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-1 text-xs font-semibold">Strong</span><span class="rounded-full bg-indigo-100 text-indigo-800 px-3 py-1 text-xs">ports &amp; adapters</span></div>
+            </div>
+            <div class="font-mono text-xs text-slate-600 leading-6">app/page.tsx · lib/ai-enrich.ts · lib/ai-ghost.ts · lib/ai-settings.ts · app/api/fetch-url/route.ts · proxy.ts</div>
+            <div class="grid md:grid-cols-2 gap-5">
+              <figure class="rounded-xl border border-slate-200 bg-slate-50 p-5 min-h-[330px]"><figcaption class="text-xs uppercase tracking-wider text-red-700 font-semibold mb-4">Before · shallow surfaces, crossed seams</figcaption>
+                <div class="space-y-2 text-xs">
+                  <div class="grid grid-cols-[44%_56%] gap-2"><div class="mass-interface p-3">Page timers + flags</div><div class="mass-implementation p-3">workflow rules</div></div>
+                  <div class="grid grid-cols-[48%_52%] gap-2"><div class="mass-interface p-3">ai-enrich exports</div><div class="mass-implementation p-3">prompt + fetch + parsing</div></div>
+                  <div class="grid grid-cols-[58%_42%] gap-2"><div class="mass-interface p-3">settings + storage</div><div class="mass-implementation p-3">provider config</div></div>
+                  <div class="grid grid-cols-[50%_50%] gap-2"><div class="mass-interface p-3">/api/fetch-url</div><div class="mass-implementation p-3">Next-only HTTP</div></div>
+                  <p class="border-l-4 border-red-600 bg-red-50 p-3 text-red-900">Provider secrets remain in browser storage; URL enrichment assumes a running Next server.</p>
+                </div>
+              </figure>
+              <figure class="rounded-xl border border-slate-200 bg-slate-50 p-5 min-h-[330px]"><figcaption class="text-xs uppercase tracking-wider text-emerald-700 font-semibold mb-4">After · workflow depth</figcaption>
+                <div class="deep text-white rounded-lg p-5 h-[230px] flex flex-col justify-between">
+                  <div><strong class="text-base">Enrichment Workflow module</strong><p class="text-slate-300 mt-1 text-xs">context · debounce · stale-result policy · merge · synthesis · failure state</p></div>
+                  <div class="border-t border-dashed border-slate-500 pt-3 text-xs text-slate-300">Internal seams: provider, URL retrieval, secret storage</div>
+                  <div class="grid grid-cols-3 gap-2 text-[10px] text-slate-900"><div class="bg-white rounded p-2">Provider adapters</div><div class="bg-white rounded p-2">Tauri HTTP adapter</div><div class="bg-white rounded p-2">Keychain adapter</div></div>
+                </div>
+                <p class="mt-3 text-xs text-slate-600">Multiple providers make the provider seam real; browser and native runtime paths make the migration seam real.</p>
+              </figure>
+            </div>
+            <div class="grid md:grid-cols-2 gap-6 text-sm"><div><h3 class="text-xs uppercase tracking-wider text-slate-500 mb-2">Problem</h3><p>Workflow policy is split across Page and AI files; lower modules read browser storage and fetch directly, while URL enrichment depends on a Next route.</p></div><div><h3 class="text-xs uppercase tracking-wider text-slate-500 mb-2">Solution</h3><p>Concentrate enrichment and synthesis behavior in one deep module, with provider, native URL retrieval, and secret-storage adapters at internal seams.</p></div></div>
+            <ul class="grid sm:grid-cols-2 lg:grid-cols-4 gap-2 text-sm"><li class="bg-slate-100 rounded px-3 py-2">Locality: workflow is atomic</li><li class="bg-slate-100 rounded px-3 py-2">Leverage: providers normalize once</li><li class="bg-slate-100 rounded px-3 py-2">Tauri route becomes native</li><li class="bg-slate-100 rounded px-3 py-2">Transient state stays transient</li></ul>
+          </div>
+        </article>
+
+        <article id="documents" class="rounded-2xl border border-slate-300 bg-white shadow-sm overflow-hidden">
+          <div class="p-6 md:p-8 space-y-6">
+            <div class="flex flex-wrap items-start justify-between gap-4">
+              <div><p class="text-xs uppercase tracking-wider text-slate-500">Candidate 04</p><h2 class="text-2xl font-serif mt-1">Deepen Desktop Document Workflows</h2></div>
+              <div class="flex gap-2"><span class="rounded-full bg-amber-100 text-amber-800 px-3 py-1 text-xs font-semibold">Worth exploring</span><span class="rounded-full bg-slate-100 text-slate-700 px-3 py-1 text-xs">local-substitutable</span></div>
+            </div>
+            <div class="font-mono text-xs text-slate-600 leading-6">lib/nodepad-format.ts · lib/export.ts · app/page.tsx · next.config.mjs · app/layout.tsx · package.json</div>
+            <div class="grid md:grid-cols-2 gap-5">
+              <figure class="rounded-xl border border-slate-200 bg-slate-50 p-5 min-h-[320px]"><figcaption class="text-xs uppercase tracking-wider text-red-700 font-semibold mb-5">Before · browser mechanics are policy</figcaption><div class="space-y-2 text-xs"><div class="border-l-4 border-red-400 bg-white p-3">FileReader owns import</div><div class="border-l-4 border-red-400 bg-white p-3">Blob + anchor owns export</div><div class="border-l-4 border-red-400 bg-white p-3">Parser accepts loosely typed shapes</div><div class="border-l-4 border-red-400 bg-white p-3">Next config owns runtime assumptions</div><div class="border-l-4 border-red-400 bg-white p-3">No native backup or restore</div></div></figure>
+              <figure class="rounded-xl border border-slate-200 bg-slate-50 p-5 min-h-[320px]"><figcaption class="text-xs uppercase tracking-wider text-emerald-700 font-semibold mb-5">After · deepen workflows, not platform calls</figcaption><div class="deep text-white rounded-lg p-5"><strong>Document Workflow module</strong><div class="my-4 border-t border-dashed border-slate-500"></div><ul class="space-y-2 text-xs text-slate-200"><li>Version migration + validation</li><li>Archive import + export</li><li>Database backup + restore</li><li>Cancellation + error outcomes</li></ul></div><div class="mt-3 grid grid-cols-2 gap-3 text-xs text-center"><div class="border border-indigo-400 bg-indigo-50 p-3">Browser adapter<br><span class="text-slate-500">migration period</span></div><div class="border border-indigo-400 bg-indigo-50 p-3">Tauri adapter<br><span class="text-slate-500">dialogs + filesystem</span></div></div></figure>
+            </div>
+            <div class="grid md:grid-cols-2 gap-6 text-sm"><div><h3 class="text-xs uppercase tracking-wider text-slate-500 mb-2">Problem</h3><p>Archive behavior and browser mechanics are fused, validation is shallow, and the current runtime has no native backup or restore path.</p></div><div><h3 class="text-xs uppercase tracking-wider text-slate-500 mb-2">Solution</h3><p>Deepen only document workflows with real behavior; keep native dialogs, filesystem access, and browser downloads as adapters rather than creating a generic platform pass-through.</p></div></div>
+            <ul class="grid sm:grid-cols-2 lg:grid-cols-4 gap-2 text-sm"><li class="bg-slate-100 rounded px-3 py-2">Locality: versions migrate once</li><li class="bg-slate-100 rounded px-3 py-2">Leverage: archive + backup</li><li class="bg-slate-100 rounded px-3 py-2">Native dialogs stay internal</li><li class="bg-slate-100 rounded px-3 py-2">Malformed data fails closed</li></ul>
+            <div class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-950"><strong>Caution:</strong> a generic “platform module” fails the deletion test when it only renames Tauri calls. Deepen workflows with policy, not pass-throughs.</div>
+          </div>
+        </article>
+      </section>
+
+      <section id="top-recommendation" class="rounded-2xl deep text-white p-7 md:p-9 flex flex-col md:flex-row md:items-center md:justify-between gap-5">
+        <div><p class="text-xs uppercase tracking-[0.2em] text-emerald-300">Top recommendation</p><h2 class="text-3xl font-serif mt-2"><a href="#workspace" class="hover:text-emerald-300">Durable Thinking Workspace →</a></h2></div>
+        <p class="max-w-2xl text-slate-300">Start here: it creates locality for SQLite schema, migrations, recovery, and note rules, while giving every view leverage through one durable seam. Put graph invariants inside it or immediately after it; deepen enrichment next so the desktop app no longer depends on a Next server.</p>
+      </section>
+
+      <footer class="text-xs text-slate-500 border-t border-slate-300 pt-5 flex flex-wrap justify-between gap-2"><span>Evidence: repository at commit 5a6bad2</span><span>No tests or Tauri setup present · dependencies not installed · no build run</span></footer>
+    </main>
+  </body>
+</html>
