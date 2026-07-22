@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::path::Path;
@@ -176,13 +176,36 @@ impl WorkspaceStore {
     /// Opens durable storage. A failure never resets, deletes, or overwrites an
     /// existing database; it reports the category so recovery can retry or quit.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageOpenFailure> {
+        Self::open_prepared(path, migrate)
+    }
+
+    /// Opening is split from preparing the schema so a failing preparation can
+    /// be injected. A failed open on a path that held no database leaves none
+    /// behind, so the next launch can never mistake a stub for a fresh start.
+    fn open_prepared(
+        path: impl AsRef<Path>,
+        prepare: fn(&mut Connection) -> Result<(), WorkspaceError>,
+    ) -> Result<Self, StorageOpenFailure> {
+        let path = path.as_ref();
+        let existed = path.exists();
+        let opened = Self::open_at(path, prepare);
+        if opened.is_err() && !existed {
+            discard_database_files(path);
+        }
+        opened
+    }
+
+    fn open_at(
+        path: &Path,
+        prepare: fn(&mut Connection) -> Result<(), WorkspaceError>,
+    ) -> Result<Self, StorageOpenFailure> {
         let mut connection = Connection::open(path).map_err(|error| {
             StorageOpenFailure::from_error(
                 StorageOpenFailureCategory::Unreadable,
                 WorkspaceError::Storage(error),
             )
         })?;
-        migrate(&mut connection).map_err(|error| {
+        prepare(&mut connection).map_err(|error| {
             StorageOpenFailure::from_error(StorageOpenFailureCategory::Migration, error)
         })?;
         let mut store = Self { connection };
@@ -483,11 +506,22 @@ fn read_snapshot(connection: &Connection) -> Result<WorkspaceSnapshot, Workspace
     })
 }
 
+/// Removes a database and its sidecars. Only ever called for a path that held
+/// no database before the failed open that created the stub.
+fn discard_database_files(path: &Path) {
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+    }
+}
+
 fn id() -> String {
     Uuid::new_v4().to_string()
 }
+
+/// Fixed-width UTC, so lexicographic order is chronological order everywhere
+/// timestamps are compared: SQL `ORDER BY`, survivor selection, and tests.
 fn timestamp() -> String {
-    Utc::now().to_rfc3339()
+    Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true)
 }
 
 #[cfg(test)]
@@ -675,6 +709,7 @@ mod tests {
         assert_eq!(duplicates.len(), 2);
         assert_ne!(duplicates[0].id, duplicates[1].id);
         assert_eq!(duplicate.active_workspace_id, duplicates[1].id);
+        let second_research = duplicates[1].id.clone();
 
         // Selection and rename are explicit intents.
         let selected = committed(workspace.select_workspace_outcome(&research));
@@ -713,22 +748,27 @@ mod tests {
             &workspace.create_note_outcome("missing", "Nope")
         ));
 
-        // Deleting the active Workspace selects the most recently updated survivor.
+        // Deleting the active Workspace selects the most recently updated
+        // survivor. The survivor here is neither the newest, the oldest, the
+        // first, nor the last Workspace, so no weaker rule can pass this.
         distinct_moment();
-        let recent = workspace_id_named(
-            &committed(workspace.create_workspace_outcome("Most recent")),
-            "Most recent",
+        let newest = workspace_id_named(
+            &committed(workspace.create_workspace_outcome("Newest Workspace")),
+            "Newest Workspace",
         );
+        distinct_moment();
+        committed(workspace.rename_workspace_outcome(&second_research, "Touched most recently"));
         committed(workspace.select_workspace_outcome(&research));
         let after_delete = committed(workspace.delete_workspace_outcome(&research));
-        assert_eq!(after_delete.active_workspace_id, recent);
+        assert_eq!(after_delete.active_workspace_id, second_research);
         assert_eq!(after_delete.workspaces.len(), 3);
+        assert_eq!(after_delete.workspaces[0].name, DEFAULT_WORKSPACE_NAME);
+        assert_eq!(after_delete.workspaces[2].id, newest);
         assert!(after_delete.notes.is_empty());
 
         // Deleting an inactive Workspace leaves the selection alone.
-        let inactive = workspace_id_named(&after_delete, DEFAULT_WORKSPACE_NAME);
-        let after_inactive_delete = committed(workspace.delete_workspace_outcome(&inactive));
-        assert_eq!(after_inactive_delete.active_workspace_id, recent);
+        let after_inactive_delete = committed(workspace.delete_workspace_outcome(&newest));
+        assert_eq!(after_inactive_delete.active_workspace_id, second_research);
 
         // Deleting the only Workspace resets it instead of leaving none.
         for remaining in after_inactive_delete
@@ -750,9 +790,13 @@ mod tests {
     }
 
     fn remove_database(path: &std::path::Path) {
-        for suffix in ["", "-wal", "-shm"] {
-            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
-        }
+        discard_database_files(path);
+    }
+
+    fn database_files_present(path: &std::path::Path) -> bool {
+        ["", "-wal", "-shm"]
+            .iter()
+            .any(|suffix| std::path::Path::new(&format!("{}{suffix}", path.display())).exists())
     }
 
     #[test]
@@ -828,10 +872,11 @@ mod tests {
             renamed_name
         );
 
-        // A selection that no longer exists falls back to a valid Workspace.
+        // A selection that no longer exists — only reachable by tampering from
+        // outside the interface — falls back to a valid Workspace.
         {
-            let store = WorkspaceStore::open(&path).unwrap();
-            write_active_workspace_id(&store.connection, "vanished").unwrap();
+            let connection = Connection::open(&path).unwrap();
+            write_active_workspace_id(&connection, "vanished").unwrap();
         }
         let recovered = WorkspaceStore::open(&path).unwrap().snapshot().unwrap();
         assert!(recovered
@@ -888,6 +933,19 @@ mod tests {
             .execute_batch("DROP TRIGGER reject_notes;")
             .unwrap();
 
+        // A rejected rename leaves the name and the selection intact.
+        let before_rename = store.snapshot().unwrap();
+        store.connection.execute_batch("CREATE TRIGGER reject_renames BEFORE UPDATE ON thinking_workspaces BEGIN SELECT RAISE(FAIL, 'injected'); END;").unwrap();
+        assert!(matches!(
+            store.rename_workspace_outcome(&workspace, "Must not persist"),
+            WorkspaceCommandResult::Failed { .. }
+        ));
+        assert_eq!(store.snapshot().unwrap(), before_rename);
+        store
+            .connection
+            .execute_batch("DROP TRIGGER reject_renames;")
+            .unwrap();
+
         // A rejected delete leaves the Workspace, its Notes, and the selection intact.
         store.create_note(&workspace, "Survives a failed delete").unwrap();
         let before_delete = store.snapshot().unwrap();
@@ -910,6 +968,20 @@ mod tests {
         assert_eq!(failure.category, StorageOpenFailureCategory::Unreadable);
         assert!(std::fs::read_dir(&directory).unwrap().next().is_none());
         std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn a_failed_open_on_a_fresh_path_leaves_no_database_behind() {
+        let path = temporary_path();
+        assert!(!database_files_present(&path));
+        let failure = WorkspaceStore::open_prepared(&path, |_| {
+            Err(WorkspaceError::Storage(rusqlite::Error::InvalidQuery))
+        })
+        .unwrap_err();
+        assert_eq!(failure.category, StorageOpenFailureCategory::Migration);
+        // The stub SQLite created before preparation failed is gone, so the next
+        // launch cannot mistake an empty stub for a legitimate fresh database.
+        assert!(!database_files_present(&path));
     }
 
     #[test]

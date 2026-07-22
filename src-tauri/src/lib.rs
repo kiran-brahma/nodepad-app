@@ -1,6 +1,5 @@
 mod workspace;
 
-use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
 use workspace::{
@@ -11,7 +10,6 @@ use workspace::{
 /// Storage may be unavailable at startup; the app stays running so the thinker
 /// can retry or quit without the database ever being reset.
 struct AppState {
-    database_path: PathBuf,
     storage: Mutex<Result<WorkspaceStore, StorageOpenFailure>>,
 }
 
@@ -67,12 +65,13 @@ fn create_note(
     state.dispatch(|store| store.create_note_outcome(&workspace_id, &markdown))
 }
 
-/// Retries the open that failed. It reuses the same path and never recreates it.
+/// Retries the failed open against the same path, so a folder or permission
+/// problem the thinker has since fixed can recover without a restart.
 #[tauri::command]
-fn retry_storage_open(state: State<'_, AppState>) -> WorkspaceCommandResult {
+fn retry_storage_open(app: AppHandle, state: State<'_, AppState>) -> WorkspaceCommandResult {
     let mut storage = state.storage.lock().expect("workspace lock poisoned");
     if storage.is_err() {
-        *storage = WorkspaceStore::open(&state.database_path);
+        *storage = open_storage(&app);
     }
     match storage.as_ref() {
         Ok(store) => store.snapshot_outcome(),
@@ -87,19 +86,30 @@ fn quit_application(app: AppHandle) {
     app.exit(0);
 }
 
+/// Locating and creating the data folder can fail too. Those failures become
+/// recovery states rather than aborting startup, so the thinker always reaches
+/// a screen that explains the problem instead of a window that never opens.
+fn open_storage(app: &AppHandle) -> Result<WorkspaceStore, StorageOpenFailure> {
+    let data_dir = app.path().app_data_dir().map_err(|error| {
+        StorageOpenFailure::new(
+            StorageOpenFailureCategory::Initialization,
+            format!("Nodepad could not locate its local data folder: {error}"),
+        )
+    })?;
+    std::fs::create_dir_all(&data_dir).map_err(|error| {
+        StorageOpenFailure::new(
+            StorageOpenFailureCategory::Initialization,
+            format!("Nodepad could not reach its local data folder: {error}"),
+        )
+    })?;
+    WorkspaceStore::open(data_dir.join("nodepad.sqlite"))
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            let data_dir = app.path().app_data_dir()?;
-            let storage = match std::fs::create_dir_all(&data_dir) {
-                Ok(()) => WorkspaceStore::open(data_dir.join("nodepad.sqlite")),
-                Err(error) => Err(StorageOpenFailure::new(
-                    StorageOpenFailureCategory::Initialization,
-                    format!("Nodepad could not reach its local data folder: {error}"),
-                )),
-            };
+            let storage = open_storage(app.handle());
             app.manage(AppState {
-                database_path: data_dir.join("nodepad.sqlite"),
                 storage: Mutex::new(storage),
             });
             Ok(())
