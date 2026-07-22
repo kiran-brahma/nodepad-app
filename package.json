@@ -3,10 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint ."
+    "dev": "tauri dev",
+    "web:dev": "vite --host 127.0.0.1 --port 1420",
+    "web:build": "vite build",
+    "build": "npm run check && tauri build",
+    "lint": "eslint src --max-warnings 0",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:tauri-smoke": "npm run web:build && cargo check --manifest-path src-tauri/Cargo.toml",
+    "check": "npm run typecheck && npm run lint && npm run test && npm run test:rust && npm run test:tauri-smoke"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",
@@ -38,7 +44,10 @@
     "@radix-ui/react-toggle-group": "1.1.11",
     "@radix-ui/react-tooltip": "1.2.8",
     "@tailwindcss/typography": "^0.5.19",
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/cli": "^2.11.4",
     "@types/d3": "^7.4.3",
+    "@vitejs/plugin-react": "^4.7.0",
     "autoprefixer": "^10.4.20",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -62,6 +71,8 @@
     "sonner": "^1.7.1",
     "tailwind-merge": "^3.3.1",
     "vaul": "^1.1.2",
+    "vite": "^6.4.3",
+    "vitest": "^3.2.7",
     "zod": "^3.24.1"
   },
   "devDependencies": {
@@ -69,10 +80,13 @@
     "@types/node": "^22",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
     "postcss": "^8.5",
     "shadcn": "^4.0.0",
     "tailwindcss": "^4.2.0",
     "tw-animate-css": "1.3.3",
-    "typescript": "5.7.3"
+    "typescript": "5.7.3",
+    "typescript-eslint": "^8.65.0"
   }
 }

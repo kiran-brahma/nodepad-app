@@ -1,9 +1,5 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  typescript: {
-    // Build errors are intentionally ignored — see CLAUDE.md
-    ignoreBuildErrors: true,
-  },
   images: {
     unoptimized: true,
   },

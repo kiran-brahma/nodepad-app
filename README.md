@@ -1,4 +1,30 @@
-# nodepad
+# Nodepad
+
+## Desktop V0 baseline
+
+Nodepad now starts as a native Apple Silicon macOS application: Tauri 2 hosts a static React interface, and SQLite is the durable local source of truth. It does not start a Next server, use browser persistence, send telemetry, or make provider requests.
+
+Requirements: current Node.js, Rust, and the macOS Tauri build prerequisites.
+
+```bash
+npm install
+npm run dev
+```
+
+`npm run dev` launches the Tauri application. On first launch, Nodepad creates its SQLite database in the macOS application-data directory, applies numbered migrations, and creates one default Thinking Workspace. Use the minimal interface to create another Thinking Workspace and commit atomic Markdown Notes.
+
+Quality gates:
+
+```bash
+npm run check  # TypeScript, lint, Rust conformance, and a Tauri compile smoke check
+npm run build  # check, static frontend build, and macOS Tauri artifact
+```
+
+The current baseline deliberately excludes AI Assistance, Labels, Relationships, multiple views, import/export, backup, accounts, cloud sync, and any migration from the prior browser experiment.
+
+---
+
+## Legacy experiment reference
 
 **A design experiment in spatial, AI-augmented thinking.**
 
