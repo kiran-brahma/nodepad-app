@@ -21,3 +21,4 @@ next-env.d.ts
 
 # Internal docs
 CLAUDE.md
+/.pi-subagents
