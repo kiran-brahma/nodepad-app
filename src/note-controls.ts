@@ -11,10 +11,13 @@ export type ConfirmationAnswer = "confirm" | "cancel"
 export type NoteDeleteResolution = { intent: "delete"; noteId: string } | { intent: "none" }
 
 /** The first line is enough to recognize the Note without repeating all of it. */
-export function requestNoteDelete(note: Note): NonNullable<PendingNoteDelete> {
+export function notePreview(note: Note): string {
   const firstLine = note.markdown.trim().split("\n")[0]?.trim() ?? ""
-  const preview = [...firstLine].length > 60 ? `${[...firstLine].slice(0, 60).join("")}…` : firstLine
-  return { noteId: note.id, preview }
+  return [...firstLine].length > 60 ? `${[...firstLine].slice(0, 60).join("")}…` : firstLine
+}
+
+export function requestNoteDelete(note: Note): NonNullable<PendingNoteDelete> {
+  return { noteId: note.id, preview: notePreview(note) }
 }
 
 /** Deleting a Note is reversible this session, and the prompt says so. */
