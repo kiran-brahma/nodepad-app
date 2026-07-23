@@ -32,6 +32,63 @@ import {
   type PendingNoteDelete,
 } from "./note-controls"
 import { degree, relatableNotes, relatedNotes } from "./thinking-graph"
+import {
+  copyExplanation,
+  moveExplanation,
+  requestTransfer,
+  transferDestination,
+  transferDestinations,
+  type PendingTransfer,
+} from "./note-transfer"
+
+/**
+ * The destination choice for one Note, with the two transfers named and
+ * described separately so a move can never be mistaken for a copy.
+ */
+function NoteTransfer({
+  note,
+  workspaces,
+  pending,
+  onChoose,
+  onTransfer,
+  onCancel,
+}: {
+  note: Note
+  workspaces: ThinkingWorkspace[]
+  pending: NonNullable<PendingTransfer>
+  onChoose: (targetWorkspaceId: string) => void
+  onTransfer: (kind: "move" | "copy") => void
+  onCancel: () => void
+}) {
+  const destination = transferDestination(workspaces, pending)
+  if (!destination) return null
+  return (
+    <div className="transfer">
+      <label htmlFor={`transfer-${note.id}`}>Thinking Workspace to move or copy into</label>
+      <select
+        autoFocus
+        id={`transfer-${note.id}`}
+        value={pending.targetWorkspaceId}
+        onChange={(event) => onChoose(event.target.value)}
+      >
+        {transferDestinations(workspaces, note).map((workspace) => (
+          <option key={workspace.id} value={workspace.id}>
+            {workspace.name}
+          </option>
+        ))}
+      </select>
+      <p>{moveExplanation(destination, note)}</p>
+      <p>{copyExplanation(destination, note)}</p>
+      <div className="row">
+        <button onClick={() => onTransfer("move")}>Move Note</button>
+        <button onClick={() => onTransfer("copy")}>Copy Note</button>
+        <button type="button" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
 
 const RECOVERY_HEADLINE: Record<StorageOpenFailure["category"], string> = {
   unreadable: "Nodepad could not read its local database.",
@@ -55,6 +112,7 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState("")
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null)
   const [relateDraft, setRelateDraft] = useState<{ noteId: string; query: string } | null>(null)
+  const [pendingTransfer, setPendingTransfer] = useState<PendingTransfer>(null)
   // Which Note the thinker navigated to. Focus is transient: it is never
   // committed, and moving it can change no Relationship.
   const [focusedNoteId, setFocusedNoteId] = useState<string | null>(null)
@@ -191,6 +249,20 @@ export function App() {
   function relate(noteId: string, otherNoteId: string) {
     void submit(thinkingWorkspace.relateNotes(noteId, otherNoteId)).then((committed) => {
       if (committed) setRelateDraft(null)
+    })
+  }
+
+  // Moving and copying are separate commands with separate outcomes, so each
+  // has its own button rather than one button with a hidden mode.
+  function transfer(kind: "move" | "copy") {
+    if (!pendingTransfer) return
+    const { noteId, targetWorkspaceId } = pendingTransfer
+    const committing =
+      kind === "move"
+        ? thinkingWorkspace.moveNote(noteId, targetWorkspaceId)
+        : thinkingWorkspace.copyNote(noteId, targetWorkspaceId)
+    void submit(committing).then((committed) => {
+      if (committed) setPendingTransfer(null)
     })
   }
 
@@ -490,6 +562,30 @@ export function App() {
                   ) : (
                     <button onClick={() => setRelateDraft({ noteId: note.id, query: "" })}>
                       Relate Note
+                    </button>
+                  )}
+                </div>
+
+                {/* Moving and copying are the only two ways a Note reaches
+                    another Thinking Workspace, and each says what it does. */}
+                <div className="row" aria-label="Move or copy Note">
+                  {pendingTransfer?.noteId === note.id ? (
+                    <NoteTransfer
+                      note={note}
+                      workspaces={snapshot?.workspaces ?? []}
+                      pending={pendingTransfer}
+                      onChoose={(targetWorkspaceId) =>
+                        setPendingTransfer({ ...pendingTransfer, targetWorkspaceId })
+                      }
+                      onTransfer={transfer}
+                      onCancel={() => setPendingTransfer(null)}
+                    />
+                  ) : (
+                    <button
+                      disabled={transferDestinations(snapshot?.workspaces ?? [], note).length === 0}
+                      onClick={() => setPendingTransfer(requestTransfer(snapshot?.workspaces ?? [], note))}
+                    >
+                      Move or Copy Note
                     </button>
                   )}
                 </div>

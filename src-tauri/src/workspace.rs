@@ -125,13 +125,25 @@ pub struct SearchResult {
 pub(crate) enum NoteMutation {
     Insert(Note),
     Replace(Note),
-    Delete { note_id: String },
+    Delete {
+        note_id: String,
+    },
+    /// Puts an existing Note in `note.workspace_id`, gives it exactly the Label
+    /// meanings `note` carries, and leaves it with exactly `relationships` —
+    /// each kept only while both endpoints are Notes in that same Workspace.
+    /// One shape serves a move and the undo of a move, in either direction.
+    Relocate {
+        note: Note,
+        relationships: Vec<Relationship>,
+    },
 }
 
 impl NoteMutation {
     fn workspace_id(&self) -> &str {
         match self {
-            Self::Insert(note) | Self::Replace(note) => &note.workspace_id,
+            Self::Insert(note) | Self::Replace(note) | Self::Relocate { note, .. } => {
+                &note.workspace_id
+            }
             Self::Delete { .. } => "",
         }
     }
@@ -300,6 +312,8 @@ pub(crate) enum WorkspaceError {
     SelfRelationship,
     #[error("A Relationship connects two Notes in the same Thinking Workspace.")]
     CrossWorkspaceRelationship,
+    #[error("Choose a different Thinking Workspace to move or copy this Note into.")]
+    SameWorkspaceTransfer,
     #[error("There is nothing left to undo in this Thinking Workspace.")]
     NothingToUndo,
     #[error("Local storage could not commit this change. Please try again.")]
@@ -316,7 +330,8 @@ impl WorkspaceError {
             | Self::UnknownNoteType
             | Self::InvalidLabelName
             | Self::SelfRelationship
-            | Self::CrossWorkspaceRelationship => WorkspaceFailureCode::Validation,
+            | Self::CrossWorkspaceRelationship
+            | Self::SameWorkspaceTransfer => WorkspaceFailureCode::Validation,
             Self::WorkspaceNotFound | Self::NoteNotFound | Self::LabelNotFound => WorkspaceFailureCode::NotFound,
             Self::NothingToUndo => WorkspaceFailureCode::NothingToUndo,
             Self::Storage(_) => WorkspaceFailureCode::Storage,
@@ -482,6 +497,89 @@ pub trait ThinkingWorkspaceInterface {
         )
     }
 
+    /// The Note and the Workspace a transfer names, once both are known to
+    /// exist and to be different Workspaces. Every refusal is decided here,
+    /// before a transaction exists, so a rejected transfer leaves both
+    /// Workspaces exactly as they were.
+    fn transferable_note(
+        &self,
+        note_id: &str,
+        target_workspace_id: &str,
+    ) -> Result<(WorkspaceSnapshot, Note), WorkspaceError> {
+        let snapshot = self.snapshot()?;
+        require_workspace(&snapshot.workspaces, target_workspace_id)?;
+        let note = snapshot
+            .notes
+            .iter()
+            .find(|note| note.id == note_id)
+            .cloned()
+            .ok_or(WorkspaceError::NoteNotFound)?;
+        if note.workspace_id == target_workspace_id {
+            return Err(WorkspaceError::SameWorkspaceTransfer);
+        }
+        Ok((snapshot, note))
+    }
+
+    /// Moves a Note into another Thinking Workspace. Identity and every
+    /// authored field survive; Labels are remapped into the target by display
+    /// meaning; every Relationship is removed, because a Relationship cannot
+    /// cross a Workspace seam. Undoing returns the Note and restores only the
+    /// Relationships whose endpoints are both still in the prior Workspace.
+    fn move_note(
+        &mut self,
+        note_id: &str,
+        target_workspace_id: &str,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        let (snapshot, source) = self.transferable_note(note_id, target_workspace_id)?;
+        let captured = snapshot
+            .relationships
+            .iter()
+            .filter(|relationship| relationship.other_endpoint(note_id).is_some())
+            .cloned()
+            .collect();
+        let mut moved = source.clone();
+        moved.workspace_id = target_workspace_id.to_owned();
+        // The command belongs to the Workspace the thinker acted in, so its
+        // undo is where the Note was last seen leaving.
+        let origin = source.workspace_id.clone();
+        self.commit_note_in(
+            &origin,
+            NoteMutation::Relocate {
+                note: moved,
+                relationships: vec![],
+            },
+            NoteMutation::Relocate {
+                note: source,
+                relationships: captured,
+            },
+        )
+    }
+
+    /// Copies a Note into another Thinking Workspace. The copy keeps the text,
+    /// Note Type, Annotation, pin state, manual provenance, and Label meanings,
+    /// and takes a fresh identity, a fresh timestamp, and no Relationship.
+    fn copy_note(
+        &mut self,
+        note_id: &str,
+        target_workspace_id: &str,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        let (_, source) = self.transferable_note(note_id, target_workspace_id)?;
+        let now = timestamp();
+        let copy = Note {
+            id: id(),
+            workspace_id: target_workspace_id.to_owned(),
+            created_at: now.clone(),
+            updated_at: now,
+            ..source.clone()
+        };
+        let copy_id = copy.id.clone();
+        self.commit_note_in(
+            &source.workspace_id,
+            NoteMutation::Insert(copy),
+            NoteMutation::Delete { note_id: copy_id },
+        )
+    }
+
     fn delete_note(&mut self, note_id: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
         let previous = self.note(note_id)?;
         self.commit_note(
@@ -519,8 +617,20 @@ pub trait ThinkingWorkspaceInterface {
             "" => compensation.workspace_id().to_owned(),
             id => id.to_owned(),
         };
+        self.commit_note_in(&workspace_id, mutation, compensation)
+    }
+
+    /// The same commit, for an intent whose reversible history belongs to a
+    /// Workspace neither side of the mutation names — a transfer, whose undo
+    /// belongs to the Workspace the Note came from.
+    fn commit_note_in(
+        &mut self,
+        workspace_id: &str,
+        mutation: NoteMutation,
+        compensation: NoteMutation,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
         self.apply_note_mutation(&mutation)?;
-        self.history().push(&workspace_id, compensation);
+        self.history().push(workspace_id, compensation);
         self.snapshot()
     }
 
@@ -568,6 +678,20 @@ pub trait ThinkingWorkspaceInterface {
     }
     fn delete_note_outcome(&mut self, note_id: &str) -> WorkspaceCommandResult {
         outcome(self.delete_note(note_id))
+    }
+    fn move_note_outcome(
+        &mut self,
+        note_id: &str,
+        target_workspace_id: &str,
+    ) -> WorkspaceCommandResult {
+        outcome(self.move_note(note_id, target_workspace_id))
+    }
+    fn copy_note_outcome(
+        &mut self,
+        note_id: &str,
+        target_workspace_id: &str,
+    ) -> WorkspaceCommandResult {
+        outcome(self.copy_note(note_id, target_workspace_id))
     }
     fn undo_outcome(&mut self, workspace_id: &str) -> WorkspaceCommandResult {
         outcome(self.undo(workspace_id))
@@ -791,11 +915,28 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
     }
 
     fn apply_note_mutation(&mut self, mutation: &NoteMutation) -> Result<(), WorkspaceError> {
-        let affected_workspace_id = match mutation {
-            NoteMutation::Insert(note) | NoteMutation::Replace(note) => Some(note.workspace_id.clone()),
-            NoteMutation::Delete { note_id } => self.connection.query_row(
-                "SELECT workspace_id FROM notes WHERE id = ?1", [note_id], |row| row.get(0)
-            ).optional().map_err(WorkspaceError::Storage)?,
+        let committed_workspace_id = |note_id: &str| -> Result<Option<String>, WorkspaceError> {
+            self.connection
+                .query_row(
+                    "SELECT workspace_id FROM notes WHERE id = ?1",
+                    [note_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(WorkspaceError::Storage)
+        };
+        // A relocation touches two Workspaces, so both projections are rebuilt.
+        let affected_workspace_ids: Vec<String> = match mutation {
+            NoteMutation::Insert(note) | NoteMutation::Replace(note) => {
+                vec![note.workspace_id.clone()]
+            }
+            NoteMutation::Delete { note_id } => {
+                committed_workspace_id(note_id)?.into_iter().collect()
+            }
+            NoteMutation::Relocate { note, .. } => committed_workspace_id(&note.id)?
+                .into_iter()
+                .chain(std::iter::once(note.workspace_id.clone()))
+                .collect(),
         };
         let transaction = self
             .connection
@@ -833,13 +974,33 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
             NoteMutation::Delete { note_id } => {
                 transaction.execute("DELETE FROM notes WHERE id = ?1", params![note_id])
             }
+            NoteMutation::Relocate { note, .. } => transaction.execute(
+                "UPDATE notes SET workspace_id = ?2 WHERE id = ?1",
+                params![note.id, note.workspace_id],
+            ),
         }
         .map_err(WorkspaceError::Storage)?;
         if changed == 0 {
             // The transaction is dropped unfinished, so nothing is committed.
             return Err(WorkspaceError::NoteNotFound);
         }
-        if let Some(workspace_id) = affected_workspace_id {
+        // Label membership travels with the Note row, so a Note that arrives in
+        // a Workspace carries its Label meanings into that Workspace's own
+        // Labels rather than pointing at another Workspace's.
+        match mutation {
+            NoteMutation::Insert(note) | NoteMutation::Relocate { note, .. } => {
+                write_note_labels(&transaction, note)?;
+            }
+            NoteMutation::Replace(_) | NoteMutation::Delete { .. } => {}
+        }
+        if let NoteMutation::Relocate {
+            note,
+            relationships,
+        } = mutation
+        {
+            write_relocated_relationships(&transaction, note, relationships)?;
+        }
+        for workspace_id in affected_workspace_ids {
             refresh_workspace_search(&transaction, &workspace_id)?;
         }
         transaction.commit().map_err(WorkspaceError::Storage)
@@ -849,18 +1010,7 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
         let note = self.note(note_id)?;
         let (name, canonical_name) = validated_label_name(name)?;
         let transaction = self.connection.transaction().map_err(WorkspaceError::Storage)?;
-        let label_id: Option<String> = transaction.query_row(
-            "SELECT id FROM labels WHERE workspace_id = ?1 AND canonical_name = ?2",
-            params![note.workspace_id, canonical_name], |row| row.get(0)
-        ).optional().map_err(WorkspaceError::Storage)?;
-        let label_id = match label_id {
-            Some(id) => id,
-            None => {
-                let id = id();
-                transaction.execute("INSERT INTO labels (id, workspace_id, name, canonical_name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)", params![id, note.workspace_id, name, canonical_name, timestamp()]).map_err(WorkspaceError::Storage)?;
-                id
-            }
-        };
+        let label_id = label_id_for(&transaction, &note.workspace_id, &name, &canonical_name)?;
         transaction.execute("INSERT OR IGNORE INTO note_labels (note_id, label_id) VALUES (?1, ?2)", params![note_id, label_id]).map_err(WorkspaceError::Storage)?;
         refresh_workspace_search(&transaction, &note.workspace_id)?;
         transaction.commit().map_err(WorkspaceError::Storage)?;
@@ -1171,6 +1321,86 @@ fn labels_for_note(connection: &Connection, note_id: &str) -> Result<Vec<Label>,
         .map_err(WorkspaceError::Storage)?.collect::<Result<Vec<_>, _>>().map_err(WorkspaceError::Storage)
 }
 
+/// The Workspace's own Label with this display meaning, created when it is
+/// missing. Identity is per Workspace: a Label row is never shared across one.
+fn label_id_for(
+    connection: &Connection,
+    workspace_id: &str,
+    name: &str,
+    canonical_name: &str,
+) -> Result<String, WorkspaceError> {
+    let existing: Option<String> = connection
+        .query_row(
+            "SELECT id FROM labels WHERE workspace_id = ?1 AND canonical_name = ?2",
+            params![workspace_id, canonical_name],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(WorkspaceError::Storage)?;
+    match existing {
+        Some(id) => Ok(id),
+        None => {
+            let label_id = id();
+            connection.execute("INSERT INTO labels (id, workspace_id, name, canonical_name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)", params![label_id, workspace_id, name, canonical_name, timestamp()]).map_err(WorkspaceError::Storage)?;
+            Ok(label_id)
+        }
+    }
+}
+
+/// Gives the Note exactly the Label meanings it carries, in its own Workspace.
+/// A Label left with no Note stays: it is the Workspace's vocabulary, and
+/// keeping it is what lets an undone move find the same Label rows again.
+fn write_note_labels(connection: &Connection, note: &Note) -> Result<(), WorkspaceError> {
+    connection
+        .execute("DELETE FROM note_labels WHERE note_id = ?1", [&note.id])
+        .map_err(WorkspaceError::Storage)?;
+    for label in &note.labels {
+        let (name, canonical_name) = validated_label_name(&label.name)?;
+        let label_id = label_id_for(connection, &note.workspace_id, &name, &canonical_name)?;
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO note_labels (note_id, label_id) VALUES (?1, ?2)",
+                params![note.id, label_id],
+            )
+            .map_err(WorkspaceError::Storage)?;
+    }
+    Ok(())
+}
+
+/// Leaves the relocated Note with exactly the Relationships given, keeping only
+/// those whose endpoints are both Notes in the Workspace it now belongs to. A
+/// Relationship never crosses a Workspace seam, in either direction of a move.
+fn write_relocated_relationships(
+    connection: &Connection,
+    note: &Note,
+    relationships: &[Relationship],
+) -> Result<(), WorkspaceError> {
+    connection
+        .execute(
+            "DELETE FROM relationships WHERE note_id_a = ?1 OR note_id_b = ?1",
+            [&note.id],
+        )
+        .map_err(WorkspaceError::Storage)?;
+    for relationship in relationships {
+        connection.execute(
+            "INSERT INTO relationships (id, workspace_id, note_id_a, note_id_b, provenance, created_at) \
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6 \
+             WHERE EXISTS(SELECT 1 FROM notes WHERE id = ?3 AND workspace_id = ?2) \
+               AND EXISTS(SELECT 1 FROM notes WHERE id = ?4 AND workspace_id = ?2) \
+             ON CONFLICT(note_id_a, note_id_b) DO NOTHING",
+            params![
+                relationship.id,
+                note.workspace_id,
+                relationship.note_id_a,
+                relationship.note_id_b,
+                relationship.provenance.as_str(),
+                relationship.created_at
+            ],
+        ).map_err(WorkspaceError::Storage)?;
+    }
+    Ok(())
+}
+
 fn refresh_workspace_search(connection: &Connection, workspace_id: &str) -> Result<(), WorkspaceError> {
     connection.execute("DELETE FROM note_search WHERE workspace_id = ?1", [workspace_id]).map_err(WorkspaceError::Storage)?;
     connection.execute("INSERT INTO note_search(note_id, workspace_id, content) SELECT notes.id, notes.workspace_id, notes.markdown || ' ' || COALESCE(notes.annotation, '') || ' ' || COALESCE((SELECT group_concat(labels.name, ' ') FROM note_labels JOIN labels ON labels.id = note_labels.label_id WHERE note_labels.note_id = notes.id), '') FROM notes WHERE notes.workspace_id = ?1", [workspace_id]).map_err(WorkspaceError::Storage)?;
@@ -1278,6 +1508,33 @@ mod tests {
             store.create_workspace(DEFAULT_WORKSPACE_NAME).unwrap();
             store
         }
+
+        /// The same Label meanings, as this Workspace's own Labels, creating
+        /// one only when the Workspace has no Label with that meaning yet.
+        fn mapped_labels(&mut self, workspace_id: &str, labels: &[Label]) -> Vec<Label> {
+            labels
+                .iter()
+                .map(|label| {
+                    let canonical = label.name.to_lowercase();
+                    self.labels
+                        .iter()
+                        .find(|candidate| {
+                            candidate.workspace_id == workspace_id
+                                && candidate.name.to_lowercase() == canonical
+                        })
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            let mapped = Label {
+                                id: id(),
+                                workspace_id: workspace_id.to_owned(),
+                                name: label.name.clone(),
+                            };
+                            self.labels.push(mapped.clone());
+                            mapped
+                        })
+                })
+                .collect()
+        }
     }
 
     impl ThinkingWorkspaceInterface for MemoryStore {
@@ -1374,7 +1631,9 @@ mod tests {
             match mutation {
                 NoteMutation::Insert(note) => {
                     require_workspace(&self.workspaces, &note.workspace_id)?;
-                    self.notes.push(note.clone());
+                    let mut inserted = note.clone();
+                    inserted.labels = self.mapped_labels(&note.workspace_id, &note.labels);
+                    self.notes.push(inserted);
                 }
                 NoteMutation::Replace(note) => {
                     let existing = self
@@ -1395,6 +1654,38 @@ mod tests {
                     self.relationships.retain(|relationship| {
                         &relationship.note_id_a != note_id && &relationship.note_id_b != note_id
                     });
+                }
+                NoteMutation::Relocate {
+                    note,
+                    relationships,
+                } => {
+                    let position = self
+                        .notes
+                        .iter()
+                        .position(|candidate| candidate.id == note.id)
+                        .ok_or(WorkspaceError::NoteNotFound)?;
+                    let labels = self.mapped_labels(&note.workspace_id, &note.labels);
+                    let mut relocated = note.clone();
+                    relocated.labels = labels;
+                    self.notes[position] = relocated;
+                    // The Note leaves every Relationship it had behind, then
+                    // takes back only those the command captured whose two
+                    // endpoints are both Notes in the Workspace it now sits in.
+                    self.relationships
+                        .retain(|relationship| relationship.other_endpoint(&note.id).is_none());
+                    for relationship in relationships {
+                        let inside = |note_id: &str| {
+                            self.notes.iter().any(|candidate| {
+                                candidate.id == note_id
+                                    && candidate.workspace_id == note.workspace_id
+                            })
+                        };
+                        if inside(&relationship.note_id_a) && inside(&relationship.note_id_b) {
+                            let mut restored = relationship.clone();
+                            restored.workspace_id = note.workspace_id.clone();
+                            self.relationships.push(restored);
+                        }
+                    }
                 }
             }
             Ok(())
@@ -1742,6 +2033,182 @@ mod tests {
         committed(workspace.delete_note_outcome(&temporary_id));
     }
 
+    /// The display meanings a Note carries, in the order the interface reports.
+    fn label_names(note: &Note) -> Vec<String> {
+        note.labels.iter().map(|label| label.name.clone()).collect()
+    }
+
+    /// The distinct Labels a Workspace holds with one display meaning, read
+    /// through the Notes that carry them.
+    fn labels_meaning(snapshot: &WorkspaceSnapshot, workspace_id: &str, meaning: &str) -> Vec<String> {
+        let mut ids: Vec<String> = snapshot
+            .notes
+            .iter()
+            .filter(|note| note.workspace_id == workspace_id)
+            .flat_map(|note| note.labels.iter())
+            .filter(|label| label.name.to_lowercase() == meaning)
+            .map(|label| label.id.clone())
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
+    /// Moving and copying a Note between two Thinking Workspaces, at the
+    /// interface: identity, authored fields, Label remapping, the Relationship
+    /// seam, refusals, and the two undo rules.
+    fn note_transfer_conformance(workspace: &mut impl ThinkingWorkspaceInterface) {
+        let note_id_of = |snapshot: &WorkspaceSnapshot, markdown: &str| {
+            snapshot
+                .notes
+                .iter()
+                .find(|note| note.markdown == markdown)
+                .expect("the Note is committed")
+                .id
+                .clone()
+        };
+        let source = workspace_id_named(
+            &committed(workspace.create_workspace_outcome("Transfer source")),
+            "Transfer source",
+        );
+        let target = workspace_id_named(
+            &committed(workspace.create_workspace_outcome("Transfer target")),
+            "Transfer target",
+        );
+        committed(workspace.select_workspace_outcome(&source));
+        let travelling = note_id_of(
+            &committed(workspace.create_note_outcome(&source, "A thought that travels")),
+            "A thought that travels",
+        );
+        let companion = note_id_of(
+            &committed(workspace.create_note_outcome(&source, "It stays behind")),
+            "It stays behind",
+        );
+        let resident = note_id_of(
+            &committed(workspace.create_note_outcome(&target, "Already in the target")),
+            "Already in the target",
+        );
+        committed(workspace.set_note_type_outcome(&travelling, "thesis"));
+        committed(workspace.set_note_annotation_outcome(&travelling, "Why it matters"));
+        committed(workspace.set_note_pinned_outcome(&travelling, true));
+        committed(workspace.attach_label_outcome(&travelling, "Rivers"));
+        committed(workspace.attach_label_outcome(&travelling, "Trade"));
+        // The target already knows one of those meanings, spelled its own way.
+        committed(workspace.attach_label_outcome(&resident, "RIVERS"));
+        committed(workspace.relate_notes_outcome(&travelling, &companion));
+        let target_rivers = note_in(&committed(workspace.snapshot_outcome()), &resident).labels[0]
+            .id
+            .clone();
+        let before = note_in(&committed(workspace.snapshot_outcome()), &travelling);
+        assert_eq!(label_names(&before), vec!["Rivers", "Trade"]);
+
+        // A move keeps identity and every authored field, and lands the Note in
+        // the target Workspace.
+        distinct_moment();
+        let moved = committed(workspace.move_note_outcome(&travelling, &target));
+        let after = note_in(&moved, &travelling);
+        assert_eq!(after.workspace_id, target);
+        assert_eq!(after.markdown, before.markdown);
+        assert_eq!(after.note_type, before.note_type);
+        assert_eq!(after.note_type_provenance, before.note_type_provenance);
+        assert_eq!(after.annotation, before.annotation);
+        assert_eq!(after.annotation_provenance, before.annotation_provenance);
+        assert_eq!(after.pinned, before.pinned);
+        assert_eq!(after.created_at, before.created_at);
+        assert_eq!(after.updated_at, before.updated_at);
+
+        // Its Label meanings arrive as the target's own Labels. A meaning the
+        // target already knows keeps the target's spelling instead of being
+        // duplicated as a second Label; a meaning it did not know is created.
+        assert_eq!(label_names(&after), vec!["RIVERS", "Trade"]);
+        assert!(after.labels.iter().all(|label| label.workspace_id == target));
+        assert_eq!(labels_meaning(&moved, &target, "rivers"), vec![target_rivers.clone()]);
+        assert_eq!(labels_meaning(&moved, &target, "trade").len(), 1);
+
+        // No Relationship crosses the seam, in either direction.
+        assert!(related_ids(&moved, &travelling).is_empty());
+        assert!(related_ids(&moved, &companion).is_empty());
+        assert!(no_dangling_endpoints(&moved));
+
+        // Every refusal leaves both Thinking Workspaces exactly as they were.
+        let unchanged = committed(workspace.snapshot_outcome());
+        assert!(is_validation_failure(
+            &workspace.move_note_outcome(&travelling, &target)
+        ));
+        assert!(is_validation_failure(
+            &workspace.copy_note_outcome(&travelling, &target)
+        ));
+        assert!(is_not_found_failure(
+            &workspace.move_note_outcome(&travelling, "missing")
+        ));
+        assert!(is_not_found_failure(
+            &workspace.copy_note_outcome("missing", &source)
+        ));
+        assert_eq!(committed(workspace.snapshot_outcome()), unchanged);
+
+        // Undoing the move returns the Note, its Labels, and the Relationship
+        // whose endpoints are both still in the Workspace it came from.
+        let undone = committed(workspace.undo_outcome(&source));
+        assert_eq!(note_in(&undone, &travelling), before);
+        assert_eq!(related_ids(&undone, &travelling), vec![companion.clone()]);
+        assert!(no_dangling_endpoints(&undone));
+
+        // A copy leaves the original where it is and takes a fresh identity.
+        distinct_moment();
+        let copied = committed(workspace.copy_note_outcome(&travelling, &target));
+        let copy = copied
+            .notes
+            .iter()
+            .find(|note| note.workspace_id == target && note.markdown == before.markdown)
+            .expect("the copy is committed")
+            .clone();
+        assert_ne!(copy.id, travelling);
+        assert_eq!(note_in(&copied, &travelling), before);
+        assert_eq!(copy.note_type, before.note_type);
+        assert_eq!(copy.note_type_provenance, before.note_type_provenance);
+        assert_eq!(copy.annotation, before.annotation);
+        assert_eq!(copy.annotation_provenance, before.annotation_provenance);
+        assert_eq!(copy.pinned, before.pinned);
+        assert_ne!(copy.created_at, before.created_at);
+        assert_eq!(label_names(&copy), vec!["RIVERS", "Trade"]);
+        assert!(copy.labels.iter().all(|label| label.workspace_id == target));
+        assert_eq!(labels_meaning(&copied, &target, "rivers"), vec![target_rivers]);
+
+        // The copy inherits no Relationship, and the original keeps its own.
+        assert!(related_ids(&copied, &copy.id).is_empty());
+        assert_eq!(related_ids(&copied, &travelling), vec![companion.clone()]);
+        assert!(no_dangling_endpoints(&copied));
+
+        // Undoing a copy deletes only the copy.
+        let after_undo = committed(workspace.undo_outcome(&source));
+        assert!(!after_undo.notes.iter().any(|note| note.id == copy.id));
+        assert_eq!(note_in(&after_undo, &travelling), before);
+        assert!(after_undo.notes.iter().any(|note| note.id == resident));
+        assert_eq!(related_ids(&after_undo, &travelling), vec![companion]);
+        assert!(no_dangling_endpoints(&after_undo));
+
+        // Every copy takes its own fresh identity, so copying the same Note
+        // twice is two Notes rather than a collision with it or with each other.
+        let copies_in_target = |snapshot: &WorkspaceSnapshot| -> Vec<String> {
+            snapshot
+                .notes
+                .iter()
+                .filter(|note| note.workspace_id == target && note.markdown == before.markdown)
+                .map(|note| note.id.clone())
+                .collect()
+        };
+        committed(workspace.copy_note_outcome(&travelling, &target));
+        let twice = committed(workspace.copy_note_outcome(&travelling, &target));
+        let copies = copies_in_target(&twice);
+        assert_eq!(copies.len(), 2);
+        assert_ne!(copies[0], copies[1]);
+        assert!(!copies.contains(&travelling));
+        committed(workspace.undo_outcome(&source));
+        let emptied = committed(workspace.undo_outcome(&source));
+        assert!(copies_in_target(&emptied).is_empty());
+        assert_eq!(note_in(&emptied, &travelling), before);
+    }
+
     fn conformance(mut workspace: impl ThinkingWorkspaceInterface) {
         let initial = committed(workspace.snapshot_outcome());
         assert_eq!(initial.workspaces.len(), 1);
@@ -1928,6 +2395,8 @@ mod tests {
         assert_eq!(last.active_workspace_id, last.workspaces[0].id);
         assert!(last.notes.is_empty());
         assert!(last.relationships.is_empty());
+
+        note_transfer_conformance(&mut workspace);
     }
 
     fn temporary_path() -> std::path::PathBuf {
@@ -2119,6 +2588,152 @@ mod tests {
         let unchanged = store.snapshot().unwrap();
         assert!(unchanged.relationships.is_empty());
         assert!(related_ids(&unchanged, &first).is_empty());
+        remove_database(&path);
+    }
+
+    /// Commits a Note carrying a Label and a Relationship in the active
+    /// Workspace, plus a second Workspace to transfer it into. Returns the
+    /// source Workspace, the target Workspace, the Note, and its companion.
+    fn ready_to_transfer(store: &mut WorkspaceStore) -> (String, String, String, String) {
+        let (source, travelling, companion) = two_notes(store);
+        store.attach_label(&travelling, "Rivers").unwrap();
+        store.relate_notes(&travelling, &companion).unwrap();
+        let target = store
+            .create_workspace("Transfer target")
+            .unwrap()
+            .active_workspace_id;
+        store.select_workspace(&source).unwrap();
+        (source, target, travelling, companion)
+    }
+
+    #[test]
+    fn a_moved_and_a_copied_note_survive_reopen_with_their_labels_and_no_relationships() {
+        let path = temporary_path();
+        let (source, target, travelling, companion, copy_id, created_at) = {
+            let mut store = WorkspaceStore::open(&path).unwrap();
+            let (source, target, travelling, companion) = ready_to_transfer(&mut store);
+            let created_at = store.note(&travelling).unwrap().created_at;
+            store.move_note(&travelling, &target).unwrap();
+            let copied = store.copy_note(&companion, &target).unwrap();
+            let copy_id = copied
+                .notes
+                .iter()
+                .find(|note| note.workspace_id == target && note.markdown == "The other end")
+                .expect("the copy is committed")
+                .id
+                .clone();
+            (source, target, travelling, companion, copy_id, created_at)
+        };
+
+        let reopened = WorkspaceStore::open(&path).unwrap();
+        let snapshot = reopened.snapshot().unwrap();
+        // The moved Note kept its identity and creation time in the target.
+        let moved = note_in(&snapshot, &travelling);
+        assert_eq!(moved.workspace_id, target);
+        assert_eq!(moved.created_at, created_at);
+        assert_eq!(label_names(&moved), vec!["Rivers"]);
+        assert_eq!(moved.labels[0].workspace_id, target);
+        // The copy is a second Note, and the Note it came from stayed put.
+        assert_eq!(note_in(&snapshot, &copy_id).workspace_id, target);
+        assert_eq!(note_in(&snapshot, &companion).workspace_id, source);
+        // Neither transfer carried a Relationship across the seam.
+        assert!(snapshot.relationships.is_empty());
+        assert!(no_dangling_endpoints(&snapshot));
+        // The target's search projection knows both arrivals; the source's does
+        // not still hold the Note that left it.
+        assert_eq!(reopened.search_notes(&target, "rivers").unwrap().len(), 1);
+        assert_eq!(reopened.search_notes(&target, "other end").unwrap().len(), 1);
+        assert!(reopened.search_notes(&source, "rivers").unwrap().is_empty());
+        remove_database(&path);
+    }
+
+    #[test]
+    fn a_failed_move_or_copy_leaves_both_thinking_workspaces_unchanged() {
+        let path = temporary_path();
+        let mut store = WorkspaceStore::open(&path).unwrap();
+        let (_, target, travelling, companion) = ready_to_transfer(&mut store);
+        let before = store.snapshot().unwrap();
+
+        // The Label remap is part of the same transaction as the Note row, so
+        // rejecting it must roll the whole move back.
+        store.connection.execute_batch("CREATE TRIGGER reject_labels BEFORE INSERT ON note_labels BEGIN SELECT RAISE(FAIL, 'injected'); END;").unwrap();
+        assert!(matches!(
+            store.move_note_outcome(&travelling, &target),
+            WorkspaceCommandResult::Failed {
+                failure: WorkspaceFailure {
+                    code: WorkspaceFailureCode::Storage,
+                    ..
+                }
+            }
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+        store
+            .connection
+            .execute_batch("DROP TRIGGER reject_labels;")
+            .unwrap();
+
+        store.connection.execute_batch("CREATE TRIGGER reject_relocation BEFORE UPDATE ON notes BEGIN SELECT RAISE(FAIL, 'injected'); END;").unwrap();
+        assert!(matches!(
+            store.move_note_outcome(&travelling, &target),
+            WorkspaceCommandResult::Failed { .. }
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+        store
+            .connection
+            .execute_batch("DROP TRIGGER reject_relocation;")
+            .unwrap();
+
+        store.connection.execute_batch("CREATE TRIGGER reject_copies BEFORE INSERT ON notes BEGIN SELECT RAISE(FAIL, 'injected'); END;").unwrap();
+        assert!(matches!(
+            store.copy_note_outcome(&travelling, &target),
+            WorkspaceCommandResult::Failed { .. }
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+        store
+            .connection
+            .execute_batch("DROP TRIGGER reject_copies;")
+            .unwrap();
+
+        // A rejected transfer left the reversible history alone too, so the
+        // next undo is still the Relationship-free state before either attempt.
+        let moved = committed(store.move_note_outcome(&travelling, &target));
+        assert_eq!(note_in(&moved, &travelling).workspace_id, target);
+        assert_eq!(store.undo(&before.active_workspace_id).unwrap(), before);
+        assert_eq!(related_ids(&store.snapshot().unwrap(), &companion), vec![travelling]);
+        drop(store);
+        remove_database(&path);
+    }
+
+    #[test]
+    fn an_undone_move_restores_only_relationships_whose_endpoints_are_still_there() {
+        let path = temporary_path();
+        let mut store = WorkspaceStore::open(&path).unwrap();
+        let (source, target, travelling, companion) = ready_to_transfer(&mut store);
+        // A second Relationship, so one endpoint can vanish while another stays.
+        let other = store
+            .create_note(&source, "A third end")
+            .unwrap()
+            .notes
+            .iter()
+            .find(|note| note.markdown == "A third end")
+            .expect("the Note is committed")
+            .id
+            .clone();
+        store.relate_notes(&travelling, &other).unwrap();
+
+        store.move_note(&travelling, &target).unwrap();
+        // While the Note is away, one of the endpoints it left behind is gone.
+        // The delete goes straight to the adapter so it records no reversible
+        // command of its own, leaving the move as the next thing to undo.
+        store
+            .apply_note_mutation(&NoteMutation::Delete { note_id: other })
+            .unwrap();
+
+        let undone = store.undo(&source).unwrap();
+        assert_eq!(note_in(&undone, &travelling).workspace_id, source);
+        assert_eq!(related_ids(&undone, &travelling), vec![companion]);
+        assert!(no_dangling_endpoints(&undone));
+        drop(store);
         remove_database(&path);
     }
 

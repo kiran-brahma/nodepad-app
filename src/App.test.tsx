@@ -17,6 +17,8 @@ import type {
  * here the fake only has to commit and report the same shapes.
  */
 const workspaceId = "workspace-1"
+/** A second Thinking Workspace, so a Note has somewhere to move or copy to. */
+const otherWorkspaceId = "workspace-2"
 let snapshot: WorkspaceSnapshot
 let history: WorkspaceSnapshot[]
 let created = 0
@@ -155,6 +157,38 @@ vi.mock("@tauri-apps/api/core", () => ({
         }
         return Promise.resolve(committed())
       }
+      case "move_note": {
+        // A move keeps identity and leaves every Relationship behind, because
+        // a Relationship never crosses a Thinking Workspace.
+        const moved = mutate((notes) =>
+          notes.map((note) =>
+            note.id === args.noteId
+              ? { ...note, workspaceId: String(args.targetWorkspaceId) }
+              : note,
+          ),
+        )
+        snapshot = {
+          ...snapshot,
+          relationships: snapshot.relationships.filter(
+            (relationship) =>
+              relationship.noteIdA !== args.noteId && relationship.noteIdB !== args.noteId,
+          ),
+        }
+        void moved
+        return Promise.resolve(committed())
+      }
+      case "copy_note": {
+        created += 1
+        const source = snapshot.notes.find((note) => note.id === args.noteId)!
+        const copy: Note = {
+          ...source,
+          id: `note-${created}`,
+          workspaceId: String(args.targetWorkspaceId),
+          createdAt: `2026-07-22T10:0${created}:00+00:00`,
+          updatedAt: `2026-07-22T10:0${created}:00+00:00`,
+        }
+        return Promise.resolve(mutate((notes) => [...notes, copy]))
+      }
       case "search_notes": {
         const query = String(args.query).toLowerCase()
         return Promise.resolve({ status: "committed", results: snapshot.notes.filter((note) => `${note.markdown} ${note.annotation ?? ""} ${note.labels.map((label) => label.name).join(" ")}`.toLowerCase().includes(query)).map((note) => ({ noteId: note.id, snippet: note.markdown, noteType: note.noteType, labels: note.labels, rank: 0 })) })
@@ -188,6 +222,12 @@ beforeEach(() => {
         name: "Research",
         createdAt: "2026-07-22T09:00:00+00:00",
         updatedAt: "2026-07-22T09:00:00+00:00",
+      },
+      {
+        id: otherWorkspaceId,
+        name: "Reading",
+        createdAt: "2026-07-22T09:01:00+00:00",
+        updatedAt: "2026-07-22T09:01:00+00:00",
       },
     ],
     notes: [],
@@ -335,6 +375,69 @@ describe("manual Note controls", () => {
     await user.type(screen.getByLabelText("Search this Thinking Workspace"), "Rêverie")
     await user.click(screen.getByRole("button", { name: "Search" }))
     expect(within(screen.getByLabelText("Search Notes")).getByText("A thought to recover")).toBeDefined()
+  })
+})
+
+describe("moving and copying a Note between Thinking Workspaces", () => {
+  it("moves a Note out of this Workspace and restores it with undo", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await captureNote(user, "A thought that travels")
+
+    await user.click(screen.getByRole("button", { name: "Move or Copy Note" }))
+    // The destination is named, and the two outcomes are told apart in words.
+    const chooser = screen.getByLabelText("Thinking Workspace to move or copy into")
+    expect((chooser as HTMLSelectElement).value).toBe(otherWorkspaceId)
+    expect(screen.getByText(/Move .* to Reading/)).toBeDefined()
+    expect(screen.getByText(/loses its Relationships/)).toBeDefined()
+    expect(screen.getByText(/This Note stays here/)).toBeDefined()
+
+    await user.click(screen.getByRole("button", { name: "Move Note" }))
+    await waitFor(() => expect(screen.queryByText("A thought that travels")).toBeNull())
+
+    await user.keyboard("{Meta>}z{/Meta}")
+    expect(await screen.findByText("A thought that travels")).toBeDefined()
+  })
+
+  it("copies a Note while the original stays in this Workspace", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await captureNote(user, "A thought worth repeating")
+
+    await user.click(screen.getByRole("button", { name: "Move or Copy Note" }))
+    await user.click(screen.getByRole("button", { name: "Copy Note" }))
+
+    // The copy lives in the other Workspace, so this one still shows one Note.
+    await waitFor(() => expect(noteCards()).toHaveLength(1))
+    expect(screen.getByText("A thought worth repeating")).toBeDefined()
+    expect(screen.queryByLabelText("Thinking Workspace to move or copy into")).toBeNull()
+  })
+
+  it("drops the Relationships a moved Note had", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await captureNote(user, "Cities grew around rivers")
+    await captureNote(user, "Trade follows water")
+    await user.click(within(noteCards()[0]).getByRole("button", { name: "Relate Note" }))
+    await user.click(within(noteCards()[0]).getByRole("button", { name: "Trade follows water" }))
+    await waitFor(() => expect(within(noteCards()[0]).getByText("1 related")).toBeDefined())
+
+    await user.click(within(noteCards()[1]).getByRole("button", { name: "Move or Copy Note" }))
+    await user.click(within(noteCards()[1]).getByRole("button", { name: "Move Note" }))
+
+    await waitFor(() => expect(noteCards()).toHaveLength(1))
+    expect(within(noteCards()[0]).queryByText("1 related")).toBeNull()
+  })
+
+  it("offers no destination when this is the only Thinking Workspace", async () => {
+    snapshot = { ...snapshot, workspaces: [snapshot.workspaces[0]] }
+    const user = userEvent.setup()
+    render(<App />)
+    await captureNote(user, "Nowhere to go")
+
+    expect(
+      screen.getByRole("button", { name: "Move or Copy Note" }).getAttribute("disabled"),
+    ).not.toBeNull()
   })
 })
 

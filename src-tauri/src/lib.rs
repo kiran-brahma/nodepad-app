@@ -117,6 +117,28 @@ fn delete_note(note_id: String, state: State<'_, AppState>) -> WorkspaceCommandR
     state.dispatch(|store| store.delete_note_outcome(&note_id))
 }
 
+/// Moves a Note into another Thinking Workspace, keeping its identity and
+/// authored fields, remapping its Labels, and removing every Relationship.
+#[tauri::command]
+fn move_note(
+    note_id: String,
+    target_workspace_id: String,
+    state: State<'_, AppState>,
+) -> WorkspaceCommandResult {
+    state.dispatch(|store| store.move_note_outcome(&note_id, &target_workspace_id))
+}
+
+/// Copies a Note into another Thinking Workspace under a fresh identity, with
+/// no Relationship.
+#[tauri::command]
+fn copy_note(
+    note_id: String,
+    target_workspace_id: String,
+    state: State<'_, AppState>,
+) -> WorkspaceCommandResult {
+    state.dispatch(|store| store.copy_note_outcome(&note_id, &target_workspace_id))
+}
+
 #[tauri::command]
 fn attach_label(note_id: String, name: String, state: State<'_, AppState>) -> WorkspaceCommandResult {
     state.dispatch(|store| store.attach_label_outcome(&note_id, &name))
@@ -230,6 +252,8 @@ pub fn run() {
             set_note_annotation,
             set_note_pinned,
             delete_note,
+            move_note,
+            copy_note,
             attach_label,
             detach_label,
             rename_label,

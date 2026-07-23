@@ -26,6 +26,8 @@ select { border: 1px solid #bcae9d; border-radius: 6px; font: inherit; padding: 
 /* Where the thinker navigated to. Transient, so it survives no reload. */
 .note.focused { box-shadow: 0 0 0 2px #8f3d27; outline: none; }
 .relate { display: grid; gap: .4rem; }
+.transfer { display: grid; gap: .4rem; }
+.transfer p { margin: 0; }
 .badge { background: #f1e8dc; border-radius: 999px; font: 600 .7rem/1 system-ui, sans-serif; letter-spacing: .08em; padding: .35rem .6rem; text-transform: uppercase; }
 .markdown > :first-child { margin-top: 0; }
 .markdown > :last-child { margin-bottom: 0; }
