@@ -1,4 +1,5 @@
 mod archive;
+mod backup;
 mod cloud;
 mod enrichment;
 mod markdown_export;
@@ -10,6 +11,7 @@ mod url_metadata;
 mod workspace;
 
 use cloud::{CloudOllamaProvider, CloudTagsClient, HttpCloudTagsClient, OLLAMA_CLOUD_BASE_URL};
+use std::path::PathBuf;
 use enrichment::{
     EnrichmentClient, EnrichmentFailureCode, EnrichmentOutcome, EnrichmentRequest,
     HttpEnrichmentClient, ParsedEnrichmentResult, RequestToken,
@@ -27,15 +29,20 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use url_metadata::{HttpUrlMetadataClient, UrlMetadataClient};
 use workspace::{
-    unavailable_search_outcome, AssistancePolicy, StorageOpenFailure, StorageOpenFailureCategory,
-    ThinkingWorkspaceInterface, WorkspaceCommandResult, WorkspaceFailureCode,
-    WorkspaceSearchOutcome, WorkspaceSnapshot, WorkspaceStore,
+    unavailable_search_outcome, AssistancePolicy, OpenBackupContext, StorageOpenFailure,
+    StorageOpenFailureCategory, ThinkingWorkspaceInterface, WorkspaceCommandResult,
+    WorkspaceFailureCode, WorkspaceSearchOutcome, WorkspaceSnapshot, WorkspaceStore,
 };
 
 /// Storage may be unavailable at startup; the app stays running so the thinker
 /// can retry or quit without the database ever being reset.
 struct AppState {
     storage: Mutex<Result<WorkspaceStore, StorageOpenFailure>>,
+    /// Where backups live: a `backups` subdirectory of the macOS
+    /// application-data area. Kept on `AppState` so the automatic-backup
+    /// check after a commit does not re-resolve the app-data folder each time.
+    backups_dir: PathBuf,
+    app_version: &'static str,
     provider: OllamaProvider,
     cloud: CloudOllamaProvider,
     keychain: Arc<dyn KeychainAdapter>,
@@ -52,17 +59,30 @@ impl AppState {
         &self,
         intent: impl FnOnce(&mut WorkspaceStore) -> WorkspaceCommandResult,
     ) -> WorkspaceCommandResult {
-        match self
+        let mut storage = self
             .storage
             .lock()
-            .expect("workspace lock poisoned")
-            .as_mut()
-        {
+            .expect("workspace lock poisoned");
+        let result = match storage.as_mut() {
             Ok(store) => intent(store),
             Err(failure) => WorkspaceCommandResult::Unavailable {
                 failure: failure.clone(),
             },
+        };
+        // A committed change is the moment durable data may have moved, so the
+        // automatic-backup check runs here. The per-day gate makes the common
+        // case a single preference read; only the first change of a local
+        // calendar day pays for the backup bytes.
+        if matches!(result, WorkspaceCommandResult::Committed { .. }) {
+            if let Ok(store) = storage.as_mut() {
+                let _ = store.maybe_automatic_backup(
+                    &self.backups_dir,
+                    &now_rfc3339(),
+                    self.app_version,
+                );
+            }
         }
+        result
     }
 
     fn dispatch_search(
@@ -1303,10 +1323,155 @@ fn quit_application(app: AppHandle) {
     app.exit(0);
 }
 
+/// Why a restore attempt did not replace current data. Each code is a typed
+/// recovery state the UI renders without inspecting the message.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum RestoreFailureCode {
+    NotFound,
+    ChecksumMismatch,
+    Corrupt,
+    UnsupportedSchema,
+    PreRestoreFailed,
+    ReplacementFailed,
+    ReopenFailed,
+    Unavailable,
+}
+
+/// The result of restoring one backup. A restored database carries the new
+/// committed snapshot; a failure never replaced current data and reports the
+/// typed reason so the recovery screen can name it.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum RestoreOutcome {
+    Restored { snapshot: WorkspaceSnapshot },
+    Failed { code: RestoreFailureCode, message: String },
+}
+
+fn restore_failure_code(error: &backup::BackupError) -> RestoreFailureCode {
+    match error {
+        backup::BackupError::Missing => RestoreFailureCode::NotFound,
+        backup::BackupError::ChecksumMismatch => RestoreFailureCode::ChecksumMismatch,
+        backup::BackupError::Corrupt => RestoreFailureCode::Corrupt,
+        backup::BackupError::UnsupportedSchema => RestoreFailureCode::UnsupportedSchema,
+        _ => RestoreFailureCode::Corrupt,
+    }
+}
+
+/// The valid local backups in the application-data folder, newest first. Works
+/// even when storage would not open: backups are separate files, so a thinker
+/// whose database failed to migrate can still reach a known-good restore.
+#[tauri::command]
+fn list_backups(app: AppHandle) -> Vec<backup::BackupManifest> {
+    let Ok(data_dir) = locate_data_dir(&app) else {
+        return Vec::new();
+    };
+    backup::list_valid_backups(&backup::backups_dir(&data_dir))
+}
+
+/// Restores one backup after explicit confirmation from the UI. The selected
+/// backup is re-validated, a pre-restore backup of the current database is made,
+/// the live connection is closed, the files are swapped atomically, and the
+/// durable store is reopened. Any failure preserves the current database and
+/// reports a typed recovery state; an invalid backup never replaces data.
+#[tauri::command]
+fn restore_backup(
+    backup_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> RestoreOutcome {
+    let data_dir = match locate_data_dir(&app) {
+        Ok(data_dir) => data_dir,
+        Err(failure) => {
+            return RestoreOutcome::Failed {
+                code: RestoreFailureCode::Unavailable,
+                message: failure.message,
+            }
+        }
+    };
+    let backups_dir = backup::backups_dir(&data_dir);
+    let db_path = data_dir.join("nodepad.sqlite");
+    let now = now_rfc3339();
+    let app_version = env!("CARGO_PKG_VERSION");
+
+    let manifest = match backup::read_manifests(&backups_dir)
+        .into_iter()
+        .find(|manifest| manifest.id == backup_id)
+    {
+        Some(manifest) => manifest,
+        None => {
+            return RestoreOutcome::Failed {
+                code: RestoreFailureCode::NotFound,
+                message: "That backup no longer exists.".to_owned(),
+            }
+        }
+    };
+    if let Err(error) = backup::validate_backup(&backups_dir, &manifest) {
+        return RestoreOutcome::Failed {
+            code: restore_failure_code(&error),
+            message: error.to_string(),
+        };
+    }
+
+    let mut storage = state.storage.lock().expect("workspace lock poisoned");
+    // A recoverable pre-restore backup of the current database, made while the
+    // live connection is still open. A failure here aborts before any durable
+    // file is touched.
+    if let Ok(store) = storage.as_ref() {
+        match store.create_backup(&backups_dir, backup::BackupKind::PreRestore, &now, app_version) {
+            Ok(pre_restore) => {
+                let _ = backup::validate_backup(&backups_dir, &pre_restore);
+                let _ = backup::retain(&backups_dir, backup::BackupKind::PreRestore);
+            }
+            Err(error) => {
+                return RestoreOutcome::Failed {
+                    code: RestoreFailureCode::PreRestoreFailed,
+                    message: error.to_string(),
+                }
+            }
+        }
+    }
+    // Close the live connection by dropping the store. The sentinel is
+    // immediately replaced by the reopen below and never reaches the UI.
+    *storage = Err(StorageOpenFailure::new(
+        StorageOpenFailureCategory::Initialization,
+        "Restore in progress.".to_owned(),
+    ));
+
+    if let Err(error) = backup::replace_database(&backups_dir, &manifest, &db_path) {
+        // `replace_database` rolled the live file back, so reopen it and keep
+        // running. The current database is preserved.
+        *storage = open_storage(&app);
+        return RestoreOutcome::Failed {
+            code: RestoreFailureCode::ReplacementFailed,
+            message: error.to_string(),
+        };
+    }
+    // Reload durable state. The restored backup may carry an older schema;
+    // the backup-aware open migrates it forward behind its own pre-migration
+    // backup, so the thinker never loses data to a schema gap.
+    match open_storage(&app) {
+        Ok(store) => {
+            let snapshot = store
+                .snapshot()
+                .unwrap_or_else(|_| WorkspaceSnapshot::default_unavailable());
+            *storage = Ok(store);
+            RestoreOutcome::Restored { snapshot }
+        }
+        Err(failure) => {
+            *storage = Err(failure.clone());
+            RestoreOutcome::Failed {
+                code: RestoreFailureCode::ReopenFailed,
+                message: failure.message,
+            }
+        }
+    }
+}
+
 /// Locating and creating the data folder can fail too. Those failures become
 /// recovery states rather than aborting startup, so the thinker always reaches
 /// a screen that explains the problem instead of a window that never opens.
-fn open_storage(app: &AppHandle) -> Result<WorkspaceStore, StorageOpenFailure> {
+fn locate_data_dir(app: &AppHandle) -> Result<PathBuf, StorageOpenFailure> {
     let data_dir = app.path().app_data_dir().map_err(|error| {
         StorageOpenFailure::new(
             StorageOpenFailureCategory::Initialization,
@@ -1319,7 +1484,31 @@ fn open_storage(app: &AppHandle) -> Result<WorkspaceStore, StorageOpenFailure> {
             format!("Nodepad could not reach its local data folder: {error}"),
         )
     })?;
-    WorkspaceStore::open(data_dir.join("nodepad.sqlite"))
+    Ok(data_dir)
+}
+
+/// Opens the durable database, guarding any pending migration with a verified
+/// pre-migration backup and then running the once-per-day automatic backup.
+/// A failure never resets, deletes, or overwrites an existing database.
+fn open_storage(app: &AppHandle) -> Result<WorkspaceStore, StorageOpenFailure> {
+    let data_dir = locate_data_dir(app)?;
+    let db_path = data_dir.join("nodepad.sqlite");
+    let backups_dir = backup::backups_dir(&data_dir);
+    let now = now_rfc3339();
+    let app_version = env!("CARGO_PKG_VERSION");
+    let store = WorkspaceStore::open_with_backup(
+        &db_path,
+        OpenBackupContext {
+            backups_dir: &backups_dir,
+            now: &now,
+            app_version,
+        },
+    )?;
+    // A migration that just ran changed the schema; a session that changed
+    // data since the last launch changed the fingerprint. Either way, this is
+    // the moment to make sure coverage is current.
+    let _ = store.maybe_automatic_backup(&backups_dir, &now, app_version);
+    Ok(store)
 }
 
 pub fn run() {
@@ -1343,8 +1532,17 @@ pub fn run() {
             let local_enrichment = HttpEnrichmentClient::new(http_client.clone(), None);
             let cloud_enrichment = HttpEnrichmentClient::new(http_client, None);
             let url_metadata = HttpUrlMetadataClient::new();
+            // The backups folder mirrors the durable store's app-data folder.
+            // If the folder cannot be located, storage itself is unavailable and
+            // the recovery screen renders; list_backups then returns empty.
+            let backups_dir = match locate_data_dir(app.handle()) {
+                Ok(data_dir) => backup::backups_dir(&data_dir),
+                Err(_) => PathBuf::new(),
+            };
             app.manage(AppState {
                 storage: Mutex::new(storage),
+                backups_dir,
+                app_version: env!("CARGO_PKG_VERSION"),
                 provider,
                 cloud,
                 keychain,
@@ -1389,6 +1587,8 @@ pub fn run() {
             delete_cloud_api_key,
             retry_storage_open,
             quit_application,
+            list_backups,
+            restore_backup,
             enrich_note,
             propose_synthesis,
             accept_synthesis,

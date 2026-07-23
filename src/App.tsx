@@ -30,7 +30,7 @@ import { SynthesisSection } from "./synthesis-section"
 import { useCloudDiscovery } from "./use-cloud-discovery"
 
 export function App() {
-  const { snapshot, openFailure, failure, submit, adoptSnapshot, reportFailure, dismissFailure } =
+  const { snapshot, openFailure, failure, submit, adoptSnapshot, recoverWithSnapshot, reportFailure, dismissFailure } =
     useWorkspaceSnapshot()
   const drafts = useNoteDrafts()
   const [workspaceName, setWorkspaceName] = useState("")
@@ -271,6 +271,9 @@ export function App() {
         failure={openFailure}
         onRetry={() => void submit(thinkingWorkspace.retryStorageOpen())}
         onQuit={() => void thinkingWorkspace.quitApplication()}
+        onRestored={(snapshot) => {
+          recoverWithSnapshot(snapshot)
+        }}
       />
     )
   }

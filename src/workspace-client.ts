@@ -158,6 +158,41 @@ export type StorageOpenFailure = {
   message: string
 }
 
+/** Why a Thinking Workspace's durable data was backed up. Automatic backups
+ *  run at most once per local calendar day after data changed; pre-migration
+ *  and pre-restore backups are explicit and kept separately. */
+export type BackupKind = "automatic" | "pre_migration" | "pre_restore"
+
+/** One valid local backup in the macOS application-data folder. The recovery
+ *  screen lists these; restore re-validates checksum, integrity, and schema
+ *  before replacing current data. */
+export interface BackupRecord {
+  id: string
+  kind: BackupKind
+  schemaVersion: number
+  createdAt: string
+  appVersion: string
+  checksum: string
+}
+
+/** Why a restore did not replace current data. Each code is a typed recovery
+ *  state; the current database is preserved on every failure. */
+export type RestoreFailureCode =
+  | "not_found"
+  | "checksum_mismatch"
+  | "corrupt"
+  | "unsupported_schema"
+  | "pre_restore_failed"
+  | "replacement_failed"
+  | "reopen_failed"
+  | "unavailable"
+
+/** The result of restoring one backup after explicit confirmation. A restored
+ *  database carries the new committed snapshot. */
+export type RestoreOutcome =
+  | { status: "restored"; snapshot: WorkspaceSnapshot }
+  | { status: "failed"; code: RestoreFailureCode; message: string }
+
 export type WorkspaceOutcome =
   | { status: "committed"; snapshot: WorkspaceSnapshot }
   | { status: "failed"; failure: WorkspaceFailure }
@@ -304,5 +339,13 @@ export const thinkingWorkspace = {
   discoverCloudModels: (workspaceId: string) =>
     invoke<DiscoveryOutcome>("discover_cloud_models", { workspaceId }),
   retryStorageOpen: () => invoke<WorkspaceOutcome>("retry_storage_open"),
+  /** Lists the valid local backups, newest first. Available even when storage
+   *  would not open, so the recovery screen can offer a restore. */
+  listBackups: () => invoke<BackupRecord[]>("list_backups"),
+  /** Restores one backup after the UI confirms. Re-validates the backup, makes
+   *  a pre-restore backup of the current database, swaps the files, and
+   *  reopens durable state. An invalid backup never replaces data. */
+  restoreBackup: (backupId: string) =>
+    invoke<RestoreOutcome>("restore_backup", { backupId }),
   quitApplication: () => invoke<void>("quit_application"),
 }

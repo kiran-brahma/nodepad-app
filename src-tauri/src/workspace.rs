@@ -1,10 +1,11 @@
-use chrono::{SecondsFormat, Utc};
+use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::path::Path;
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::backup::{self, BackupError, BackupKind};
 use crate::thinking_graph::{
     canonical_pair, is_related, relatable_workspace_id, GraphViolation, Relationship,
     RelationshipProvenance,
@@ -1455,10 +1456,76 @@ impl WorkspaceStore {
         transaction.commit().map_err(WorkspaceError::Storage)?;
         self.snapshot()
     }
-    /// Opens durable storage. A failure never resets, deletes, or overwrites an
-    /// existing database; it reports the category so recovery can retry or quit.
+    /// Opens durable storage without backup guard. Used by tests and by any
+    /// path that does not need migration safety; the application starts through
+    /// [`open_with_backup`] instead. A failure never resets, deletes, or
+    /// overwrites an existing database; it reports the category so recovery
+    /// can retry or quit.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageOpenFailure> {
-        Self::open_prepared(path, migrate)
+        Self::open_prepared(path, migrate, None)
+    }
+
+    /// Opens durable storage and guards every pending migration with a verified
+    /// pre-migration backup. Used at application startup so a schema change never
+    /// advances the database past a backup that cannot be restored.
+    pub fn open_with_backup(
+        path: impl AsRef<Path>,
+        backup: OpenBackupContext<'_>,
+    ) -> Result<Self, StorageOpenFailure> {
+        Self::open_prepared(path, migrate, Some(backup))
+    }
+
+    /// Creates one backup of the open database. Delegates the SQLite-safe
+    /// semantics to the backup module; the store only lends its connection.
+    pub(crate) fn create_backup(
+        &self,
+        backups_dir: &Path,
+        kind: BackupKind,
+        now: &str,
+        app_version: &str,
+    ) -> Result<crate::backup::BackupManifest, BackupError> {
+        backup::create_backup(&self.connection, backups_dir, kind, now, app_version)
+    }
+
+    /// Runs the automatic-backup check: at most one automatic backup per
+    /// local calendar day, and only when durable data has changed since the
+    /// last backup of any kind. The fingerprint is a full-scan hash over every
+    /// user table, so any durable change is detected without instrumenting
+    /// every write site. The first change of a day is the only call that pays
+    /// for the backup bytes; the rest of the day short-circuits on the day gate.
+    pub(crate) fn maybe_automatic_backup(
+        &self,
+        backups_dir: &Path,
+        now: &str,
+        app_version: &str,
+    ) -> Result<(), BackupError> {
+        let today = day_of(now);
+        let state = backup::read_backup_state(backups_dir);
+        if state.last_automatic_day.as_deref() == Some(today.as_str()) {
+            return Ok(());
+        }
+        let fingerprint = backup::data_fingerprint(&self.connection)?;
+        if state.last_fingerprint.as_deref() == Some(fingerprint.as_str()) {
+            return Ok(());
+        }
+        backup::ensure_backups_dir(backups_dir)?;
+        backup::create_backup(
+            &self.connection,
+            backups_dir,
+            BackupKind::Automatic,
+            now,
+            app_version,
+        )?;
+        backup::write_backup_state(
+            backups_dir,
+            &backup::BackupState {
+                last_automatic_day: Some(today),
+                last_fingerprint: Some(fingerprint),
+            },
+        )?;
+        let _ = backup::retain(backups_dir, BackupKind::Automatic);
+        Ok(())
     }
 
     /// Opening is split from preparing the schema so a failing preparation can
@@ -1467,10 +1534,11 @@ impl WorkspaceStore {
     fn open_prepared(
         path: impl AsRef<Path>,
         prepare: fn(&mut Connection) -> Result<(), WorkspaceError>,
+        backup: Option<OpenBackupContext<'_>>,
     ) -> Result<Self, StorageOpenFailure> {
         let path = path.as_ref();
         let existed = path.exists();
-        let opened = Self::open_at(path, prepare);
+        let opened = Self::open_at(path, prepare, backup, existed);
         if opened.is_err() && !existed {
             discard_database_files(path);
         }
@@ -1480,6 +1548,8 @@ impl WorkspaceStore {
     fn open_at(
         path: &Path,
         prepare: fn(&mut Connection) -> Result<(), WorkspaceError>,
+        backup: Option<OpenBackupContext<'_>>,
+        existed: bool,
     ) -> Result<Self, StorageOpenFailure> {
         let mut connection = Connection::open(path).map_err(|error| {
             StorageOpenFailure::from_error(
@@ -1487,6 +1557,7 @@ impl WorkspaceStore {
                 WorkspaceError::Storage(error),
             )
         })?;
+        pre_migration_backup(&mut connection, backup, existed)?;
         prepare(&mut connection).map_err(|error| {
             StorageOpenFailure::from_error(StorageOpenFailureCategory::Migration, error)
         })?;
@@ -2724,27 +2795,7 @@ fn migrate(connection: &mut Connection) -> Result<(), WorkspaceError> {
     connection
         .execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")
         .map_err(WorkspaceError::Storage)?;
-    let migrations = [
-        (1_i64, include_str!("../migrations/0001_initial.sql")),
-        (2_i64, include_str!("../migrations/0002_preferences.sql")),
-        (3_i64, include_str!("../migrations/0003_note_controls.sql")),
-        (
-            4_i64,
-            include_str!("../migrations/0004_labels_and_search.sql"),
-        ),
-        (5_i64, include_str!("../migrations/0005_relationships.sql")),
-        (
-            6_i64,
-            include_str!("../migrations/0006_assistance_policy.sql"),
-        ),
-        (7_i64, include_str!("../migrations/0007_cloud_consent.sql")),
-        (
-            8_i64,
-            include_str!("../migrations/0008_note_enrichment.sql"),
-        ),
-        (9_i64, include_str!("../migrations/0009_synthesis.sql")),
-    ];
-    for (version, sql) in migrations {
+    for (version, sql) in migrations() {
         let transaction = connection.transaction().map_err(WorkspaceError::Storage)?;
         transaction.execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY NOT NULL, applied_at TEXT NOT NULL);").map_err(WorkspaceError::Storage)?;
         let applied: bool = transaction
@@ -2768,6 +2819,146 @@ fn migrate(connection: &mut Connection) -> Result<(), WorkspaceError> {
         transaction.commit().map_err(WorkspaceError::Storage)?;
     }
     Ok(())
+}
+
+/// The ordered, versioned schema migrations. Shared by [`migrate`] (which
+/// applies pending ones) and [`pending_migration_count`] (which decides whether
+/// a pre-migration backup is needed before opening). Every new migration file
+/// is added here and only here.
+fn migrations() -> &'static [(i64, &'static str)] {
+    &[
+        (1_i64, include_str!("../migrations/0001_initial.sql")),
+        (2_i64, include_str!("../migrations/0002_preferences.sql")),
+        (3_i64, include_str!("../migrations/0003_note_controls.sql")),
+        (
+            4_i64,
+            include_str!("../migrations/0004_labels_and_search.sql"),
+        ),
+        (5_i64, include_str!("../migrations/0005_relationships.sql")),
+        (
+            6_i64,
+            include_str!("../migrations/0006_assistance_policy.sql"),
+        ),
+        (7_i64, include_str!("../migrations/0007_cloud_consent.sql")),
+        (
+            8_i64,
+            include_str!("../migrations/0008_note_enrichment.sql"),
+        ),
+        (9_i64, include_str!("../migrations/0009_synthesis.sql")),
+    ]
+}
+
+/// How many of [`migrations`] have not yet been applied to this database. When
+/// `schema_migrations` does not exist yet (a database from before migration
+/// tracking, or one migration 1 has not run against), every migration is
+/// pending. A zero result means the open needs no pre-migration backup.
+fn pending_migration_count(connection: &Connection) -> Result<i64, WorkspaceError> {
+    let list = migrations();
+    let table_exists: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(WorkspaceError::Storage)?;
+    if !table_exists {
+        return Ok(list.len() as i64);
+    }
+    let mut applied = 0_i64;
+    for (version, _) in list {
+        let present: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",
+                [version],
+                |row| row.get(0),
+            )
+            .map_err(WorkspaceError::Storage)?;
+        if present {
+            applied += 1;
+        }
+    }
+    Ok(list.len() as i64 - applied)
+}
+
+/// The folder, clock, and version the open path needs to guard a migration
+/// with a pre-migration backup. Borrowed so the startup path can hand the
+/// application-data directory in without copying.
+pub struct OpenBackupContext<'a> {
+    pub backups_dir: &'a Path,
+    pub now: &'a str,
+    pub app_version: &'a str,
+}
+
+/// Creates a verified pre-migration backup of the existing database when a
+/// migration is pending. A backup that cannot be created or validated aborts
+/// the open with a migration-category failure, so the database is never
+/// advanced past a backup that cannot be restored.
+fn pre_migration_backup(
+    connection: &mut Connection,
+    backup: Option<OpenBackupContext<'_>>,
+    existed: bool,
+) -> Result<(), StorageOpenFailure> {
+    let Some(ctx) = backup else {
+        return Ok(());
+    };
+    // A pre-migration backup only makes sense when the database already held
+    // data before this open. A fresh database has nothing to back up and no
+    // migration to guard (its first migration is its creation).
+    if !existed {
+        return Ok(());
+    }
+    let pending = pending_migration_count(connection).map_err(|error| {
+        StorageOpenFailure::from_error(StorageOpenFailureCategory::Migration, error)
+    })?;
+    if pending == 0 {
+        return Ok(());
+    }
+    backup::ensure_backups_dir(ctx.backups_dir).map_err(|error| {
+        StorageOpenFailure::new(StorageOpenFailureCategory::Migration, error.to_string())
+    })?;
+    let manifest = backup::create_backup(
+        connection,
+        ctx.backups_dir,
+        BackupKind::PreMigration,
+        ctx.now,
+        ctx.app_version,
+    )
+    .map_err(|error| {
+        StorageOpenFailure::new(StorageOpenFailureCategory::Migration, error.to_string())
+    })?;
+    if let Err(error) = backup::validate_backup(ctx.backups_dir, &manifest) {
+        discard_backup(ctx.backups_dir, &manifest.id);
+        return Err(StorageOpenFailure::new(
+            StorageOpenFailureCategory::Migration,
+            error.to_string(),
+        ));
+    }
+    if let Err(error) = backup::retain(ctx.backups_dir, BackupKind::PreMigration) {
+        return Err(StorageOpenFailure::new(
+            StorageOpenFailureCategory::Migration,
+            error.to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Removes a backup and its manifest, used when a pre-migration backup fails
+/// validation so retention never promotes a corrupt file.
+fn discard_backup(dir: &Path, id: &str) {
+    let _ = std::fs::remove_file(dir.join(format!("{id}.sqlite")));
+    let _ = std::fs::remove_file(dir.join(format!("{id}.manifest.json")));
+}
+
+/// The local calendar day of an RFC3339 timestamp, as a fixed `YYYY-MM-DD`
+/// string. The timestamp is supplied (and UTC in production) so tests drive
+/// the clock deterministically; lexicographic equality of these strings is
+/// the per-day gate that keeps automatic backup to at most one per day.
+fn day_of(now: &str) -> String {
+    DateTime::parse_from_rfc3339(now)
+        .map(|moment| moment.date_naive())
+        .unwrap_or_else(|_| NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+        .format("%Y-%m-%d")
+        .to_string()
 }
 
 fn read_workspaces(connection: &Connection) -> Result<Vec<ThinkingWorkspace>, WorkspaceError> {
@@ -2807,10 +2998,28 @@ fn write_active_workspace_id(
     connection: &Connection,
     workspace_id: &str,
 ) -> Result<(), WorkspaceError> {
+    write_preference(connection, ACTIVE_WORKSPACE_PREFERENCE, workspace_id)
+}
+
+/// Reads one `app_preferences` row, or `None` when it has never been written.
+#[cfg_attr(not(test), allow(dead_code))]
+fn read_preference(connection: &Connection, key: &str) -> Result<Option<String>, WorkspaceError> {
+    connection
+        .query_row(
+            "SELECT value FROM app_preferences WHERE key = ?1",
+            [key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(WorkspaceError::Storage)
+}
+
+/// Writes one `app_preferences` row, replacing any existing value for the key.
+fn write_preference(connection: &Connection, key: &str, value: &str) -> Result<(), WorkspaceError> {
     connection
         .execute(
             "INSERT INTO app_preferences (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![ACTIVE_WORKSPACE_PREFERENCE, workspace_id],
+            params![key, value],
         )
         .map(|_| ())
         .map_err(WorkspaceError::Storage)
@@ -4988,7 +5197,7 @@ mod tests {
         assert!(!database_files_present(&path));
         let failure = WorkspaceStore::open_prepared(&path, |_| {
             Err(WorkspaceError::Storage(rusqlite::Error::InvalidQuery))
-        })
+        }, None)
         .unwrap_err();
         assert_eq!(failure.category, StorageOpenFailureCategory::Migration);
         // The stub SQLite created before preparation failed is gone, so the next
@@ -5035,6 +5244,202 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         drop(connection);
+        remove_database(&path);
+    }
+
+    fn automatic_count(dir: &std::path::Path) -> usize {
+        crate::backup::read_manifests(dir)
+            .into_iter()
+            .filter(|manifest| manifest.kind == crate::backup::BackupKind::Automatic)
+            .count()
+    }
+
+    fn backups_dir_for(test_id: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("nodepad-backups-{test_id}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_pending_migration_is_preceded_by_a_pre_migration_backup() {
+        let path = temporary_path();
+        let backups_dir = backups_dir_for(&id());
+        // Bring the database to the current schema.
+        {
+            WorkspaceStore::open(&path).unwrap().create_workspace("Seed").unwrap();
+        }
+        // Roll one idempotent migration back so the next open has work to do.
+        // Migration 2 (`CREATE TABLE IF NOT EXISTS app_preferences`) is safe to
+        // re-run; migration 9 is not, because its `CREATE TABLE` has no
+        // `IF NOT EXISTS`.
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute("DELETE FROM schema_migrations WHERE version = 2", [])
+                .unwrap();
+        }
+        let now = "2026-07-22T00:00:00.000000Z";
+        let mut store = WorkspaceStore::open_with_backup(
+            &path,
+            OpenBackupContext {
+                backups_dir: &backups_dir,
+                now,
+                app_version: "0.1.0",
+            },
+        )
+        .unwrap();
+        // A pre-migration backup was made before the migration re-ran.
+        let pre_migration = crate::backup::read_manifests(&backups_dir)
+            .into_iter()
+            .filter(|manifest| manifest.kind == crate::backup::BackupKind::PreMigration)
+            .count();
+        assert_eq!(pre_migration, 1);
+        drop(store);
+        // The migration recorded version 2 again, so the database advanced.
+        let connection = Connection::open(&path).unwrap();
+        let present: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = 2)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(present);
+        std::fs::remove_dir_all(&backups_dir).unwrap();
+        remove_database(&path);
+    }
+
+    #[test]
+    fn a_migration_aborts_without_changing_schema_when_the_pre_migration_backup_fails() {
+        let path = temporary_path();
+        // A file where the backups folder should be makes backup creation fail.
+        let blocker = std::env::temp_dir().join(format!("nodepad-backup-block-{}", id()));
+        std::fs::write(&blocker, b"x").unwrap();
+        {
+            WorkspaceStore::open(&path).unwrap().create_workspace("Seed").unwrap();
+        }
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute("DELETE FROM schema_migrations WHERE version = 2", [])
+                .unwrap();
+        }
+        let result = WorkspaceStore::open_with_backup(
+            &path,
+            OpenBackupContext {
+                backups_dir: &blocker,
+                now: "2026-07-22T00:00:00.000000Z",
+                app_version: "0.1.0",
+            },
+        );
+        let failure = result.unwrap_err();
+        assert_eq!(failure.category, StorageOpenFailureCategory::Migration);
+        // The migration never ran: version 2 is still missing.
+        let connection = Connection::open(&path).unwrap();
+        let present: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = 2)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!present);
+        std::fs::remove_file(&blocker).unwrap();
+        remove_database(&path);
+    }
+
+    #[test]
+    fn automatic_backup_runs_at_most_once_per_day_and_only_after_data_changes() {
+        let path = temporary_path();
+        let backups_dir = backups_dir_for(&id());
+        let day_one = "2026-07-22T08:00:00.000000Z";
+        let mut store = WorkspaceStore::open_with_backup(
+            &path,
+            OpenBackupContext {
+                backups_dir: &backups_dir,
+                now: day_one,
+                app_version: "0.1.0",
+            },
+        )
+        .unwrap();
+
+        // The first change of the day produces exactly one automatic backup.
+        store.create_workspace("First").unwrap();
+        store.maybe_automatic_backup(&backups_dir, day_one, "0.1.0").unwrap();
+        assert_eq!(automatic_count(&backups_dir), 1);
+
+        // The next day with no change since the last backup creates no backup.
+        let day_two = "2026-07-23T08:00:00.000000Z";
+        store.maybe_automatic_backup(&backups_dir, day_two, "0.1.0").unwrap();
+        assert_eq!(automatic_count(&backups_dir), 1);
+
+        // A change the next day produces the second automatic backup.
+        store.create_workspace("Second").unwrap();
+        store.maybe_automatic_backup(&backups_dir, day_two, "0.1.0").unwrap();
+        assert_eq!(automatic_count(&backups_dir), 2);
+
+        // Another change the same day is held back by the day gate.
+        store.create_workspace("Third").unwrap();
+        store.maybe_automatic_backup(&backups_dir, day_two, "0.1.0").unwrap();
+        assert_eq!(automatic_count(&backups_dir), 2);
+
+        // Retention keeps the latest seven automatic backups deterministically.
+        for index in 3..10 {
+            store.create_workspace(&format!("Day {index}")).unwrap();
+            let now = format!("2026-07-{index:02}T08:00:00.000000Z");
+            store.maybe_automatic_backup(&backups_dir, &now, "0.1.0").unwrap();
+        }
+        assert_eq!(automatic_count(&backups_dir), crate::backup::MAX_AUTOMATIC_BACKUPS);
+
+        drop(store);
+        std::fs::remove_dir_all(&backups_dir).unwrap();
+        remove_database(&path);
+    }
+
+    #[test]
+    fn restore_replaces_the_database_and_reopens_to_match_the_backup() {
+        let path = temporary_path();
+        let backups_dir = backups_dir_for(&id());
+        let now = "2026-07-22T08:00:00.000000Z";
+        let mut store = WorkspaceStore::open_with_backup(
+            &path,
+            OpenBackupContext {
+                backups_dir: &backups_dir,
+                now,
+                app_version: "0.1.0",
+            },
+        )
+        .unwrap();
+        store.create_workspace("Target").unwrap();
+        // The backup captures the state the thinker will restore to.
+        let backup_manifest = store
+            .create_backup(&backups_dir, crate::backup::BackupKind::Automatic, now, "0.1.0")
+            .unwrap();
+        // Durable state moves on after the backup.
+        store.create_workspace("After backup").unwrap();
+        // A recoverable pre-restore backup of the current, changed database.
+        let pre_restore = store
+            .create_backup(&backups_dir, crate::backup::BackupKind::PreRestore, now, "0.1.0")
+            .unwrap();
+        drop(store);
+
+        // Close, swap, and reopen — the core of the restore command.
+        crate::backup::replace_database(&backups_dir, &backup_manifest, &path).unwrap();
+        let reopened = WorkspaceStore::open(&path).unwrap();
+        let names: Vec<String> = reopened
+            .snapshot()
+            .unwrap()
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.name.clone())
+            .collect();
+        assert!(names.iter().any(|name| name == "Target"));
+        assert!(!names.iter().any(|name| name == "After backup"));
+        // The pre-restore backup is itself valid and restorable.
+        crate::backup::validate_backup(&backups_dir, &pre_restore).unwrap();
+        drop(reopened);
+
+        std::fs::remove_dir_all(&backups_dir).unwrap();
         remove_database(&path);
     }
 
