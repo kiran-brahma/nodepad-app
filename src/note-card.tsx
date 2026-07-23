@@ -25,6 +25,7 @@ import {
   type PendingTransfer,
 } from "./note-transfer"
 import type { NoteDrafts } from "./note-drafts"
+import type { EnrichmentStatus } from "./enrichment-controller"
 
 /**
  * Every intent a Note card can raise. One object is built once, in App, and
@@ -60,6 +61,17 @@ export interface NoteIntents {
   chooseTransferTarget: (targetWorkspaceId: string) => void
   transfer: (kind: "move" | "copy") => void
   cancelTransfer: () => void
+  /** Re-runs the Enrichment Workflow against the current Note text. */
+  retryEnrichment: () => void
+  /** Asks for Re-enrich and Replace. The UI renders a confirmation
+   *  dialog before the controller calls the Rust side with `force =
+   *  true`, so a tap does not silently destroy the thinker's manual
+   *  organization. */
+  requestReplaceEnrichment: () => void
+  /** Commits the Re-enrich and Replace after the thinker confirms. */
+  confirmReplaceEnrichment: () => void
+  /** Backs out of the Re-enrich and Replace dialog. */
+  cancelReplaceEnrichment: () => void
   editTextDraft: (markdown: string) => void
   editAnnotationDraft: (text: string) => void
 }
@@ -168,7 +180,15 @@ function NoteAnnotation({
 }) {
   const draft = drafts.annotationDraft
   if (draft?.id !== note.id) {
-    return note.annotation ? <p className="annotation">{note.annotation}</p> : null
+    if (!note.annotation) return null
+    return (
+      <p className="annotation">
+        {note.annotation}
+        {note.annotationProvenance === "ai" && (
+          <span className="badge" aria-label="Annotation organized by AI"> AI</span>
+        )}
+      </p>
+    )
   }
   return (
     <form onSubmit={intents.saveAnnotation}>
@@ -321,6 +341,88 @@ function NoteActions({
 }
 
 /**
+ * The one visible piece of the Enrichment Workflow. A small badge
+ * carries the debounce, the in-flight state, the failure reason, and
+ * the retry / replace affordances. The badge never blocks a
+ * thinker from editing a Note; it is always below the Note Type and
+ * pinned indicators so manual controls stay primary.
+ */
+function NoteEnrichmentBadge({
+  note,
+  status,
+  onRetry,
+  onReplace,
+  onConfirmReplace,
+  onCancelReplace,
+}: {
+  note: Note
+  status?: EnrichmentStatus
+  onRetry: () => void
+  onReplace: () => void
+  onConfirmReplace: () => void
+  onCancelReplace: () => void
+}) {
+  if (status?.kind === "replace_pending") {
+    return (
+      <span
+        className="row"
+        role="alertdialog"
+        aria-label="Confirm Re-enrich and Replace"
+      >
+        <span>{status.reason}</span>
+        <button onClick={onConfirmReplace}>Replace</button>
+        <button onClick={onCancelReplace}>Keep manual</button>
+      </span>
+    )
+  }
+  if (!status || status.kind === "idle" || status.kind === "cancelled") {
+    if (note.lastEnrichedAt) {
+      return <span className="badge" aria-label="Organized by AI">AI organized</span>
+    }
+    return null
+  }
+  if (status.kind === "debouncing" || status.kind === "in_flight") {
+    return <span className="badge">Organizing…</span>
+  }
+  if (status.kind === "applied") {
+    return <span className="badge" aria-label="Organized by AI">AI organized</span>
+  }
+  return <NoteEnrichmentFailureBadge status={status} onRetry={onRetry} onReplace={onReplace} />
+}
+
+function NoteEnrichmentFailureBadge({
+  status,
+  onRetry,
+  onReplace,
+}: {
+  status: Extract<EnrichmentStatus, { kind: "failed" }>
+  onRetry: () => void
+  onReplace: () => void
+}) {
+  const label = failureBadgeLabel(status.reason)
+  return (
+    <span className="row" role="group" aria-label="AI assistance status">
+      <span className="badge">{label}</span>
+      <button onClick={onRetry}>Retry</button>
+      {status.reason === "stale" && <button onClick={onReplace}>Re-enrich and Replace</button>}
+    </span>
+  )
+}
+
+function failureBadgeLabel(reason: "stale" | "invalid_schema" | "provider" | "unavailable"): string {
+  switch (reason) {
+    case "stale":
+      return "Try again"
+    case "invalid_schema":
+      return "AI returned bad data"
+    case "provider":
+      return "AI request failed"
+    case "unavailable":
+      return "AI unavailable"
+  }
+}
+
+/**
  * One Note, drawn the same way wherever it appears. The card holds no state
  * and commits nothing itself: drafts arrive as props and every change leaves
  * through the one intents object, so no view can grow its own mutation rules.
@@ -333,6 +435,7 @@ export function NoteCard({
   focused,
   dimmed,
   registerElement,
+  enrichment,
 }: {
   note: Note
   context: NoteCardContext
@@ -342,6 +445,9 @@ export function NoteCard({
   /** Focus elsewhere leaves this Note unrelated to it. Dimming commits nothing. */
   dimmed: boolean
   registerElement: (element: HTMLDivElement | null) => void
+  /** The Enrichment Workflow status for this Note, or `undefined` if
+   *  the active Workspace's policy does not permit AI assistance. */
+  enrichment?: EnrichmentStatus
 }) {
   // The badge counts the same links the graph draws and the chips below list,
   // because all three read one projection.
@@ -362,8 +468,19 @@ export function NoteCard({
     >
       <div className="row">
         <span className="badge">{noteTypeLabel(note.noteType)}</span>
+        {note.noteTypeProvenance === "ai" && (
+          <span className="badge" aria-label="Note Type organized by AI">AI</span>
+        )}
         {note.pinned && <span className="badge">Pinned</span>}
         {relatedCount > 0 && <span className="badge">{relatedCount} related</span>}
+        <NoteEnrichmentBadge
+          note={note}
+          status={enrichment}
+          onRetry={intents.retryEnrichment}
+          onReplace={intents.requestReplaceEnrichment}
+          onConfirmReplace={intents.confirmReplaceEnrichment}
+          onCancelReplace={intents.cancelReplaceEnrichment}
+        />
       </div>
 
       <NoteText note={note} drafts={drafts} intents={intents} />

@@ -20,8 +20,12 @@ export const NOTE_TYPES = [
 
 export type NoteType = (typeof NOTE_TYPES)[number]
 
-/** Whether a value is still the default or was chosen by the thinker. */
-export type Provenance = "default" | "manual"
+/** Whether a value is still the default, was chosen by the thinker, or
+ *  was suggested by AI. AI-authored fields are visibly distinguishable
+ *  in the UI and a later AI result may refresh them; a manual field
+ *  always wins until the thinker explicitly chooses Re-enrich and
+ *  Replace. */
+export type Provenance = "default" | "manual" | "ai"
 
 export interface Note {
   id: string
@@ -34,6 +38,13 @@ export interface Note {
   createdAt: string
   updatedAt: string
   pinned: boolean
+  /** Bumped on every commit that touches this Note. The Enrichment
+   *  Workflow captures it into the request token and rejects any
+   *  response that names a different revision, so an edit during
+   *  inference invalidates the in-flight response. */
+  enrichmentRevision: number
+  /** The moment a successful AI organization was last applied, if any. */
+  lastEnrichedAt: string | null
   labels: Label[]
 }
 
@@ -104,6 +115,7 @@ export type WorkspaceFailure =
   | { code: "not_found"; message: string }
   | { code: "nothing_to_undo"; message: string }
   | { code: "storage"; message: string }
+  | { code: "stale"; message: string }
 
 export type StorageOpenFailure = {
   category: "unreadable" | "migration" | "initialization"

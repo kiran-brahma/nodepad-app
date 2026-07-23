@@ -22,6 +22,8 @@ function note(id: string): Note {
     updatedAt: "2026-07-22T10:00:00+00:00",
     pinned: false,
     labels: [],
+    enrichmentRevision: 0,
+    lastEnrichedAt: null,
   }
 }
 

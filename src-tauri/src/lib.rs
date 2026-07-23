@@ -1,4 +1,5 @@
 mod cloud;
+mod enrichment;
 mod ollama;
 mod secrets;
 mod thinking_graph;
@@ -6,15 +7,20 @@ mod workspace;
 
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, State};
-use cloud::{CloudOllamaProvider, CloudTagsClient, HttpCloudTagsClient};
-use ollama::{DiscoveryOutcome, HttpTagsClient, OllamaProvider};
+use cloud::{CloudOllamaProvider, CloudTagsClient, HttpCloudTagsClient, OLLAMA_CLOUD_BASE_URL};
+use enrichment::{
+    EnrichmentClient, EnrichmentFailureCode, EnrichmentOutcome, EnrichmentRequest,
+    HttpEnrichmentClient, ParsedEnrichmentResult, RequestToken,
+};
+use ollama::{DiscoveryOutcome, HttpTagsClient, OllamaProvider, OLLAMA_LOCAL_BASE_URL_PUBLIC as OLLAMA_LOCAL_BASE_URL};
 use secrets::{
     KeychainAdapter, KeychainFailure, KeychainOutcome, OLLAMA_CLOUD_KEYCHAIN_ACCOUNT,
     OLLAMA_CLOUD_KEYCHAIN_SERVICE, SecurityCliKeychain,
 };
 use workspace::{
-    unavailable_search_outcome, StorageOpenFailure, StorageOpenFailureCategory, ThinkingWorkspaceInterface,
-    WorkspaceCommandResult, WorkspaceSearchOutcome, WorkspaceStore,
+    unavailable_search_outcome, AssistancePolicy, StorageOpenFailure, StorageOpenFailureCategory,
+    ThinkingWorkspaceInterface, WorkspaceCommandResult, WorkspaceFailureCode, WorkspaceSearchOutcome,
+    WorkspaceSnapshot, WorkspaceStore,
 };
 
 /// Storage may be unavailable at startup; the app stays running so the thinker
@@ -24,6 +30,11 @@ struct AppState {
     provider: OllamaProvider,
     cloud: CloudOllamaProvider,
     keychain: Arc<dyn KeychainAdapter>,
+    /// The HTTP client behind local `/api/chat`. The same builder is used
+    /// for local and cloud chat calls; only the endpoint URL and the
+    /// optional bearer key differ.
+    local_enrichment: HttpEnrichmentClient,
+    cloud_enrichment: HttpEnrichmentClient,
 }
 
 impl AppState {
@@ -317,6 +328,295 @@ async fn discover_cloud_models(
     Ok(DiscoveryOutcome::from(outcome))
 }
 
+/// The shape returned to the UI: the parsed result (or a typed failure)
+/// and, when the result was applied, the new committed snapshot.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum EnrichmentCommandOutcome {
+    /// The result was parsed and applied. The snapshot is the new state.
+    Applied { result: ParsedEnrichmentResult, snapshot: WorkspaceSnapshot },
+    /// The result was parsed but the gate rejected it (manual provenance,
+    /// stale revision, or the policy reverted to Manual mid-flight). The
+    /// Note is unchanged.
+    Rejected { result: ParsedEnrichmentResult, snapshot: WorkspaceSnapshot, reason: String },
+    /// The provider returned something we could not apply. The Note is
+    /// unchanged and the UI renders a typed retry state.
+    ProviderFailed { code: EnrichmentFailureCode, message: String, snapshot: WorkspaceSnapshot },
+    /// The provider returned a body that did not match the structured
+    /// contract. The Note is unchanged.
+    InvalidSchema { reason: String, snapshot: WorkspaceSnapshot },
+    /// The Workspace is not in a policy that permits AI assistance, the
+    /// selected model is missing, or the Note disappeared. The Note is
+    /// unchanged.
+    Unavailable { reason: String, snapshot: WorkspaceSnapshot },
+}
+
+#[tauri::command]
+async fn enrich_note(
+    workspace_id: String,
+    note_id: String,
+    force: bool,
+    state: State<'_, AppState>,
+) -> Result<EnrichmentCommandOutcome, String> {
+    // Step 1: build the request token from the current committed state.
+    let (token, request, snapshot) = {
+        let storage = state.storage.lock().expect("workspace lock poisoned");
+        let store = match storage.as_ref() {
+            Ok(store) => store,
+            Err(failure) => {
+                return Ok(EnrichmentCommandOutcome::Unavailable {
+                    reason: failure.message.clone(),
+                    snapshot: WorkspaceSnapshot::default_unavailable(),
+                });
+            }
+        };
+        let snapshot = match store.snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                return Ok(EnrichmentCommandOutcome::Unavailable {
+                    reason: error.to_string(),
+                    snapshot: WorkspaceSnapshot::default_unavailable(),
+                });
+            }
+        };
+        let workspace = match snapshot
+            .workspaces
+            .iter()
+            .find(|candidate| candidate.id == workspace_id)
+        {
+            Some(workspace) => workspace.clone(),
+            None => {
+                return Ok(EnrichmentCommandOutcome::Unavailable {
+                    reason: "The Thinking Workspace no longer exists.".to_owned(),
+                    snapshot,
+                });
+            }
+        };
+        let policy = workspace.assistance_policy().as_str().to_owned();
+        if !force && matches!(workspace.assistance_policy(), AssistancePolicy::Manual) {
+            return Ok(EnrichmentCommandOutcome::Unavailable {
+                reason: "AI assistance is not enabled for this Thinking Workspace.".to_owned(),
+                snapshot,
+            });
+        }
+        let model = match workspace.selected_model().map(str::to_owned) {
+            Some(model) => model,
+            None => {
+                return Ok(EnrichmentCommandOutcome::Unavailable {
+                    reason: "Pick a model in AI Assistance before enriching.".to_owned(),
+                    snapshot,
+                });
+            }
+        };
+        let note = match snapshot
+            .notes
+            .iter()
+            .find(|candidate| candidate.id() == note_id)
+        {
+            Some(note) => note.clone(),
+            None => {
+                return Ok(EnrichmentCommandOutcome::Unavailable {
+                    reason: "The Note no longer exists.".to_owned(),
+                    snapshot,
+                });
+            }
+        };
+        if note.workspace_id() != workspace_id {
+            return Ok(EnrichmentCommandOutcome::Unavailable {
+                reason: "The Note belongs to a different Thinking Workspace.".to_owned(),
+                snapshot,
+            });
+        }
+        let (endpoint, _api_key) = match workspace.assistance_policy() {
+            AssistancePolicy::LocalAi => (OLLAMA_LOCAL_BASE_URL.to_owned(), None),
+            AssistancePolicy::CloudAi => {
+                if workspace.cloud_consent_at().is_none() {
+                    return Ok(EnrichmentCommandOutcome::Unavailable {
+                        reason: "Accept the Cloud AI disclosure first.".to_owned(),
+                        snapshot,
+                    });
+                }
+                match state.keychain.read(OLLAMA_CLOUD_KEYCHAIN_SERVICE, OLLAMA_CLOUD_KEYCHAIN_ACCOUNT) {
+                    KeychainOutcome::Ok(value) => (OLLAMA_CLOUD_BASE_URL.to_owned(), Some(value)),
+                    KeychainOutcome::Failed { failure } => {
+                        return Ok(EnrichmentCommandOutcome::Unavailable {
+                            reason: failure.message,
+                            snapshot,
+                        });
+                    }
+                }
+            }
+            AssistancePolicy::Manual => {
+                return Ok(EnrichmentCommandOutcome::Unavailable {
+                    reason: "AI assistance is not enabled for this Thinking Workspace.".to_owned(),
+                    snapshot,
+                });
+            }
+        };
+        let token = RequestToken {
+            workspace_id: workspace_id.clone(),
+            note_id: note_id.clone(),
+            revision: note.enrichment_revision(),
+            policy: policy.clone(),
+            endpoint: endpoint.clone(),
+            model: model.clone(),
+        };
+        // The candidate set is read from the same snapshot; the same
+        // Workspace's Notes only, with the active Note excluded.
+        let candidate_notes: Vec<&workspace::Note> = snapshot
+            .notes
+            .iter()
+            .filter(|candidate| candidate.workspace_id() == workspace_id)
+            .collect();
+        let candidates = enrichment::select_candidates(&candidate_notes, &note_id);
+        let existing_labels: Vec<String> = note
+            .labels()
+            .iter()
+            .map(|label| label.name().to_owned())
+            .collect();
+        let request = EnrichmentRequest {
+            token: token.clone(),
+            target_text: note.markdown().to_owned(),
+            target_note_id: note.id().to_owned(),
+            candidates,
+            existing_labels,
+            url_metadata: None,
+        };
+        (token, request, snapshot)
+    };
+    // Step 2: call the right HTTP client. The bearer key is dropped from
+    // this scope the moment the response is in hand.
+    let user_message = enrichment::build_user_message(&request);
+    let format = enrichment::response_schema();
+    let body = match request.token.endpoint.as_str() {
+        OLLAMA_LOCAL_BASE_URL => {
+            state
+                .local_enrichment
+                .chat(
+                    &request.token.endpoint,
+                    &request.token.model,
+                    enrichment::SYSTEM_PROMPT,
+                    &user_message,
+                    &format,
+                )
+                .await
+        }
+        OLLAMA_CLOUD_BASE_URL => {
+            let key = state
+                .keychain
+                .read(OLLAMA_CLOUD_KEYCHAIN_SERVICE, OLLAMA_CLOUD_KEYCHAIN_ACCOUNT);
+            let key = match key {
+                KeychainOutcome::Ok(value) => value,
+                KeychainOutcome::Failed { failure } => {
+                    return Ok(EnrichmentCommandOutcome::ProviderFailed {
+                        code: EnrichmentFailureCode::Unauthenticated,
+                        message: failure.message,
+                        snapshot,
+                    });
+                }
+            };
+            let outcome = state
+                .cloud_enrichment
+                .chat(
+                    &request.token.endpoint,
+                    &request.token.model,
+                    enrichment::SYSTEM_PROMPT,
+                    &user_message,
+                    &format,
+                )
+                .await;
+            drop(key);
+            outcome
+        }
+        _ => Err(EnrichmentFailureCode::Unavailable),
+    };
+    let candidate_ids: Vec<String> = request
+        .candidates
+        .iter()
+        .map(|candidate| candidate.id.clone())
+        .collect();
+    let outcome = match body {
+        Ok(body) => enrichment::parse_enrichment_response(token.clone(), &body, &candidate_ids),
+        Err(code) => EnrichmentOutcome::ProviderFailed {
+            token: token.clone(),
+            code,
+            message: "Provider call failed.".to_owned(),
+        },
+    };
+    // Step 3: handle the result. Parsed results are committed; the rest
+    // surface as typed failures.
+    match outcome {
+        EnrichmentOutcome::Parsed { token: result_token, parsed } => {
+            let snapshot = {
+                let mut storage = state.storage.lock().expect("workspace lock poisoned");
+                match storage.as_mut() {
+                    Ok(store) => store
+                        .apply_enrichment_outcome(&workspace_id, &note_id, &parsed, &result_token, force),
+                    Err(failure) => {
+                        return Ok(EnrichmentCommandOutcome::Unavailable {
+                            reason: failure.message.clone(),
+                            snapshot: WorkspaceSnapshot::default_unavailable(),
+                        });
+                    }
+                }
+            };
+            match snapshot {
+                WorkspaceCommandResult::Committed { snapshot } => {
+                    Ok(EnrichmentCommandOutcome::Applied { result: parsed, snapshot })
+                }
+                WorkspaceCommandResult::Failed { failure } if matches!(failure.code, WorkspaceFailureCode::Stale) => {
+                    // A stale response leaves the Note unchanged. The UI
+                    // renders the typed retry state on the same view.
+                    let current_snapshot = match state.storage.lock().expect("workspace lock poisoned").as_ref() {
+                        Ok(store) => store.snapshot().unwrap_or_else(|_| WorkspaceSnapshot::default_unavailable()),
+                        Err(_) => WorkspaceSnapshot::default_unavailable(),
+                    };
+                    Ok(EnrichmentCommandOutcome::Rejected {
+                        result: parsed,
+                        snapshot: current_snapshot,
+                        reason: "The Note was edited during inference. Try again.".to_owned(),
+                    })
+                }
+                WorkspaceCommandResult::Failed { failure } => {
+                    Ok(EnrichmentCommandOutcome::Unavailable {
+                        reason: failure.message,
+                        snapshot: WorkspaceSnapshot::default_unavailable(),
+                    })
+                }
+                WorkspaceCommandResult::Unavailable { failure } => {
+                    Ok(EnrichmentCommandOutcome::Unavailable {
+                        reason: failure.message,
+                        snapshot: WorkspaceSnapshot::default_unavailable(),
+                    })
+                }
+            }
+        }
+        EnrichmentOutcome::InvalidSchema { reason, .. } => Ok(EnrichmentCommandOutcome::InvalidSchema {
+            reason,
+            snapshot,
+        }),
+        EnrichmentOutcome::ProviderFailed { code, message, .. } => {
+            Ok(EnrichmentCommandOutcome::ProviderFailed { code, message, snapshot })
+        }
+    }
+}
+
+impl WorkspaceSnapshot {
+    /// A placeholder used by the Enrichment Workflow when the durable
+    /// store itself is unavailable. The UI treats this as a hard error
+    /// and renders the storage recovery affordance rather than a partial
+    /// result.
+    pub fn default_unavailable() -> Self {
+        Self {
+            workspaces: vec![],
+            notes: vec![],
+            relationships: vec![],
+            active_workspace_id: String::new(),
+            undoable_commands: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 enum CloudSecretOutcome {
@@ -381,7 +681,7 @@ pub fn run() {
                 .unwrap_or_default();
             let provider = OllamaProvider::new(Arc::new(HttpTagsClient::new(http_client.clone())));
             let cloud_client: Arc<dyn CloudTagsClient> =
-                Arc::new(HttpCloudTagsClient::new(http_client));
+                Arc::new(HttpCloudTagsClient::new(http_client.clone()));
             let keychain: Arc<dyn KeychainAdapter> = Arc::new(SecurityCliKeychain::new());
             let cloud = CloudOllamaProvider::new(
                 cloud_client,
@@ -389,11 +689,15 @@ pub fn run() {
                 OLLAMA_CLOUD_KEYCHAIN_SERVICE,
                 OLLAMA_CLOUD_KEYCHAIN_ACCOUNT,
             );
+            let local_enrichment = HttpEnrichmentClient::new(http_client.clone(), None);
+            let cloud_enrichment = HttpEnrichmentClient::new(http_client, None);
             app.manage(AppState {
                 storage: Mutex::new(storage),
                 provider,
                 cloud,
                 keychain,
+                local_enrichment,
+                cloud_enrichment,
             });
             Ok(())
         })
@@ -428,7 +732,8 @@ pub fn run() {
             set_cloud_api_key,
             delete_cloud_api_key,
             retry_storage_open,
-            quit_application
+            quit_application,
+            enrich_note
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nodepad");
