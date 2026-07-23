@@ -17,6 +17,8 @@ import {
   noteTypeLabel,
 } from "./note-controls"
 import { nodeDegree, relatableNotes, relatedNotes, type ThinkingGraph } from "./thinking-graph"
+import { ExternalLink } from "./external-link"
+import { EscapeDismiss } from "./escape-dismiss"
 import {
   copyExplanation,
   moveExplanation,
@@ -145,12 +147,15 @@ function NoteText({
     // Markdown renders without raw HTML, so nothing in a Note executes.
     return (
       <div className="markdown">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{note.markdown}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ExternalLink }}>
+          {note.markdown}
+        </ReactMarkdown>
       </div>
     )
   }
   return (
     <form onSubmit={intents.saveText}>
+      <EscapeDismiss onEscape={intents.cancelEdit} />
       <label htmlFor={`note-text-${note.id}`}>Note text</label>
       <textarea
         autoFocus
@@ -192,6 +197,7 @@ function NoteAnnotation({
   }
   return (
     <form onSubmit={intents.saveAnnotation}>
+      <EscapeDismiss onEscape={intents.cancelAnnotation} />
       <label htmlFor={`annotation-${note.id}`}>Annotation</label>
       <textarea
         autoFocus
@@ -201,8 +207,13 @@ function NoteAnnotation({
         placeholder="Plain-text commentary; leave empty to clear it"
         onChange={(event) => intents.editAnnotationDraft(event.target.value)}
       />
-      <p className={isAnnotationTooLong(draft.text) ? "over-limit" : ""}>
-        {annotationLength(draft.text)} / {MAX_ANNOTATION_SCALARS} characters
+      <p
+        className={isAnnotationTooLong(draft.text) ? "over-limit" : ""}
+        role={isAnnotationTooLong(draft.text) ? "alert" : undefined}
+      >
+        {isAnnotationTooLong(draft.text)
+          ? `Over the limit: ${annotationLength(draft.text)} / ${MAX_ANNOTATION_SCALARS} characters`
+          : `${annotationLength(draft.text)} / ${MAX_ANNOTATION_SCALARS} characters`}
       </p>
       <div className="row">
         <button type="submit" disabled={isAnnotationTooLong(draft.text)}>
@@ -232,7 +243,7 @@ function NoteLabels({
         <span className="badge" key={label.id}>{label.name} <button aria-label={`Detach ${label.name}`} onClick={() => intents.detachLabel(note, label)}>×</button> <button aria-label={`Rename ${label.name}`} onClick={() => intents.startLabelRename(label)}>Rename</button> <button aria-label={`Remove ${label.name}`} onClick={() => intents.removeLabel(label)}>Remove</button></span>
       ))}
       {draft?.noteId === note.id ? (
-        <form onSubmit={intents.saveLabel}><label htmlFor={`label-${note.id}`}>Label</label><input autoFocus id={`label-${note.id}`} value={draft.name} onChange={(event) => intents.editLabelDraft(event.target.value)} /><button type="submit">Save Label</button><button type="button" onClick={intents.cancelLabel}>Cancel</button></form>
+        <form onSubmit={intents.saveLabel}><EscapeDismiss onEscape={intents.cancelLabel} /><label htmlFor={`label-${note.id}`}>Label</label><input autoFocus id={`label-${note.id}`} value={draft.name} onChange={(event) => intents.editLabelDraft(event.target.value)} /><button type="submit">Save Label</button><button type="button" onClick={intents.cancelLabel}>Cancel</button></form>
       ) : <button onClick={() => intents.startLabel(note)}>Add Label</button>}
     </div>
   )
@@ -274,6 +285,7 @@ function NoteRelationships({
       ))}
       {draft?.noteId === note.id ? (
         <div className="relate">
+          <EscapeDismiss onEscape={intents.cancelRelate} />
           <label htmlFor={`relate-${note.id}`}>Relate to Note</label>
           <input
             autoFocus
@@ -369,6 +381,7 @@ function NoteEnrichmentBadge({
         role="alertdialog"
         aria-label="Confirm Re-enrich and Replace"
       >
+        <EscapeDismiss onEscape={onCancelReplace} />
         <span>{status.reason}</span>
         <button onClick={onConfirmReplace}>Replace</button>
         <button onClick={onCancelReplace}>Keep manual</button>
@@ -382,7 +395,11 @@ function NoteEnrichmentBadge({
     return null
   }
   if (status.kind === "debouncing" || status.kind === "in_flight") {
-    return <span className="badge">Organizing…</span>
+    return (
+      <span className="badge" role="status" aria-live="polite">
+        Organizing…
+      </span>
+    )
   }
   if (status.kind === "applied") {
     return <span className="badge" aria-label="Organized by AI">AI organized</span>
@@ -401,7 +418,7 @@ function NoteEnrichmentFailureBadge({
 }) {
   const label = failureBadgeLabel(status.reason)
   return (
-    <span className="row" role="group" aria-label="AI assistance status">
+    <span className="row" role="status" aria-label="AI assistance status" aria-live="polite">
       <span className="badge">{label}</span>
       <button onClick={onRetry}>Retry</button>
       {status.reason === "stale" && <button onClick={onReplace}>Re-enrich and Replace</button>}
@@ -512,6 +529,7 @@ export function NoteCard({
 
       {drafts.pendingNoteDelete?.noteId === note.id && (
         <div className="confirm" role="alertdialog" aria-label="Confirm delete Note">
+          <EscapeDismiss onEscape={() => intents.answerDelete("cancel")} />
           <p>{noteDeleteConfirmationPrompt(drafts.pendingNoteDelete)}</p>
           <div className="row">
             <button onClick={() => intents.answerDelete("confirm")}>Delete Note</button>
