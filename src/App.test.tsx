@@ -36,6 +36,8 @@ let cloudKeyPresent = false
 let keychainWriteCount = 0
 let lastSavedKey: string | null = null
 let keychainDeleteCount = 0
+let exportRequests = 0
+let exportOutcome: import("./workspace-client").MarkdownExportOutcome = { status: "cancelled" }
 
 /** The canonical pair the durable interface stores; order is not direction. */
 function canonicalPair(left: string, right: string): [string, string] {
@@ -280,6 +282,9 @@ vi.mock("@tauri-apps/api/core", () => ({
         }
         return Promise.resolve(committed())
       }
+      case "export_workspace":
+        exportRequests += 1
+        return Promise.resolve(exportOutcome)
       default:
         return Promise.resolve(committed())
     }
@@ -302,6 +307,8 @@ beforeEach(() => {
   keychainWriteCount = 0
   lastSavedKey = null
   keychainDeleteCount = 0
+  exportRequests = 0
+  exportOutcome = { status: "cancelled" }
   history = []
   snapshot = {
     workspaces: [
@@ -346,6 +353,15 @@ function noteCards() {
 }
 
 describe("manual Note controls", () => {
+  it("exports the active Thinking Workspace through the native adapter", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(await screen.findByRole("button", { name: "Export Markdown" }))
+
+    await waitFor(() => expect(exportRequests).toBe(1))
+  })
+
   it("renders committed Markdown without enabling raw HTML", async () => {
     const user = userEvent.setup()
     render(<App />)

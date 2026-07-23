@@ -591,7 +591,7 @@ pub(crate) enum WorkspaceError {
 }
 
 impl WorkspaceError {
-    fn failure(&self) -> WorkspaceFailure {
+    pub(crate) fn failure(&self) -> WorkspaceFailure {
         let code = match self {
             Self::EmptyWorkspaceName
             | Self::WorkspaceNameTooLong
@@ -1159,6 +1159,11 @@ pub struct WorkspaceStore {
 }
 
 impl WorkspaceStore {
+    pub(crate) fn markdown_export(&self, workspace_id: &str) -> Result<(String, String), WorkspaceError> {
+        let snapshot = self.snapshot()?;
+        let workspace = snapshot.workspaces.iter().find(|workspace| workspace.id == workspace_id).ok_or(WorkspaceError::WorkspaceNotFound)?;
+        Ok((render_markdown_export(&snapshot, workspace), crate::markdown_export::default_filename(&workspace.name)))
+    }
     /// Opens durable storage. A failure never resets, deletes, or overwrites an
     /// existing database; it reports the category so recovery can retry or quit.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageOpenFailure> {
@@ -2094,6 +2099,35 @@ fn sort_notes(notes: &mut [Note]) {
             &right.id,
         ))
     });
+}
+
+fn render_markdown_export(snapshot: &WorkspaceSnapshot, workspace: &ThinkingWorkspace) -> String {
+    use std::collections::BTreeMap;
+    let mut notes: Vec<&Note> = snapshot.notes.iter().filter(|note| note.workspace_id == workspace.id).collect();
+    notes.sort_by(|left, right| (!left.pinned, &left.created_at, &left.id).cmp(&(!right.pinned, &right.created_at, &right.id)));
+    let anchors: BTreeMap<&str, String> = notes.iter().enumerate().map(|(index, note)| (note.id.as_str(), format!("note-{:03}", index + 1))).collect();
+    let title = |note: &Note| note.markdown.lines().find_map(|line| line.strip_prefix("# ")).filter(|line| !line.trim().is_empty()).unwrap_or("Note").split_whitespace().collect::<Vec<_>>().join(" ");
+    let timestamp = |value: &str| chrono::DateTime::parse_from_rfc3339(value).map(|value| value.with_timezone(&chrono::Local).to_rfc3339()).unwrap_or_else(|_| value.to_owned());
+    let plain = |value: &str| value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut document = format!("# {}\n\n## Metadata\n\n- Created: {}\n- Notes: {}\n", plain(&workspace.name), timestamp(&workspace.created_at), notes.len());
+    for note_type in NOTE_TYPES {
+        let typed: Vec<&Note> = notes.iter().copied().filter(|note| note.note_type == note_type).collect();
+        if typed.is_empty() { continue; }
+        let section = note_type[..1].to_uppercase() + &note_type[1..];
+        document.push_str(&format!("\n## {section}\n"));
+        for note in typed {
+            let anchor = anchors.get(note.id.as_str()).expect("each export Note has an anchor");
+            document.push_str(&format!("\n<a id=\"{anchor}\"></a>\n### {}\n\n{}\n\n", plain(&title(note)), note.markdown));
+            if let Some(annotation) = &note.annotation { document.push_str(&format!("**Annotation:** {}\n\n", plain(annotation))); }
+            let labels = note.labels.iter().map(|label| label.name.as_str()).collect::<Vec<_>>().join(", ");
+            let labels = if labels.is_empty() { "None".to_owned() } else { plain(&labels) };
+            document.push_str(&format!("- Labels: {labels}\n- Note Type: {section}\n- Created: {}\n", timestamp(&note.created_at)));
+            let mut related: Vec<String> = snapshot.relationships.iter().filter(|relationship| relationship.workspace_id == workspace.id).filter_map(|relationship| relationship.other_endpoint(&note.id)).filter_map(|id| anchors.get(id).map(|anchor| (id, anchor))).map(|(id, anchor)| { let related = notes.iter().find(|note| note.id == id).expect("relationship endpoint is exported"); format!("[{}](#{anchor})", plain(&title(related)).replace('[', "\\[").replace(']', "\\]")) }).collect();
+            related.sort();
+            document.push_str(&format!("- Related Notes: {}\n", if related.is_empty() { "None".to_owned() } else { related.join(", ") }));
+        }
+    }
+    document
 }
 
 /// How much organized material one Thinking Workspace holds. A Note counts
