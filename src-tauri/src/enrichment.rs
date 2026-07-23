@@ -49,6 +49,10 @@ pub const MAX_TARGET_SCALARS: usize = 8_000;
 pub const MAX_CANDIDATE_SCALARS: usize = 500;
 pub const MAX_ANNOTATION_SCALARS: usize = 300;
 pub const MAX_REQUEST_SCALARS: usize = 16_000;
+pub const MAX_URL_FINAL_URL_SCALARS: usize = 2_048;
+pub const MAX_URL_TITLE_SCALARS: usize = 512;
+pub const MAX_URL_DESCRIPTION_SCALARS: usize = 1_000;
+pub const MAX_URL_EXCERPT_SCALARS: usize = 2_000;
 pub const MAX_CANDIDATES: usize = 10;
 /// The debounce window the Enrichment Workflow uses after a Note text
 /// edit. The runtime side matches this in `enrichment-controller.ts`.
@@ -186,14 +190,14 @@ pub struct CandidateView {
     pub annotation: Option<String>,
 }
 
-/// Optional URL metadata for the Note when one is known.
+/// Bounded URL metadata is untrusted data, never an instruction. Failures
+/// deliberately carry no response body so they are safe to give Prompt A.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UrlMetadata {
-    pub final_url: String,
-    pub title: Option<String>,
-    pub description: Option<String>,
-    pub excerpt: Option<String>,
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum UrlMetadata {
+    Retrieved { final_url: String, title: Option<String>, description: Option<String>, excerpt: Option<String> },
+    NonHtml { final_url: String, content_type: Option<String> },
+    Failed { code: String },
 }
 
 /// The full request the workflow hands to the provider. The application
@@ -286,17 +290,40 @@ pub fn build_user_message(request: &EnrichmentRequest) -> String {
     .unwrap_or_else(|_| "[]".to_owned());
     let existing_labels_json =
         serde_json::to_string(&request.existing_labels).unwrap_or_else(|_| "[]".to_owned());
-    let url_metadata_json = match &request.url_metadata {
-        Some(meta) => serde_json::to_string(meta).unwrap_or_else(|_| "null".to_owned()),
-        None => "null".to_owned(),
-    };
+    let url_metadata_json = safe_url_metadata_json(request.url_metadata.as_ref());
     let raw = format!(
         "<target_note>\n{target}\n</target_note>\n\
+\n<url_metadata>\n{url_metadata_json}\n</url_metadata>\n\
 \n<existing_labels>\n{existing_labels_json}\n</existing_labels>\n\
 \n<relationship_candidates>\n{candidates_json}\n</relationship_candidates>\n\
-\n<url_metadata>\n{url_metadata_json}\n</url_metadata>"
+"
     );
     truncate_scalars(&raw, MAX_REQUEST_SCALARS)
+}
+
+/// Bounds fetched values before embedding them in Prompt A. Escaping the
+/// XML-significant characters keeps URL content inside its data block.
+fn safe_url_metadata_json(metadata: Option<&UrlMetadata>) -> String {
+    let bounded = match metadata {
+        Some(UrlMetadata::Retrieved { final_url, title, description, excerpt }) => serde_json::json!({
+            "status": "retrieved",
+            "finalUrl": truncate_scalars(final_url, MAX_URL_FINAL_URL_SCALARS),
+            "title": title.as_deref().map(|value| truncate_scalars(value, MAX_URL_TITLE_SCALARS)),
+            "description": description.as_deref().map(|value| truncate_scalars(value, MAX_URL_DESCRIPTION_SCALARS)),
+            "excerpt": excerpt.as_deref().map(|value| truncate_scalars(value, MAX_URL_EXCERPT_SCALARS)),
+        }),
+        Some(UrlMetadata::NonHtml { final_url, content_type }) => serde_json::json!({
+            "status": "non_html",
+            "finalUrl": truncate_scalars(final_url, MAX_URL_FINAL_URL_SCALARS),
+            "contentType": content_type,
+        }),
+        Some(UrlMetadata::Failed { code }) => serde_json::json!({ "status": "failed", "code": truncate_scalars(code, 64) }),
+        None => serde_json::Value::Null,
+    };
+    serde_json::to_string(&bounded).unwrap_or_else(|_| "null".to_owned())
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026")
 }
 
 /// Selects up to `MAX_CANDIDATES` candidates from the same Workspace.

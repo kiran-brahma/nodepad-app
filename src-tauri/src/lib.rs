@@ -4,6 +4,7 @@ mod ollama;
 mod secrets;
 mod synthesis;
 mod thinking_graph;
+mod url_metadata;
 mod workspace;
 
 use std::sync::{Arc, Mutex};
@@ -23,6 +24,7 @@ use workspace::{
     ThinkingWorkspaceInterface, WorkspaceCommandResult, WorkspaceFailureCode, WorkspaceSearchOutcome,
     WorkspaceSnapshot, WorkspaceStore,
 };
+use url_metadata::{HttpUrlMetadataClient, UrlMetadataClient};
 
 /// Storage may be unavailable at startup; the app stays running so the thinker
 /// can retry or quit without the database ever being reset.
@@ -36,6 +38,7 @@ struct AppState {
     /// optional bearer key differ.
     local_enrichment: HttpEnrichmentClient,
     cloud_enrichment: HttpEnrichmentClient,
+    url_metadata: HttpUrlMetadataClient,
 }
 
 impl AppState {
@@ -484,6 +487,12 @@ async fn enrich_note(
             url_metadata: None,
         };
         (token, request, snapshot)
+    };
+    // URL retrieval is an optional, bounded input. It neither owns Note
+    // persistence nor blocks ordinary AI organization when it fails.
+    let request = EnrichmentRequest {
+        url_metadata: state.url_metadata.retrieve_from_note(&request.target_text).await,
+        ..request
     };
     // Step 2: call the right HTTP client. The bearer key is dropped from
     // this scope the moment the response is in hand.
@@ -1058,6 +1067,7 @@ pub fn run() {
             );
             let local_enrichment = HttpEnrichmentClient::new(http_client.clone(), None);
             let cloud_enrichment = HttpEnrichmentClient::new(http_client, None);
+            let url_metadata = HttpUrlMetadataClient::new();
             app.manage(AppState {
                 storage: Mutex::new(storage),
                 provider,
@@ -1065,6 +1075,7 @@ pub fn run() {
                 keychain,
                 local_enrichment,
                 cloud_enrichment,
+                url_metadata,
             });
             Ok(())
         })
