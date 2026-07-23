@@ -13,7 +13,7 @@ use crate::workspace::Note;
 /// Who created a Relationship. This slice writes only `Manual`; `Ai` is part of
 /// the durable vocabulary now so a later assistance slice adds rows rather than
 /// changing what an existing row means.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RelationshipProvenance {
     Manual,

@@ -38,6 +38,10 @@ let lastSavedKey: string | null = null
 let keychainDeleteCount = 0
 let exportRequests = 0
 let exportOutcome: import("./workspace-client").MarkdownExportOutcome = { status: "cancelled" }
+let archiveExportRequests = 0
+let archiveExportOutcome: import("./workspace-client").ArchiveExportOutcome = { status: "cancelled" }
+let archiveImportRequests = 0
+let archiveImportOutcome: import("./workspace-client").ArchiveImportOutcome = { status: "cancelled" }
 
 /** The canonical pair the durable interface stores; order is not direction. */
 function canonicalPair(left: string, right: string): [string, string] {
@@ -285,6 +289,12 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "export_workspace":
         exportRequests += 1
         return Promise.resolve(exportOutcome)
+      case "export_workspace_archive":
+        archiveExportRequests += 1
+        return Promise.resolve(archiveExportOutcome)
+      case "import_workspace_archive":
+        archiveImportRequests += 1
+        return Promise.resolve(archiveImportOutcome)
       default:
         return Promise.resolve(committed())
     }
@@ -309,6 +319,10 @@ beforeEach(() => {
   keychainDeleteCount = 0
   exportRequests = 0
   exportOutcome = { status: "cancelled" }
+  archiveExportRequests = 0
+  archiveExportOutcome = { status: "cancelled" }
+  archiveImportRequests = 0
+  archiveImportOutcome = { status: "cancelled" }
   history = []
   snapshot = {
     workspaces: [
@@ -360,6 +374,59 @@ describe("manual Note controls", () => {
     await user.click(await screen.findByRole("button", { name: "Export Markdown" }))
 
     await waitFor(() => expect(exportRequests).toBe(1))
+  })
+
+  it("exports a versioned archive and imports one into a fresh Workspace", async () => {
+    archiveExportOutcome = { status: "exported", filename: "Research.nodepad.json" }
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(await screen.findByRole("button", { name: "Export Archive" }))
+    await waitFor(() => expect(archiveExportRequests).toBe(1))
+
+    // A successful import adopts a snapshot that adds one Workspace; the UI
+    // surfaces it as a selectable Workspace alongside the existing ones.
+    archiveImportOutcome = {
+      status: "imported",
+      snapshot: {
+        ...snapshot,
+        workspaces: [
+          ...snapshot.workspaces,
+          {
+            id: "imported-workspace",
+            name: "Research (2)",
+            assistancePolicy: "manual",
+            selectedModel: null,
+            cloudConsentAt: null,
+            createdAt: "2026-07-24T09:00:00+00:00",
+            updatedAt: "2026-07-24T09:00:00+00:00",
+          },
+        ],
+      },
+    }
+    await user.click(screen.getByRole("button", { name: "Import Archive" }))
+    await waitFor(() => expect(archiveImportRequests).toBe(1))
+    expect(await screen.findByRole("button", { name: "Research (2)" })).toBeDefined()
+  })
+
+  it("a cancelled import dialog is a successful no-op", async () => {
+    archiveImportOutcome = { status: "cancelled" }
+    const user = userEvent.setup()
+    render(<App />)
+    const before = archiveImportRequests
+    await user.click(await screen.findByRole("button", { name: "Import Archive" }))
+    await waitFor(() => expect(archiveImportRequests).toBe(before + 1))
+    expect(screen.queryByRole("button", { name: /Research \(2\)/ })).toBeNull()
+  })
+
+  it("reports a failed archive import without adopting a snapshot", async () => {
+    archiveImportOutcome = { status: "failed", message: "The archive is not valid JSON." }
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(await screen.findByRole("button", { name: "Import Archive" }))
+    await waitFor(() => expect(archiveImportRequests).toBe(1))
+    expect(await screen.findByText(/The archive is not valid JSON/)).toBeDefined()
   })
 
   it("renders committed Markdown without enabling raw HTML", async () => {
