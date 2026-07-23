@@ -47,6 +47,7 @@ const snapshot: WorkspaceSnapshot = {
     },
   ],
   relationships: [],
+  pendingSyntheses: [],
   activeWorkspaceId: "w",
   undoableCommands: 0,
 }

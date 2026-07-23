@@ -2,6 +2,7 @@ mod cloud;
 mod enrichment;
 mod ollama;
 mod secrets;
+mod synthesis;
 mod thinking_graph;
 mod workspace;
 
@@ -601,6 +602,355 @@ async fn enrich_note(
     }
 }
 
+/// What one Synthesis attempt reports back. Every variant carries the
+/// snapshot the UI should render next, so a refused attempt still leaves
+/// the thinker looking at current durable state.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum SynthesisCommandOutcome {
+    /// A valid, novel result is now pending. It is not a Note.
+    Proposed {
+        synthesis: workspace::PendingSynthesis,
+        snapshot: WorkspaceSnapshot,
+    },
+    /// The attempt ran and produced nothing to propose — either the model
+    /// returned `found: false`, or the result repeated one the Workspace
+    /// has already seen. This is a success: the checkpoint and the cooldown
+    /// move, and the UI shows no error.
+    NoInsight { snapshot: WorkspaceSnapshot },
+    /// The attempt did not run. Every reason is an ordinary state, not a
+    /// failure, and a Manual Workspace always lands here.
+    Ineligible {
+        reason: synthesis::IneligibleReason,
+        message: String,
+        snapshot: WorkspaceSnapshot,
+    },
+    /// A source Note changed, was deleted, or left the Workspace while the
+    /// request was in flight. Nothing is stored.
+    Stale { reason: String, snapshot: WorkspaceSnapshot },
+    InvalidSchema { reason: String, snapshot: WorkspaceSnapshot },
+    ProviderFailed {
+        code: EnrichmentFailureCode,
+        message: String,
+        snapshot: WorkspaceSnapshot,
+    },
+    Unavailable { reason: String, snapshot: WorkspaceSnapshot },
+}
+
+/// Runs one bounded Synthesis attempt for one Thinking Workspace.
+///
+/// The shape mirrors `enrich_note`: decide everything against a snapshot
+/// taken under the lock, release the lock for the provider call, then
+/// re-check and commit. Nothing here mutates a source Note on any path.
+#[tauri::command]
+async fn propose_synthesis(
+    workspace_id: String,
+    state: State<'_, AppState>,
+) -> Result<SynthesisCommandOutcome, String> {
+    let (request, snapshot) = {
+        let storage = state.storage.lock().expect("workspace lock poisoned");
+        let store = match storage.as_ref() {
+            Ok(store) => store,
+            Err(failure) => {
+                return Ok(SynthesisCommandOutcome::Unavailable {
+                    reason: failure.message.clone(),
+                    snapshot: WorkspaceSnapshot::default_unavailable(),
+                });
+            }
+        };
+        let snapshot = match store.snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                return Ok(SynthesisCommandOutcome::Unavailable {
+                    reason: error.to_string(),
+                    snapshot: WorkspaceSnapshot::default_unavailable(),
+                });
+            }
+        };
+        let workspace = match snapshot
+            .workspaces()
+            .iter()
+            .find(|candidate| candidate.id() == workspace_id)
+        {
+            Some(workspace) => workspace.clone(),
+            None => {
+                return Ok(SynthesisCommandOutcome::Unavailable {
+                    reason: "The Thinking Workspace no longer exists.".to_owned(),
+                    snapshot,
+                });
+            }
+        };
+        // A Manual Workspace never requests a Synthesis, and neither does
+        // one whose Cloud consent or model selection is incomplete.
+        let endpoint = match workspace.assistance_policy() {
+            AssistancePolicy::Manual => None,
+            AssistancePolicy::LocalAi => Some(OLLAMA_LOCAL_BASE_URL.to_owned()),
+            AssistancePolicy::CloudAi => workspace
+                .cloud_consent_at()
+                .map(|_| OLLAMA_CLOUD_BASE_URL.to_owned()),
+        };
+        let assistance_enabled = endpoint.is_some() && workspace.selected_model().is_some();
+        let input = match store.synthesis_eligibility_input(
+            &workspace_id,
+            assistance_enabled,
+            &now_rfc3339(),
+        ) {
+            Ok(input) => input,
+            Err(error) => {
+                return Ok(SynthesisCommandOutcome::Unavailable {
+                    reason: error.to_string(),
+                    snapshot,
+                });
+            }
+        };
+        if let synthesis::Eligibility::Ineligible { reason } =
+            synthesis::evaluate_eligibility(&input)
+        {
+            return Ok(SynthesisCommandOutcome::Ineligible {
+                reason,
+                message: reason.message().to_owned(),
+                snapshot,
+            });
+        }
+        // Both were proved present by the eligibility gate above.
+        let endpoint = endpoint.unwrap_or_default();
+        let model = workspace.selected_model().unwrap_or_default().to_owned();
+        let workspace_notes: Vec<&workspace::Note> = snapshot
+            .notes
+            .iter()
+            .filter(|note| note.workspace_id() == workspace_id)
+            .collect();
+        let candidates = synthesis::select_synthesis_candidates(&workspace_notes);
+        if candidates.len() < synthesis::MIN_CANDIDATES {
+            let reason = synthesis::IneligibleReason::TooFewOrganizedNotes;
+            return Ok(SynthesisCommandOutcome::Ineligible {
+                reason,
+                message: reason.message().to_owned(),
+                snapshot,
+            });
+        }
+        let sources = candidates
+            .iter()
+            .filter_map(|candidate| {
+                workspace_notes
+                    .iter()
+                    .find(|note| note.id() == candidate.id)
+                    .map(|note| synthesis::SourceRevision {
+                        note_id: candidate.id.clone(),
+                        revision: note.enrichment_revision(),
+                    })
+            })
+            .collect();
+        let existing_labels = workspace_label_names(&workspace_notes);
+        let previous_syntheses = store
+            .previous_synthesis_texts(&workspace_id)
+            .unwrap_or_default();
+        let request = synthesis::SynthesisRequest {
+            token: synthesis::SynthesisRequestToken {
+                workspace_id: workspace_id.clone(),
+                policy: workspace.assistance_policy().as_str().to_owned(),
+                endpoint,
+                model,
+                sources,
+            },
+            candidates,
+            existing_labels,
+            previous_syntheses,
+        };
+        (request, snapshot)
+    };
+
+    let user_message = synthesis::build_user_message(&request);
+    let format = synthesis::response_schema();
+    let body = match request.token.endpoint.as_str() {
+        OLLAMA_LOCAL_BASE_URL => {
+            state
+                .local_enrichment
+                .chat(
+                    &request.token.endpoint,
+                    &request.token.model,
+                    synthesis::SYSTEM_PROMPT,
+                    &user_message,
+                    &format,
+                )
+                .await
+        }
+        OLLAMA_CLOUD_BASE_URL => {
+            let key = state
+                .keychain
+                .read(OLLAMA_CLOUD_KEYCHAIN_SERVICE, OLLAMA_CLOUD_KEYCHAIN_ACCOUNT);
+            match key {
+                KeychainOutcome::Ok(key) => {
+                    let outcome = state
+                        .cloud_enrichment
+                        .chat(
+                            &request.token.endpoint,
+                            &request.token.model,
+                            synthesis::SYSTEM_PROMPT,
+                            &user_message,
+                            &format,
+                        )
+                        .await;
+                    drop(key);
+                    outcome
+                }
+                KeychainOutcome::Failed { failure } => {
+                    return Ok(SynthesisCommandOutcome::ProviderFailed {
+                        code: EnrichmentFailureCode::Unauthenticated,
+                        message: failure.message,
+                        snapshot,
+                    });
+                }
+            }
+        }
+        _ => Err(EnrichmentFailureCode::Unavailable),
+    };
+    let candidate_ids: Vec<String> = request
+        .candidates
+        .iter()
+        .map(|candidate| candidate.id.clone())
+        .collect();
+    let outcome = match body {
+        Ok(body) => synthesis::parse_synthesis_response(
+            request.token.clone(),
+            &body,
+            &candidate_ids,
+        ),
+        Err(code) => synthesis::SynthesisOutcome::ProviderFailed {
+            token: request.token.clone(),
+            code,
+            message: "Provider call failed.".to_owned(),
+        },
+    };
+    Ok(commit_synthesis_outcome(&state, outcome, snapshot))
+}
+
+/// Applies one parsed attempt to durable state. A `found: false` result and
+/// a semantic repeat both take the same path: record the attempt, store no
+/// pending content, and report a quiet no-op.
+fn commit_synthesis_outcome(
+    state: &State<'_, AppState>,
+    outcome: synthesis::SynthesisOutcome,
+    snapshot: WorkspaceSnapshot,
+) -> SynthesisCommandOutcome {
+    let mut storage = state.storage.lock().expect("workspace lock poisoned");
+    let store = match storage.as_mut() {
+        Ok(store) => store,
+        Err(failure) => {
+            return SynthesisCommandOutcome::Unavailable {
+                reason: failure.message.clone(),
+                snapshot: WorkspaceSnapshot::default_unavailable(),
+            };
+        }
+    };
+    match outcome {
+        synthesis::SynthesisOutcome::NotFound { token } => {
+            let _ = store.record_synthesis_attempt(&token.workspace_id);
+            SynthesisCommandOutcome::NoInsight {
+                snapshot: store.snapshot().unwrap_or(snapshot),
+            }
+        }
+        synthesis::SynthesisOutcome::Proposed { token, result } => {
+            let previous = store
+                .previous_synthesis_texts(&token.workspace_id)
+                .unwrap_or_default();
+            if synthesis::is_semantic_repeat(&result.text, &previous) {
+                let _ = store.record_synthesis_attempt(&token.workspace_id);
+                return SynthesisCommandOutcome::NoInsight {
+                    snapshot: store.snapshot().unwrap_or(snapshot),
+                };
+            }
+            let sources: Vec<(String, u64)> = result
+                .source_note_ids
+                .iter()
+                .filter_map(|note_id| {
+                    token
+                        .revision_of(note_id)
+                        .map(|revision| (note_id.clone(), revision))
+                })
+                .collect();
+            if sources.len() != result.source_note_ids.len() {
+                return SynthesisCommandOutcome::InvalidSchema {
+                    reason: "The result named a Note that was not supplied.".to_owned(),
+                    snapshot,
+                };
+            }
+            match store.store_pending_synthesis(
+                &token.workspace_id,
+                &result.text,
+                &sources,
+                &result.labels,
+                &token.model,
+                &token.policy,
+            ) {
+                Ok(committed) => {
+                    let proposed = committed
+                        .pending_syntheses()
+                        .iter()
+                        .filter(|pending| pending.workspace_id == token.workspace_id)
+                        .next_back()
+                        .cloned();
+                    match proposed {
+                        Some(synthesis) => SynthesisCommandOutcome::Proposed {
+                            synthesis,
+                            snapshot: committed,
+                        },
+                        None => SynthesisCommandOutcome::NoInsight { snapshot: committed },
+                    }
+                }
+                Err(error) => {
+                    // A source moved during inference. Nothing is stored and
+                    // no Note is touched; the attempt simply did not land.
+                    let current = store.snapshot().unwrap_or(snapshot);
+                    SynthesisCommandOutcome::Stale {
+                        reason: error.to_string(),
+                        snapshot: current,
+                    }
+                }
+            }
+        }
+        synthesis::SynthesisOutcome::InvalidSchema { reason, .. } => {
+            SynthesisCommandOutcome::InvalidSchema { reason, snapshot }
+        }
+        synthesis::SynthesisOutcome::ProviderFailed { code, message, .. } => {
+            SynthesisCommandOutcome::ProviderFailed { code, message, snapshot }
+        }
+    }
+}
+
+/// Accepts a pending Synthesis as a fresh thesis Note.
+#[tauri::command]
+fn accept_synthesis(synthesis_id: String, state: State<'_, AppState>) -> WorkspaceCommandResult {
+    state.dispatch(|store| store.accept_synthesis_outcome(&synthesis_id))
+}
+
+/// Dismisses a pending Synthesis, keeping only its text for novelty.
+#[tauri::command]
+fn dismiss_synthesis(synthesis_id: String, state: State<'_, AppState>) -> WorkspaceCommandResult {
+    state.dispatch(|store| store.dismiss_synthesis_outcome(&synthesis_id))
+}
+
+/// The Workspace's Label vocabulary, deduplicated by display name and
+/// bounded, as the `existing_labels` block of Prompt B.
+fn workspace_label_names(notes: &[&workspace::Note]) -> Vec<String> {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut names = Vec::new();
+    for note in notes {
+        for label in note.labels() {
+            if seen.insert(label.name().to_lowercase()) {
+                names.push(label.name().to_owned());
+            }
+        }
+    }
+    names
+}
+
+/// The current moment, in the same fixed-width UTC shape the durable layer
+/// writes, so cooldown comparisons never mix formats.
+fn now_rfc3339() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+}
+
 impl WorkspaceSnapshot {
     /// A placeholder used by the Enrichment Workflow when the durable
     /// store itself is unavailable. The UI treats this as a hard error
@@ -611,6 +961,7 @@ impl WorkspaceSnapshot {
             workspaces: vec![],
             notes: vec![],
             relationships: vec![],
+            pending_syntheses: vec![],
             active_workspace_id: String::new(),
             undoable_commands: 0,
         }
@@ -733,7 +1084,10 @@ pub fn run() {
             delete_cloud_api_key,
             retry_storage_open,
             quit_application,
-            enrich_note
+            enrich_note,
+            propose_synthesis,
+            accept_synthesis,
+            dismiss_synthesis
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nodepad");

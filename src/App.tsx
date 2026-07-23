@@ -24,6 +24,9 @@ import { StorageRecovery } from "./storage-recovery"
 import { AssistanceSection, CloudConsentDialog } from "./assistance-section"
 import { useLocalDiscovery } from "./use-local-discovery"
 import { useEnrichmentController } from "./enrichment-controller"
+import { useSynthesisController } from "./synthesis-controller"
+import { SynthesisSection } from "./synthesis-section"
+import { acceptSynthesis, dismissSynthesis } from "./synthesis-contracts"
 import { useCloudDiscovery } from "./use-cloud-discovery"
 
 export function App() {
@@ -78,6 +81,27 @@ export function App() {
       activeWorkspace?.assistancePolicy === "cloud_ai",
   })
 
+  // Whether this Workspace may make an AI call at all. Manual Workspaces
+  // never enrich a Note and never request a Synthesis.
+  const aiEnabled =
+    activeWorkspace?.assistancePolicy === "local_ai" ||
+    activeWorkspace?.assistancePolicy === "cloud_ai"
+  // Synthesis eligibility, the cooldown, and the pending cap are decided in
+  // Rust against durable state; the controller only schedules the attempt
+  // and reports what came back.
+  const synthesis = useSynthesisController({
+    workspaceId: activeWorkspace?.id ?? "",
+    enabled: Boolean(aiEnabled),
+    onSnapshot: (next) => void submit(Promise.resolve({ status: "committed", snapshot: next })),
+  })
+  const pendingSyntheses = useMemo(
+    () =>
+      (snapshot?.pendingSyntheses ?? []).filter(
+        (pending) => pending.workspaceId === activeWorkspace?.id,
+      ),
+    [snapshot, activeWorkspace?.id],
+  )
+
   const cardContext: NoteCardContext = { graph, workspaces }
 
   // One set of Note intents, built once and handed to every card, so a layout
@@ -88,7 +112,13 @@ export function App() {
     submit,
     focusNote: focus.focusNote,
     startLabelRename: (label) => setRenameLabelDraft({ id: label.id, name: label.name }),
-    onNoteTextSaved: (noteId) => enrichment.schedule(noteId),
+    onNoteTextSaved: (noteId) => {
+      enrichment.schedule(noteId)
+      // Editing a Note changes the material a Synthesis would rest on, so
+      // the next attempt is scheduled here too. Rust refuses it unless the
+      // Workspace has actually grown and the cooldown has passed.
+      synthesis.schedule()
+    },
     onRetryEnrichment: () => enrichment.retry(),
     onRequestReplaceEnrichment: () => enrichment.requestReplace(),
     onConfirmReplaceEnrichment: () => enrichment.confirmReplace(),
@@ -150,6 +180,7 @@ export function App() {
         .filter((candidate) => candidate.workspaceId === activeWorkspace.id)
         .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
       if (newest) enrichment.schedule(newest.id)
+      synthesis.schedule()
     })
   }
 
@@ -314,6 +345,16 @@ export function App() {
         onChooseView={setView}
         onUndo={undoLastChange}
         card={noteCard}
+        pendingSyntheses={pendingSyntheses}
+      />
+
+      <SynthesisSection
+        pending={pendingSyntheses}
+        notes={notes}
+        status={synthesis.status}
+        aiEnabled={Boolean(aiEnabled)}
+        onAccept={(synthesisId) => void submit(acceptSynthesis(synthesisId))}
+        onDismiss={(synthesisId) => void submit(dismissSynthesis(synthesisId))}
       />
       {renameLabelDraft && <section role="dialog" aria-label="Rename Label"><form onSubmit={saveRenamedLabel}><label htmlFor="rename-label">Label name</label><input autoFocus id="rename-label" value={renameLabelDraft.name} onChange={(event) => setRenameLabelDraft({ ...renameLabelDraft, name: event.target.value })} /><button type="submit">Save Label name</button><button type="button" onClick={() => setRenameLabelDraft(null)}>Cancel</button></form></section>}
 

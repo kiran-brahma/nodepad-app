@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import type { Note } from "./workspace-client"
+import type { Note, PendingSynthesis } from "./workspace-client"
 import { noteViewLabel, NOTE_VIEWS, type NoteView } from "./note-views"
 import { TilingView } from "./tiling-view"
 import { KanbanView } from "./kanban-view"
@@ -22,6 +22,7 @@ export function CommittedNotesSection({
   onChooseView,
   onUndo,
   card,
+  pendingSyntheses,
 }: {
   notes: Note[]
   /** The whole Thinking Graph of the active Workspace, which no search narrows. */
@@ -33,6 +34,9 @@ export function CommittedNotesSection({
   onChooseView: (view: NoteView) => void
   onUndo: () => void
   card: (note: Note) => ReactNode
+  /** Undecided Syntheses, drawn provisionally by the graph and by nothing
+   *  else. They are not Notes, so no other view arranges them. */
+  pendingSyntheses: PendingSynthesis[]
 }) {
   return (
     <section aria-label="Committed Notes">
@@ -64,7 +68,7 @@ export function CommittedNotesSection({
       {/* The graph shows the Thinking Graph of the whole active Workspace, so
           it reads the projection rather than the searched-narrowed result. */}
       {view === "graph" ? (
-        <GraphView graph={graph} focus={focus} card={card} />
+        <GraphView graph={graph} focus={focus} card={card} pendingSyntheses={pendingSyntheses} />
       ) : notes.length === 0 ? (
         <p>{searching ? "No Notes match this search." : "No Notes yet."}</p>
       ) : view === "tiling" ? (
