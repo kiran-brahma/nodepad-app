@@ -12,12 +12,16 @@ const workspaces: ThinkingWorkspace[] = [
   {
     id: "workspace-1",
     name: "Research",
+    assistancePolicy: "manual",
+    selectedModel: null,
     createdAt: "2026-07-22T09:00:00+00:00",
     updatedAt: "2026-07-22T09:00:00+00:00",
   },
   {
     id: "workspace-2",
     name: "Reading",
+    assistancePolicy: "manual",
+    selectedModel: null,
     createdAt: "2026-07-22T09:01:00+00:00",
     updatedAt: "2026-07-22T09:01:00+00:00",
   },

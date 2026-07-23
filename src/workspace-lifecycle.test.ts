@@ -9,6 +9,8 @@ import {
 const workspace: ThinkingWorkspace = {
   id: "workspace-1",
   name: "Rêverie 🧠",
+  assistancePolicy: "manual",
+  selectedModel: null,
   createdAt: "2026-07-22T10:00:00+00:00",
   updatedAt: "2026-07-22T10:00:00+00:00",
 }

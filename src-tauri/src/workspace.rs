@@ -44,8 +44,40 @@ const MAX_REVERSIBLE_COMMANDS: usize = 20;
 pub struct ThinkingWorkspace {
     id: String,
     name: String,
+    assistance_policy: AssistancePolicy,
+    selected_model: Option<String>,
     created_at: String,
     updated_at: String,
+}
+
+/// The per-Workspace choice that governs whether organization is Manual,
+/// uses a local Ollama host, or may use Ollama Cloud after explicit consent.
+/// Cloud AI is admitted as a durable value now so the next slice can add
+/// behavior without changing what an existing row means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssistancePolicy {
+    Manual,
+    LocalAi,
+    CloudAi,
+}
+
+impl AssistancePolicy {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::LocalAi => "local_ai",
+            Self::CloudAi => "cloud_ai",
+        }
+    }
+
+    fn from_str(value: &str) -> Self {
+        match value {
+            "local_ai" => Self::LocalAi,
+            "cloud_ai" => Self::CloudAi,
+            _ => Self::Manual,
+        }
+    }
 }
 
 /// Who last decided a value. Manual authorship is durable so a later AI slice
@@ -300,6 +332,8 @@ pub(crate) enum WorkspaceError {
     AnnotationTooLong,
     #[error("That is not a Note Type Nodepad recognizes.")]
     UnknownNoteType,
+    #[error("That is not an Assistance Policy Nodepad recognizes.")]
+    UnknownAssistancePolicy,
     #[error("A Label needs one to four words and may not exceed {MAX_LABEL_NAME_SCALARS} characters.")]
     InvalidLabelName,
     #[error("That Label no longer exists.")]
@@ -328,6 +362,7 @@ impl WorkspaceError {
             | Self::EmptyNote
             | Self::AnnotationTooLong
             | Self::UnknownNoteType
+            | Self::UnknownAssistancePolicy
             | Self::InvalidLabelName
             | Self::SelfRelationship
             | Self::CrossWorkspaceRelationship
@@ -634,6 +669,24 @@ pub trait ThinkingWorkspaceInterface {
         self.snapshot()
     }
 
+    /// Changes the Assistance Policy of one Thinking Workspace. Switching to
+    /// Manual stops future provider calls; the UI is responsible for ignoring
+    /// any in-flight discovery responses that arrive afterwards.
+    fn set_assistance_policy(
+        &mut self,
+        workspace_id: &str,
+        policy: AssistancePolicy,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError>;
+
+    /// Records the chosen model identifier for one Thinking Workspace. The
+    /// identifier is opaque to Nodepad; validation against the current list
+    /// is a UI concern.
+    fn set_selected_model(
+        &mut self,
+        workspace_id: &str,
+        model_id: Option<&str>,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError>;
+
     fn snapshot_outcome(&self) -> WorkspaceCommandResult {
         outcome(self.snapshot())
     }
@@ -649,6 +702,26 @@ pub trait ThinkingWorkspaceInterface {
         name: &str,
     ) -> WorkspaceCommandResult {
         outcome(self.rename_workspace(workspace_id, name))
+    }
+    fn set_assistance_policy_outcome(
+        &mut self,
+        workspace_id: &str,
+        policy: &str,
+    ) -> WorkspaceCommandResult {
+        let policy = match policy {
+            "manual" => AssistancePolicy::Manual,
+            "local_ai" => AssistancePolicy::LocalAi,
+            "cloud_ai" => AssistancePolicy::CloudAi,
+            _ => return outcome(Err(WorkspaceError::UnknownAssistancePolicy)),
+        };
+        outcome(self.set_assistance_policy(workspace_id, policy))
+    }
+    fn set_selected_model_outcome(
+        &mut self,
+        workspace_id: &str,
+        model_id: Option<&str>,
+    ) -> WorkspaceCommandResult {
+        outcome(self.set_selected_model(workspace_id, model_id))
     }
     fn delete_workspace_outcome(&mut self, workspace_id: &str) -> WorkspaceCommandResult {
         outcome(self.delete_workspace(workspace_id))
@@ -820,8 +893,8 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
             .transaction()
             .map_err(WorkspaceError::Storage)?;
         transaction.execute(
-            "INSERT INTO thinking_workspaces (id, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
-            params![workspace_id, name, now],
+            "INSERT INTO thinking_workspaces (id, name, assistance_policy, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+            params![workspace_id, name, AssistancePolicy::Manual.as_str(), now],
         ).map_err(WorkspaceError::Storage)?;
         write_active_workspace_id(&transaction, &workspace_id)?;
         transaction.commit().map_err(WorkspaceError::Storage)?;
@@ -857,6 +930,46 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
             .execute(
                 "UPDATE thinking_workspaces SET name = ?2, updated_at = ?3 WHERE id = ?1",
                 params![workspace_id, name, timestamp()],
+            )
+            .map_err(WorkspaceError::Storage)?;
+        transaction.commit().map_err(WorkspaceError::Storage)?;
+        self.snapshot()
+    }
+
+    fn set_assistance_policy(
+        &mut self,
+        workspace_id: &str,
+        policy: AssistancePolicy,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        require_workspace(&read_workspaces(&self.connection)?, workspace_id)?;
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(WorkspaceError::Storage)?;
+        transaction
+            .execute(
+                "UPDATE thinking_workspaces SET assistance_policy = ?2, updated_at = ?3 WHERE id = ?1",
+                params![workspace_id, policy.as_str(), timestamp()],
+            )
+            .map_err(WorkspaceError::Storage)?;
+        transaction.commit().map_err(WorkspaceError::Storage)?;
+        self.snapshot()
+    }
+
+    fn set_selected_model(
+        &mut self,
+        workspace_id: &str,
+        model_id: Option<&str>,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        require_workspace(&read_workspaces(&self.connection)?, workspace_id)?;
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(WorkspaceError::Storage)?;
+        transaction
+            .execute(
+                "UPDATE thinking_workspaces SET selected_model = ?2, updated_at = ?3 WHERE id = ?1",
+                params![workspace_id, model_id, timestamp()],
             )
             .map_err(WorkspaceError::Storage)?;
         transaction.commit().map_err(WorkspaceError::Storage)?;
@@ -1245,6 +1358,7 @@ fn migrate(connection: &mut Connection) -> Result<(), WorkspaceError> {
         (3_i64, include_str!("../migrations/0003_note_controls.sql")),
         (4_i64, include_str!("../migrations/0004_labels_and_search.sql")),
         (5_i64, include_str!("../migrations/0005_relationships.sql")),
+        (6_i64, include_str!("../migrations/0006_assistance_policy.sql")),
     ];
     for (version, sql) in migrations {
         let transaction = connection.transaction().map_err(WorkspaceError::Storage)?;
@@ -1275,15 +1389,17 @@ fn migrate(connection: &mut Connection) -> Result<(), WorkspaceError> {
 fn read_workspaces(connection: &Connection) -> Result<Vec<ThinkingWorkspace>, WorkspaceError> {
     connection
         .prepare(
-            "SELECT id, name, created_at, updated_at FROM thinking_workspaces ORDER BY created_at",
+            "SELECT id, name, assistance_policy, selected_model, created_at, updated_at FROM thinking_workspaces ORDER BY created_at",
         )
         .map_err(WorkspaceError::Storage)?
         .query_map([], |row| {
             Ok(ThinkingWorkspace {
                 id: row.get(0)?,
                 name: row.get(1)?,
-                created_at: row.get(2)?,
-                updated_at: row.get(3)?,
+                assistance_policy: AssistancePolicy::from_str(&row.get::<_, String>(2)?),
+                selected_model: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
             })
         })
         .map_err(WorkspaceError::Storage)?
@@ -1564,11 +1680,43 @@ mod tests {
             let workspace = ThinkingWorkspace {
                 id: id(),
                 name,
+                assistance_policy: AssistancePolicy::Manual,
+                selected_model: None,
                 created_at: now.clone(),
                 updated_at: now,
             };
             self.active_workspace_id = workspace.id.clone();
             self.workspaces.push(workspace);
+            self.snapshot()
+        }
+
+        fn set_assistance_policy(
+            &mut self,
+            workspace_id: &str,
+            policy: AssistancePolicy,
+        ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+            require_workspace(&self.workspaces, workspace_id)?;
+            for workspace in self.workspaces.iter_mut() {
+                if workspace.id == workspace_id {
+                    workspace.assistance_policy = policy;
+                    workspace.updated_at = timestamp();
+                }
+            }
+            self.snapshot()
+        }
+
+        fn set_selected_model(
+            &mut self,
+            workspace_id: &str,
+            model_id: Option<&str>,
+        ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+            require_workspace(&self.workspaces, workspace_id)?;
+            for workspace in self.workspaces.iter_mut() {
+                if workspace.id == workspace_id {
+                    workspace.selected_model = model_id.map(|s| s.to_owned());
+                    workspace.updated_at = timestamp();
+                }
+            }
             self.snapshot()
         }
 
@@ -3085,5 +3233,87 @@ mod tests {
         );
         drop(connection);
         remove_database(&path);
+    }
+
+    #[test]
+    fn new_workspace_defaults_to_manual_assistance_policy() {
+        let path = temporary_path();
+        let mut store = WorkspaceStore::open(&path).unwrap();
+        let snapshot = committed(store.create_workspace_outcome("Fresh"));
+        let workspace = snapshot.workspaces.iter().find(|w| w.name == "Fresh").unwrap();
+        assert_eq!(workspace.assistance_policy, AssistancePolicy::Manual);
+        assert!(workspace.selected_model.is_none());
+        remove_database(&path);
+    }
+
+    #[test]
+    fn assistance_policy_and_selected_model_survive_reopen() {
+        let path = temporary_path();
+        let workspace_id = {
+            let mut store = WorkspaceStore::open(&path).unwrap();
+            let snapshot = committed(store.create_workspace_outcome("Assisted"));
+            let id = workspace_id_named(&snapshot, "Assisted");
+            committed(store.set_assistance_policy_outcome(&id, "local_ai"));
+            committed(store.set_selected_model_outcome(&id, Some("some/vendor/model:tag")));
+            id
+        };
+
+        let store = WorkspaceStore::open(&path).unwrap();
+        let snapshot = committed(store.snapshot_outcome());
+        let workspace = snapshot
+            .workspaces
+            .iter()
+            .find(|w| w.id == workspace_id)
+            .unwrap();
+        assert_eq!(workspace.assistance_policy, AssistancePolicy::LocalAi);
+        assert_eq!(
+            workspace.selected_model.as_deref(),
+            Some("some/vendor/model:tag")
+        );
+        remove_database(&path);
+    }
+
+    #[test]
+    fn memory_adapter_persists_assistance_policy_and_selected_model() {
+        let mut store = MemoryStore::new();
+        let snapshot = committed(store.create_workspace_outcome("Assisted"));
+        let id = workspace_id_named(&snapshot, "Assisted");
+        let with_policy = committed(store.set_assistance_policy_outcome(&id, "local_ai"));
+        assert_eq!(
+            with_policy
+                .workspaces
+                .iter()
+                .find(|w| w.id == id)
+                .unwrap()
+                .assistance_policy,
+            AssistancePolicy::LocalAi
+        );
+        let with_model = committed(store.set_selected_model_outcome(&id,
+            Some("unicode-先生-7b:latest"),
+        ));
+        assert_eq!(
+            with_model
+                .workspaces
+                .iter()
+                .find(|w| w.id == id)
+                .unwrap()
+                .selected_model
+                .as_deref(),
+            Some("unicode-先生-7b:latest")
+        );
+    }
+
+    #[test]
+    fn setting_assistance_policy_on_missing_workspace_fails() {
+        let mut store = MemoryStore::new();
+        assert!(matches!(
+            store.set_assistance_policy_outcome("missing", "local_ai"),
+            WorkspaceCommandResult::Failed {
+                failure: WorkspaceFailure {
+                    code: WorkspaceFailureCode::NotFound,
+                    ..
+                }
+            }
+        ));
     }
 }
