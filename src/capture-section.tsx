@@ -20,6 +20,8 @@ export function CaptureSection({
   onNoteMarkdownChange,
   onCreateNote,
   onExport,
+  onExportArchive,
+  onImportArchive,
 }: {
   activeWorkspace: ThinkingWorkspace | undefined
   renameDraft: { id: string; name: string } | null
@@ -34,6 +36,8 @@ export function CaptureSection({
   onNoteMarkdownChange: (markdown: string) => void
   onCreateNote: (event: FormEvent) => void
   onExport: () => void
+  onExportArchive: () => void
+  onImportArchive: () => void
 }) {
   return (
     <section className="capture">
@@ -43,6 +47,8 @@ export function CaptureSection({
           <div className="row">
             <button onClick={() => onStartRename(activeWorkspace)}>Rename</button>
             <button onClick={onExport}>Export Markdown</button>
+            <button onClick={onExportArchive}>Export Archive</button>
+            <button onClick={onImportArchive}>Import Archive</button>
             <button onClick={() => onRequestDelete(activeWorkspace)}>Delete</button>
           </div>
         )}

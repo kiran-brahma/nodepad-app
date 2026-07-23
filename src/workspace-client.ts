@@ -172,6 +172,20 @@ export type MarkdownExportOutcome =
   | { status: "cancelled" }
   | { status: "failed"; message: string }
 
+/** The result of exporting one Thinking Workspace as a versioned Nodepad
+ *  archive. A cancel of the native save dialog is a successful no-op. */
+export type ArchiveExportOutcome =
+  | { status: "exported"; filename: string }
+  | { status: "cancelled" }
+  | { status: "failed"; message: string }
+
+/** The result of importing a versioned Nodepad archive. A cancel of the open
+ *  dialog is a successful no-op; a malformed archive fails closed. */
+export type ArchiveImportOutcome =
+  | { status: "imported"; snapshot: WorkspaceSnapshot }
+  | { status: "cancelled" }
+  | { status: "failed"; message: string }
+
 export type DiscoveryFailureCode =
   | "unavailable"
   | "timeout"
@@ -249,6 +263,15 @@ export const thinkingWorkspace = {
     invoke<WorkspaceOutcome>("undo_last_change", { workspaceId }),
   exportWorkspace: (workspaceId: string) =>
     invoke<MarkdownExportOutcome>("export_workspace", { workspaceId }),
+  /** Exports one Thinking Workspace as a versioned Nodepad archive whose
+   *  durable bytes carry no secrets or transient state. */
+  exportWorkspaceArchive: (workspaceId: string) =>
+    invoke<ArchiveExportOutcome>("export_workspace_archive", { workspaceId }),
+  /** Imports one validated V0 archive as a fresh Thinking Workspace. The
+   *  complete archive is validated before any durable row is touched, so a
+   *  malformed archive fails closed and changes nothing. */
+  importWorkspaceArchive: () =>
+    invoke<ArchiveImportOutcome>("import_workspace_archive"),
   /** Changes the Assistance Policy of the active Thinking Workspace. */
   setAssistancePolicy: (workspaceId: string, policy: AssistancePolicy) =>
     invoke<WorkspaceOutcome>("set_assistance_policy", { workspaceId, policy }),

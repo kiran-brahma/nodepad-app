@@ -12,15 +12,15 @@ use crate::thinking_graph::{
 
 const DEFAULT_WORKSPACE_NAME: &str = "My Thinking Workspace";
 /// Names are bounded in Unicode scalar values, never bytes or grapheme clusters.
-const MAX_WORKSPACE_NAME_SCALARS: usize = 120;
+pub(crate) const MAX_WORKSPACE_NAME_SCALARS: usize = 120;
 /// Annotations are bounded in Unicode scalar values for the same reason.
-const MAX_ANNOTATION_SCALARS: usize = 2_000;
-const MAX_LABEL_NAME_SCALARS: usize = 60;
+pub(crate) const MAX_ANNOTATION_SCALARS: usize = 2_000;
+pub(crate) const MAX_LABEL_NAME_SCALARS: usize = 60;
 const ACTIVE_WORKSPACE_PREFERENCE: &str = "active_workspace_id";
-const DEFAULT_NOTE_TYPE: &str = "general";
+pub(crate) const DEFAULT_NOTE_TYPE: &str = "general";
 /// The fixed structural classifications a Note may carry. Nothing outside this
 /// set is durable, in the schema or in the interface.
-const NOTE_TYPES: [&str; 14] = [
+pub(crate) const NOTE_TYPES: [&str; 14] = [
     "claim",
     "question",
     "task",
@@ -120,7 +120,7 @@ impl AssistancePolicy {
 /// cannot overwrite a thinker's choice silently. `Ai` is admitted as a new
 /// variant so AI-authored fields are visibly distinguishable in the UI and a
 /// later AI result may refresh them, while `Manual` always wins.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Provenance {
     Default,
@@ -157,16 +157,16 @@ impl Provenance {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Note {
-    id: String,
-    workspace_id: String,
-    markdown: String,
-    note_type: String,
-    note_type_provenance: Provenance,
-    annotation: Option<String>,
-    annotation_provenance: Provenance,
-    created_at: String,
-    updated_at: String,
-    pinned: bool,
+    pub(crate) id: String,
+    pub(crate) workspace_id: String,
+    pub(crate) markdown: String,
+    pub(crate) note_type: String,
+    pub(crate) note_type_provenance: Provenance,
+    pub(crate) annotation: Option<String>,
+    pub(crate) annotation_provenance: Provenance,
+    pub(crate) created_at: String,
+    pub(crate) updated_at: String,
+    pub(crate) pinned: bool,
     /// Bumped on every commit that touches this Note. The Enrichment
     /// Workflow captures the value at request time and refuses to apply a
     /// result that names a different revision, so an edit made during
@@ -176,7 +176,7 @@ pub struct Note {
     /// `None` means the Note has never been enriched; present means a
     /// subsequent regular enrichment may refresh AI-authored fields.
     pub(crate) last_enriched_at: Option<String>,
-    labels: Vec<Label>,
+    pub(crate) labels: Vec<Label>,
 }
 
 impl Note {
@@ -299,9 +299,9 @@ impl Note {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Label {
-    id: String,
-    workspace_id: String,
-    name: String,
+    pub(crate) id: String,
+    pub(crate) workspace_id: String,
+    pub(crate) name: String,
 }
 
 impl Label {
@@ -400,8 +400,7 @@ pub(crate) struct UndoHistory {
 
 impl UndoHistory {
     fn push(&mut self, workspace_id: &str, compensation: NoteMutation) {
-        self.commands
-            .push((workspace_id.to_owned(), compensation));
+        self.commands.push((workspace_id.to_owned(), compensation));
         // The bound is per Workspace, so only this Workspace's oldest command is
         // dropped when it overflows.
         let mut kept = 0;
@@ -431,8 +430,7 @@ impl UndoHistory {
     /// Returns a taken command to its place after a failed undo, so a storage
     /// failure never silently costs the thinker a reversible step.
     fn restore(&mut self, workspace_id: &str, compensation: NoteMutation) {
-        self.commands
-            .push((workspace_id.to_owned(), compensation));
+        self.commands.push((workspace_id.to_owned(), compensation));
     }
 
     fn clear(&mut self, workspace_id: &str) {
@@ -564,7 +562,9 @@ pub(crate) enum WorkspaceError {
     UnknownNoteType,
     #[error("That is not an Assistance Policy Nodepad recognizes.")]
     UnknownAssistancePolicy,
-    #[error("A Label needs one to four words and may not exceed {MAX_LABEL_NAME_SCALARS} characters.")]
+    #[error(
+        "A Label needs one to four words and may not exceed {MAX_LABEL_NAME_SCALARS} characters."
+    )]
     InvalidLabelName,
     #[error("That Label no longer exists.")]
     LabelNotFound,
@@ -584,7 +584,9 @@ pub(crate) enum WorkspaceError {
     StaleEnrichment,
     #[error("That Synthesis is no longer pending.")]
     SynthesisNotFound,
-    #[error("The Notes behind this Synthesis have changed. Dismiss it and let Nodepad look again.")]
+    #[error(
+        "The Notes behind this Synthesis have changed. Dismiss it and let Nodepad look again."
+    )]
     StaleSynthesis,
     #[error("Local storage could not commit this change. Please try again.")]
     Storage(#[source] rusqlite::Error),
@@ -646,11 +648,27 @@ pub trait ThinkingWorkspaceInterface {
     /// Commits exactly one Note row change, atomically.
     fn apply_note_mutation(&mut self, mutation: &NoteMutation) -> Result<(), WorkspaceError>;
     fn history(&mut self) -> &mut UndoHistory;
-    fn attach_label(&mut self, note_id: &str, name: &str) -> Result<WorkspaceSnapshot, WorkspaceError>;
-    fn detach_label(&mut self, note_id: &str, label_id: &str) -> Result<WorkspaceSnapshot, WorkspaceError>;
-    fn rename_label(&mut self, label_id: &str, name: &str) -> Result<WorkspaceSnapshot, WorkspaceError>;
+    fn attach_label(
+        &mut self,
+        note_id: &str,
+        name: &str,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError>;
+    fn detach_label(
+        &mut self,
+        note_id: &str,
+        label_id: &str,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError>;
+    fn rename_label(
+        &mut self,
+        label_id: &str,
+        name: &str,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError>;
     fn remove_label(&mut self, label_id: &str) -> Result<WorkspaceSnapshot, WorkspaceError>;
-    fn search_notes(&self, workspace_id: &str, query: &str) -> Result<Vec<SearchResult>, WorkspaceError>;
+    fn search_notes(
+        &self,
+        workspace_id: &str,
+        query: &str,
+    ) -> Result<Vec<SearchResult>, WorkspaceError>;
     /// Records one symmetric, untyped Relationship between two distinct Notes
     /// in the same Workspace, with manual provenance. Asking for a Relationship
     /// that already exists commits nothing and adds no second row.
@@ -740,7 +758,10 @@ pub trait ThinkingWorkspaceInterface {
         typed.note_type_provenance = Provenance::Manual;
         typed.updated_at = timestamp();
         typed.enrichment_revision = previous.enrichment_revision + 1;
-        self.commit_note(NoteMutation::Replace(typed), NoteMutation::Replace(previous))
+        self.commit_note(
+            NoteMutation::Replace(typed),
+            NoteMutation::Replace(previous),
+        )
     }
 
     /// Blank Annotation text clears the Annotation; both are manual authorship.
@@ -1117,7 +1138,11 @@ pub trait ThinkingWorkspaceInterface {
     fn remove_label_outcome(&mut self, label_id: &str) -> WorkspaceCommandResult {
         outcome(self.remove_label(label_id))
     }
-    fn relate_notes_outcome(&mut self, note_id: &str, other_note_id: &str) -> WorkspaceCommandResult {
+    fn relate_notes_outcome(
+        &mut self,
+        note_id: &str,
+        other_note_id: &str,
+    ) -> WorkspaceCommandResult {
         outcome(self.relate_notes(note_id, other_note_id))
     }
     fn unrelate_notes_outcome(
@@ -1147,7 +1172,9 @@ pub trait ThinkingWorkspaceInterface {
     fn search_outcome(&self, workspace_id: &str, query: &str) -> WorkspaceSearchOutcome {
         match self.search_notes(workspace_id, query) {
             Ok(results) => WorkspaceSearchOutcome::Committed { results },
-            Err(error) => WorkspaceSearchOutcome::Failed { failure: error.failure() },
+            Err(error) => WorkspaceSearchOutcome::Failed {
+                failure: error.failure(),
+            },
         }
     }
 }
@@ -1159,10 +1186,274 @@ pub struct WorkspaceStore {
 }
 
 impl WorkspaceStore {
-    pub(crate) fn markdown_export(&self, workspace_id: &str) -> Result<(String, String), WorkspaceError> {
+    pub(crate) fn markdown_export(
+        &self,
+        workspace_id: &str,
+    ) -> Result<(String, String), WorkspaceError> {
         let snapshot = self.snapshot()?;
-        let workspace = snapshot.workspaces.iter().find(|workspace| workspace.id == workspace_id).ok_or(WorkspaceError::WorkspaceNotFound)?;
-        Ok((render_markdown_export(&snapshot, workspace), crate::markdown_export::default_filename(&workspace.name)))
+        let workspace = snapshot
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.id == workspace_id)
+            .ok_or(WorkspaceError::WorkspaceNotFound)?;
+        Ok((
+            render_markdown_export(&snapshot, workspace),
+            crate::markdown_export::default_filename(&workspace.name),
+        ))
+    }
+
+    /// The durable slice one Thinking Workspace contributes to a V0 archive:
+    /// its Notes (with Labels), its full Label vocabulary, its Relationships,
+    /// its pending Syntheses with source mappings, and its bounded Synthesis
+    /// novelty history. Nothing here carries secrets, transient state, or
+    /// provider configuration; the archive module owns the envelope.
+    pub(crate) fn archive_export_data(
+        &self,
+        workspace_id: &str,
+    ) -> Result<crate::archive::ExportData, WorkspaceError> {
+        let snapshot = self.snapshot()?;
+        let workspace = snapshot
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.id == workspace_id)
+            .ok_or(WorkspaceError::WorkspaceNotFound)?
+            .clone();
+        let labels = self.workspace_labels(workspace_id)?;
+        let synthesis_history = self.synthesis_history(workspace_id)?;
+        Ok(crate::archive::ExportData {
+            workspace,
+            notes: snapshot
+                .notes
+                .into_iter()
+                .filter(|note| note.workspace_id == workspace_id)
+                .collect(),
+            labels,
+            relationships: snapshot
+                .relationships
+                .into_iter()
+                .filter(|relationship| relationship.workspace_id == workspace_id)
+                .collect(),
+            pending_syntheses: snapshot
+                .pending_syntheses
+                .into_iter()
+                .filter(|pending| pending.workspace_id == workspace_id)
+                .collect(),
+            synthesis_history,
+        })
+    }
+
+    /// Every Label row of one Thinking Workspace, including Labels that no
+    /// Note currently carries, so the archive preserves the Workspace's own
+    /// vocabulary rather than only the Labels in use.
+    fn workspace_labels(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<crate::archive::ExportLabel>, WorkspaceError> {
+        self.connection
+            .prepare("SELECT id, name FROM labels WHERE workspace_id = ?1 ORDER BY name, id")
+            .map_err(WorkspaceError::Storage)?
+            .query_map([workspace_id], |row| {
+                Ok(crate::archive::ExportLabel {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                })
+            })
+            .map_err(WorkspaceError::Storage)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(WorkspaceError::Storage)
+    }
+
+    /// The bounded novelty history one Thinking Workspace keeps, oldest to
+    /// newest, so an imported Workspace does not let the next Synthesis repeat
+    /// an insight the prior one already proposed.
+    fn synthesis_history(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<crate::archive::ExportSynthesisHistory>, WorkspaceError> {
+        self.connection
+            .prepare(
+                "SELECT text, created_at FROM synthesis_history WHERE workspace_id = ?1 ORDER BY created_at, id",
+            )
+            .map_err(WorkspaceError::Storage)?
+            .query_map([workspace_id], |row| {
+                Ok(crate::archive::ExportSynthesisHistory {
+                    text: row.get(0)?,
+                    created_at: row.get(1)?,
+                })
+            })
+            .map_err(WorkspaceError::Storage)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(WorkspaceError::Storage)
+    }
+
+    /// Imports one fully validated V0 archive as a fresh Thinking Workspace.
+    /// Every durable row is inserted in a single transaction; a failure at any
+    /// point leaves the database exactly as it was. Identities are remapped to
+    /// fresh, collision-safe ids; the imported Workspace is always Manual,
+    /// regardless of what the archive recorded. Validation has already
+    /// completed before this runs.
+    pub(crate) fn import_archive(
+        &mut self,
+        archive: &crate::archive::Archive,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        let existing_names = self
+            .connection
+            .prepare("SELECT name FROM thinking_workspaces")
+            .map_err(WorkspaceError::Storage)?
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(WorkspaceError::Storage)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(WorkspaceError::Storage)?;
+        let name = crate::archive::collision_safe_name(&archive.workspace.name, &existing_names);
+        let workspace_id = id();
+        let now = timestamp();
+
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(WorkspaceError::Storage)?;
+        transaction
+            .execute(
+                "INSERT INTO thinking_workspaces (id, name, assistance_policy, selected_model, cloud_consent_at, created_at, updated_at) VALUES (?1, ?2, 'manual', NULL, NULL, ?3, ?4)",
+                params![
+                    workspace_id,
+                    name,
+                    archive.workspace.created_at,
+                    archive.workspace.updated_at,
+                ],
+            )
+            .map_err(WorkspaceError::Storage)?;
+
+        // Labels first: Notes and note_labels both reference them.
+        let mut label_id_map: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for label in &archive.workspace.labels {
+            let (name, canonical_name) = validated_label_name(&label.name)?;
+            let fresh = id();
+            label_id_map.insert(label.id.clone(), fresh.clone());
+            transaction
+                .execute(
+                    "INSERT INTO labels (id, workspace_id, name, canonical_name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+                    params![fresh, workspace_id, name, canonical_name, now],
+                )
+                .map_err(WorkspaceError::Storage)?;
+        }
+
+        let mut note_id_map: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        let mut note_revision_map: std::collections::HashMap<String, u64> =
+            std::collections::HashMap::new();
+        for note in &archive.workspace.notes {
+            let markdown = validated_markdown(&note.markdown)?;
+            let note_type = validated_note_type(&note.note_type)?;
+            let annotation = validated_annotation(note.annotation.as_deref().unwrap_or_default())?;
+            let fresh = id();
+            note_id_map.insert(note.id.clone(), fresh.clone());
+            note_revision_map.insert(note.id.clone(), note.enrichment_revision);
+            transaction
+                .execute(
+                    "INSERT INTO notes (id, workspace_id, markdown, note_type, note_type_provenance, annotation, annotation_provenance, created_at, updated_at, pinned, enrichment_revision, last_enriched_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                    params![
+                        fresh,
+                        workspace_id,
+                        markdown,
+                        note_type,
+                        note.note_type_provenance.as_str(),
+                        annotation,
+                        note.annotation_provenance.as_str(),
+                        note.created_at,
+                        note.updated_at,
+                        i64::from(note.pinned),
+                        note.enrichment_revision as i64,
+                        note.last_enriched_at,
+                    ],
+                )
+                .map_err(WorkspaceError::Storage)?;
+            for label_id in &note.label_ids {
+                let mapped = label_id_map
+                    .get(label_id)
+                    .ok_or(WorkspaceError::LabelNotFound)?;
+                transaction
+                    .execute(
+                        "INSERT OR IGNORE INTO note_labels (note_id, label_id) VALUES (?1, ?2)",
+                        params![fresh, mapped],
+                    )
+                    .map_err(WorkspaceError::Storage)?;
+            }
+        }
+
+        for relationship in &archive.workspace.relationships {
+            let mapped_a = note_id_map
+                .get(&relationship.note_id_a)
+                .ok_or(WorkspaceError::NoteNotFound)?;
+            let mapped_b = note_id_map
+                .get(&relationship.note_id_b)
+                .ok_or(WorkspaceError::NoteNotFound)?;
+            let (note_id_a, note_id_b) = crate::thinking_graph::canonical_pair(mapped_a, mapped_b);
+            transaction
+                .execute(
+                    "INSERT INTO relationships (id, workspace_id, note_id_a, note_id_b, provenance, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        id(),
+                        workspace_id,
+                        note_id_a,
+                        note_id_b,
+                        relationship.provenance.as_str(),
+                        relationship.created_at,
+                    ],
+                )
+                .map_err(WorkspaceError::Storage)?;
+        }
+
+        for synthesis in &archive.workspace.pending_syntheses {
+            let synthesis_id = id();
+            transaction
+                .execute(
+                    "INSERT INTO pending_syntheses (id, workspace_id, text, model, policy, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        synthesis_id,
+                        workspace_id,
+                        synthesis.text,
+                        synthesis.model,
+                        synthesis.policy.as_str(),
+                        synthesis.created_at,
+                    ],
+                )
+                .map_err(WorkspaceError::Storage)?;
+            for (position, source_id) in synthesis.source_note_ids.iter().enumerate() {
+                let mapped = note_id_map
+                    .get(source_id)
+                    .ok_or(WorkspaceError::NoteNotFound)?;
+                let revision = note_revision_map.get(source_id).copied().unwrap_or(0) as i64;
+                transaction
+                    .execute(
+                        "INSERT INTO pending_synthesis_sources (synthesis_id, note_id, note_revision, position) VALUES (?1, ?2, ?3, ?4)",
+                        params![synthesis_id, mapped, revision, position as i64],
+                    )
+                    .map_err(WorkspaceError::Storage)?;
+            }
+            for (position, label) in synthesis.labels.iter().enumerate() {
+                transaction
+                    .execute(
+                        "INSERT INTO pending_synthesis_labels (synthesis_id, name, position) VALUES (?1, ?2, ?3)",
+                        params![synthesis_id, label, position as i64],
+                    )
+                    .map_err(WorkspaceError::Storage)?;
+            }
+        }
+
+        for history in &archive.workspace.synthesis_history {
+            transaction
+                .execute(
+                    "INSERT INTO synthesis_history (id, workspace_id, text, created_at) VALUES (?1, ?2, ?3, ?4)",
+                    params![id(), workspace_id, history.text, history.created_at],
+                )
+                .map_err(WorkspaceError::Storage)?;
+        }
+
+        refresh_workspace_search(&transaction, &workspace_id)?;
+        transaction.commit().map_err(WorkspaceError::Storage)?;
+        self.snapshot()
     }
     /// Opens durable storage. A failure never resets, deletes, or overwrites an
     /// existing database; it reports the category so recovery can retry or quit.
@@ -1284,7 +1575,12 @@ impl WorkspaceStore {
     /// would ask forever.
     pub fn record_synthesis_attempt(&mut self, workspace_id: &str) -> Result<(), WorkspaceError> {
         let checkpoint = self.organized_note_count(workspace_id)?;
-        write_synthesis_attempt(&self.connection, workspace_id, &timestamp(), Some(checkpoint))
+        write_synthesis_attempt(
+            &self.connection,
+            workspace_id,
+            &timestamp(),
+            Some(checkpoint),
+        )
     }
 
     /// Records that an attempt failed before it could decide anything — a
@@ -1455,7 +1751,8 @@ impl WorkspaceStore {
         // Undo removes the accepted Note. The Synthesis itself is not
         // restored: it is provisional content, and the novelty history
         // already remembers its text.
-        self.history.push(&workspace_id, NoteMutation::Delete { note_id });
+        self.history
+            .push(&workspace_id, NoteMutation::Delete { note_id });
         self.snapshot()
     }
 
@@ -1680,7 +1977,10 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
             }
         };
         transaction
-            .execute("DELETE FROM note_search WHERE workspace_id = ?1", [workspace_id])
+            .execute(
+                "DELETE FROM note_search WHERE workspace_id = ?1",
+                [workspace_id],
+            )
             .map_err(WorkspaceError::Storage)?;
         write_active_workspace_id(&transaction, &next_active)?;
         transaction.commit().map_err(WorkspaceError::Storage)?;
@@ -1782,26 +2082,60 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
         transaction.commit().map_err(WorkspaceError::Storage)
     }
 
-    fn attach_label(&mut self, note_id: &str, name: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
+    fn attach_label(
+        &mut self,
+        note_id: &str,
+        name: &str,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
         let note = self.note(note_id)?;
         let (name, canonical_name) = validated_label_name(name)?;
-        let transaction = self.connection.transaction().map_err(WorkspaceError::Storage)?;
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(WorkspaceError::Storage)?;
         let label_id = label_id_for(&transaction, &note.workspace_id, &name, &canonical_name)?;
-        let inserted = transaction.execute("INSERT OR IGNORE INTO note_labels (note_id, label_id) VALUES (?1, ?2)", params![note_id, label_id]).map_err(WorkspaceError::Storage)?;
+        let inserted = transaction
+            .execute(
+                "INSERT OR IGNORE INTO note_labels (note_id, label_id) VALUES (?1, ?2)",
+                params![note_id, label_id],
+            )
+            .map_err(WorkspaceError::Storage)?;
         if inserted > 0 {
-            transaction.execute("UPDATE notes SET enrichment_revision = enrichment_revision + 1 WHERE id = ?1", [note_id]).map_err(WorkspaceError::Storage)?;
+            transaction
+                .execute(
+                    "UPDATE notes SET enrichment_revision = enrichment_revision + 1 WHERE id = ?1",
+                    [note_id],
+                )
+                .map_err(WorkspaceError::Storage)?;
         }
         refresh_workspace_search(&transaction, &note.workspace_id)?;
         transaction.commit().map_err(WorkspaceError::Storage)?;
         self.snapshot()
     }
 
-    fn detach_label(&mut self, note_id: &str, label_id: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
+    fn detach_label(
+        &mut self,
+        note_id: &str,
+        label_id: &str,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
         let note = self.note(note_id)?;
-        let transaction = self.connection.transaction().map_err(WorkspaceError::Storage)?;
-        let removed = transaction.execute("DELETE FROM note_labels WHERE note_id = ?1 AND label_id = ?2", params![note_id, label_id]).map_err(WorkspaceError::Storage)?;
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(WorkspaceError::Storage)?;
+        let removed = transaction
+            .execute(
+                "DELETE FROM note_labels WHERE note_id = ?1 AND label_id = ?2",
+                params![note_id, label_id],
+            )
+            .map_err(WorkspaceError::Storage)?;
         if removed > 0 {
-            transaction.execute("UPDATE notes SET enrichment_revision = enrichment_revision + 1 WHERE id = ?1", [note_id]).map_err(WorkspaceError::Storage)?;
+            transaction
+                .execute(
+                    "UPDATE notes SET enrichment_revision = enrichment_revision + 1 WHERE id = ?1",
+                    [note_id],
+                )
+                .map_err(WorkspaceError::Storage)?;
         }
         transaction.execute("DELETE FROM labels WHERE id = ?1 AND NOT EXISTS (SELECT 1 FROM note_labels WHERE label_id = ?1)", [label_id]).map_err(WorkspaceError::Storage)?;
         refresh_workspace_search(&transaction, &note.workspace_id)?;
@@ -1809,14 +2143,38 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
         self.snapshot()
     }
 
-    fn rename_label(&mut self, label_id: &str, name: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
+    fn rename_label(
+        &mut self,
+        label_id: &str,
+        name: &str,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
         let (name, canonical_name) = validated_label_name(name)?;
-        let transaction = self.connection.transaction().map_err(WorkspaceError::Storage)?;
-        let (workspace_id, old_id): (String, String) = transaction.query_row("SELECT workspace_id, id FROM labels WHERE id = ?1", [label_id], |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(WorkspaceError::Storage)?.ok_or(WorkspaceError::LabelNotFound)?;
-        let collision: Option<String> = transaction.query_row("SELECT id FROM labels WHERE workspace_id = ?1 AND canonical_name = ?2", params![workspace_id, canonical_name], |row| row.get(0)).optional().map_err(WorkspaceError::Storage)?;
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(WorkspaceError::Storage)?;
+        let (workspace_id, old_id): (String, String) = transaction
+            .query_row(
+                "SELECT workspace_id, id FROM labels WHERE id = ?1",
+                [label_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(WorkspaceError::Storage)?
+            .ok_or(WorkspaceError::LabelNotFound)?;
+        let collision: Option<String> = transaction
+            .query_row(
+                "SELECT id FROM labels WHERE workspace_id = ?1 AND canonical_name = ?2",
+                params![workspace_id, canonical_name],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(WorkspaceError::Storage)?;
         if let Some(survivor) = collision.filter(|candidate| candidate != &old_id) {
             transaction.execute("INSERT OR IGNORE INTO note_labels (note_id, label_id) SELECT note_id, ?1 FROM note_labels WHERE label_id = ?2", params![survivor, old_id]).map_err(WorkspaceError::Storage)?;
-            transaction.execute("DELETE FROM labels WHERE id = ?1", [old_id]).map_err(WorkspaceError::Storage)?;
+            transaction
+                .execute("DELETE FROM labels WHERE id = ?1", [old_id])
+                .map_err(WorkspaceError::Storage)?;
         } else {
             transaction.execute("UPDATE labels SET name = ?2, canonical_name = ?3, updated_at = ?4 WHERE id = ?1", params![old_id, name, canonical_name, timestamp()]).map_err(WorkspaceError::Storage)?;
         }
@@ -1826,9 +2184,22 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
     }
 
     fn remove_label(&mut self, label_id: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
-        let transaction = self.connection.transaction().map_err(WorkspaceError::Storage)?;
-        let workspace_id: String = transaction.query_row("SELECT workspace_id FROM labels WHERE id = ?1", [label_id], |row| row.get(0)).optional().map_err(WorkspaceError::Storage)?.ok_or(WorkspaceError::LabelNotFound)?;
-        transaction.execute("DELETE FROM labels WHERE id = ?1", [label_id]).map_err(WorkspaceError::Storage)?;
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(WorkspaceError::Storage)?;
+        let workspace_id: String = transaction
+            .query_row(
+                "SELECT workspace_id FROM labels WHERE id = ?1",
+                [label_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(WorkspaceError::Storage)?
+            .ok_or(WorkspaceError::LabelNotFound)?;
+        transaction
+            .execute("DELETE FROM labels WHERE id = ?1", [label_id])
+            .map_err(WorkspaceError::Storage)?;
         refresh_workspace_search(&transaction, &workspace_id)?;
         transaction.commit().map_err(WorkspaceError::Storage)?;
         self.snapshot()
@@ -2006,16 +2377,45 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
         self.snapshot()
     }
 
-    fn search_notes(&self, workspace_id: &str, query: &str) -> Result<Vec<SearchResult>, WorkspaceError> {
+    fn search_notes(
+        &self,
+        workspace_id: &str,
+        query: &str,
+    ) -> Result<Vec<SearchResult>, WorkspaceError> {
         require_workspace(&read_workspaces(&self.connection)?, workspace_id)?;
         let query = fts_query(query);
-        if query.is_empty() { return Ok(vec![]); }
+        if query.is_empty() {
+            return Ok(vec![]);
+        }
         let mut statement = self.connection.prepare("SELECT note_id, snippet(note_search, 2, '', '', '…', 24), bm25(note_search) FROM note_search WHERE note_search MATCH ?1 AND workspace_id = ?2 ORDER BY bm25(note_search), note_id").map_err(WorkspaceError::Storage)?;
-        let results = statement.query_map(params![query, workspace_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, f64>(2)?))).map_err(WorkspaceError::Storage)?.map(|row| {
-            let (note_id, snippet, rank) = row.map_err(WorkspaceError::Storage)?;
-            let note_type: String = self.connection.query_row("SELECT note_type FROM notes WHERE id = ?1", [&note_id], |row| row.get(0)).map_err(WorkspaceError::Storage)?;
-            Ok(SearchResult { labels: labels_for_note(&self.connection, &note_id)?, note_id, snippet, note_type, rank })
-        }).collect();
+        let results = statement
+            .query_map(params![query, workspace_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, f64>(2)?,
+                ))
+            })
+            .map_err(WorkspaceError::Storage)?
+            .map(|row| {
+                let (note_id, snippet, rank) = row.map_err(WorkspaceError::Storage)?;
+                let note_type: String = self
+                    .connection
+                    .query_row(
+                        "SELECT note_type FROM notes WHERE id = ?1",
+                        [&note_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(WorkspaceError::Storage)?;
+                Ok(SearchResult {
+                    labels: labels_for_note(&self.connection, &note_id)?,
+                    note_id,
+                    snippet,
+                    note_type,
+                    rank,
+                })
+            })
+            .collect();
         results
     }
 }
@@ -2029,7 +2429,7 @@ fn outcome(result: Result<WorkspaceSnapshot, WorkspaceError>) -> WorkspaceComman
     }
 }
 
-fn validated_workspace_name(name: &str) -> Result<String, WorkspaceError> {
+pub(crate) fn validated_workspace_name(name: &str) -> Result<String, WorkspaceError> {
     let name = name.trim();
     if name.is_empty() {
         return Err(WorkspaceError::EmptyWorkspaceName);
@@ -2042,14 +2442,14 @@ fn validated_workspace_name(name: &str) -> Result<String, WorkspaceError> {
 
 /// Note text is required after trimming but stored exactly as authored, so the
 /// thinker's Markdown layout survives a round trip.
-fn validated_markdown(markdown: &str) -> Result<String, WorkspaceError> {
+pub(crate) fn validated_markdown(markdown: &str) -> Result<String, WorkspaceError> {
     if markdown.trim().is_empty() {
         return Err(WorkspaceError::EmptyNote);
     }
     Ok(markdown.to_owned())
 }
 
-fn validated_note_type(note_type: &str) -> Result<String, WorkspaceError> {
+pub(crate) fn validated_note_type(note_type: &str) -> Result<String, WorkspaceError> {
     NOTE_TYPES
         .contains(&note_type)
         .then(|| note_type.to_owned())
@@ -2057,7 +2457,7 @@ fn validated_note_type(note_type: &str) -> Result<String, WorkspaceError> {
 }
 
 /// Annotation is plain commentary: trimmed, bounded, and blank means cleared.
-fn validated_annotation(annotation: &str) -> Result<Option<String>, WorkspaceError> {
+pub(crate) fn validated_annotation(annotation: &str) -> Result<Option<String>, WorkspaceError> {
     let annotation = annotation.trim();
     if annotation.is_empty() {
         return Ok(None);
@@ -2070,7 +2470,7 @@ fn validated_annotation(annotation: &str) -> Result<Option<String>, WorkspaceErr
 
 /// Label identity is Unicode lowercase rather than SQLite NOCASE, whose
 /// comparison is ASCII-only. Display spelling remains the thinker's choice.
-fn validated_label_name(name: &str) -> Result<(String, String), WorkspaceError> {
+pub(crate) fn validated_label_name(name: &str) -> Result<(String, String), WorkspaceError> {
     let name = name.trim();
     let words = name.split_whitespace().count();
     if name.is_empty() || words == 0 || words > 4 || name.chars().count() > MAX_LABEL_NAME_SCALARS {
@@ -2082,7 +2482,8 @@ fn validated_label_name(name: &str) -> Result<(String, String), WorkspaceError> 
 /// FTS receives quoted words only, never raw query syntax. Punctuation is a
 /// separator, so copied search text cannot inject operators or fail parsing.
 fn fts_query(query: &str) -> String {
-    query.split(|character: char| !character.is_alphanumeric())
+    query
+        .split(|character: char| !character.is_alphanumeric())
         .filter(|word| !word.is_empty())
         .map(|word| format!("\"{word}\""))
         .collect::<Vec<_>>()
@@ -2103,28 +2504,111 @@ fn sort_notes(notes: &mut [Note]) {
 
 fn render_markdown_export(snapshot: &WorkspaceSnapshot, workspace: &ThinkingWorkspace) -> String {
     use std::collections::BTreeMap;
-    let mut notes: Vec<&Note> = snapshot.notes.iter().filter(|note| note.workspace_id == workspace.id).collect();
-    notes.sort_by(|left, right| (!left.pinned, &left.created_at, &left.id).cmp(&(!right.pinned, &right.created_at, &right.id)));
-    let anchors: BTreeMap<&str, String> = notes.iter().enumerate().map(|(index, note)| (note.id.as_str(), format!("note-{:03}", index + 1))).collect();
-    let title = |note: &Note| note.markdown.lines().find_map(|line| line.strip_prefix("# ")).filter(|line| !line.trim().is_empty()).unwrap_or("Note").split_whitespace().collect::<Vec<_>>().join(" ");
-    let timestamp = |value: &str| chrono::DateTime::parse_from_rfc3339(value).map(|value| value.with_timezone(&chrono::Local).to_rfc3339()).unwrap_or_else(|_| value.to_owned());
+    let mut notes: Vec<&Note> = snapshot
+        .notes
+        .iter()
+        .filter(|note| note.workspace_id == workspace.id)
+        .collect();
+    notes.sort_by(|left, right| {
+        (!left.pinned, &left.created_at, &left.id).cmp(&(
+            !right.pinned,
+            &right.created_at,
+            &right.id,
+        ))
+    });
+    let anchors: BTreeMap<&str, String> = notes
+        .iter()
+        .enumerate()
+        .map(|(index, note)| (note.id.as_str(), format!("note-{:03}", index + 1)))
+        .collect();
+    let title = |note: &Note| {
+        note.markdown
+            .lines()
+            .find_map(|line| line.strip_prefix("# "))
+            .filter(|line| !line.trim().is_empty())
+            .unwrap_or("Note")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let timestamp = |value: &str| {
+        chrono::DateTime::parse_from_rfc3339(value)
+            .map(|value| value.with_timezone(&chrono::Local).to_rfc3339())
+            .unwrap_or_else(|_| value.to_owned())
+    };
     let plain = |value: &str| value.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut document = format!("# {}\n\n## Metadata\n\n- Created: {}\n- Notes: {}\n", plain(&workspace.name), timestamp(&workspace.created_at), notes.len());
+    let mut document = format!(
+        "# {}\n\n## Metadata\n\n- Created: {}\n- Notes: {}\n",
+        plain(&workspace.name),
+        timestamp(&workspace.created_at),
+        notes.len()
+    );
     for note_type in NOTE_TYPES {
-        let typed: Vec<&Note> = notes.iter().copied().filter(|note| note.note_type == note_type).collect();
-        if typed.is_empty() { continue; }
+        let typed: Vec<&Note> = notes
+            .iter()
+            .copied()
+            .filter(|note| note.note_type == note_type)
+            .collect();
+        if typed.is_empty() {
+            continue;
+        }
         let section = note_type[..1].to_uppercase() + &note_type[1..];
         document.push_str(&format!("\n## {section}\n"));
         for note in typed {
-            let anchor = anchors.get(note.id.as_str()).expect("each export Note has an anchor");
-            document.push_str(&format!("\n<a id=\"{anchor}\"></a>\n### {}\n\n{}\n\n", plain(&title(note)), note.markdown));
-            if let Some(annotation) = &note.annotation { document.push_str(&format!("**Annotation:** {}\n\n", plain(annotation))); }
-            let labels = note.labels.iter().map(|label| label.name.as_str()).collect::<Vec<_>>().join(", ");
-            let labels = if labels.is_empty() { "None".to_owned() } else { plain(&labels) };
-            document.push_str(&format!("- Labels: {labels}\n- Note Type: {section}\n- Created: {}\n", timestamp(&note.created_at)));
-            let mut related: Vec<String> = snapshot.relationships.iter().filter(|relationship| relationship.workspace_id == workspace.id).filter_map(|relationship| relationship.other_endpoint(&note.id)).filter_map(|id| anchors.get(id).map(|anchor| (id, anchor))).map(|(id, anchor)| { let related = notes.iter().find(|note| note.id == id).expect("relationship endpoint is exported"); format!("[{}](#{anchor})", plain(&title(related)).replace('[', "\\[").replace(']', "\\]")) }).collect();
+            let anchor = anchors
+                .get(note.id.as_str())
+                .expect("each export Note has an anchor");
+            document.push_str(&format!(
+                "\n<a id=\"{anchor}\"></a>\n### {}\n\n{}\n\n",
+                plain(&title(note)),
+                note.markdown
+            ));
+            if let Some(annotation) = &note.annotation {
+                document.push_str(&format!("**Annotation:** {}\n\n", plain(annotation)));
+            }
+            let labels = note
+                .labels
+                .iter()
+                .map(|label| label.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let labels = if labels.is_empty() {
+                "None".to_owned()
+            } else {
+                plain(&labels)
+            };
+            document.push_str(&format!(
+                "- Labels: {labels}\n- Note Type: {section}\n- Created: {}\n",
+                timestamp(&note.created_at)
+            ));
+            let mut related: Vec<String> = snapshot
+                .relationships
+                .iter()
+                .filter(|relationship| relationship.workspace_id == workspace.id)
+                .filter_map(|relationship| relationship.other_endpoint(&note.id))
+                .filter_map(|id| anchors.get(id).map(|anchor| (id, anchor)))
+                .map(|(id, anchor)| {
+                    let related = notes
+                        .iter()
+                        .find(|note| note.id == id)
+                        .expect("relationship endpoint is exported");
+                    format!(
+                        "[{}](#{anchor})",
+                        plain(&title(related))
+                            .replace('[', "\\[")
+                            .replace(']', "\\]")
+                    )
+                })
+                .collect();
             related.sort();
-            document.push_str(&format!("- Related Notes: {}\n", if related.is_empty() { "None".to_owned() } else { related.join(", ") }));
+            document.push_str(&format!(
+                "- Related Notes: {}\n",
+                if related.is_empty() {
+                    "None".to_owned()
+                } else {
+                    related.join(", ")
+                }
+            ));
         }
     }
     document
@@ -2222,10 +2706,7 @@ fn require_workspace(
 
 /// The deterministic survivor of a delete: most recently updated, then most
 /// recently created, then highest id, so every adapter picks the same one.
-fn surviving_workspace_id(
-    workspaces: &[ThinkingWorkspace],
-    deleted_id: &str,
-) -> Option<String> {
+fn surviving_workspace_id(workspaces: &[ThinkingWorkspace], deleted_id: &str) -> Option<String> {
     workspaces
         .iter()
         .filter(|workspace| workspace.id != deleted_id)
@@ -2247,11 +2728,20 @@ fn migrate(connection: &mut Connection) -> Result<(), WorkspaceError> {
         (1_i64, include_str!("../migrations/0001_initial.sql")),
         (2_i64, include_str!("../migrations/0002_preferences.sql")),
         (3_i64, include_str!("../migrations/0003_note_controls.sql")),
-        (4_i64, include_str!("../migrations/0004_labels_and_search.sql")),
+        (
+            4_i64,
+            include_str!("../migrations/0004_labels_and_search.sql"),
+        ),
         (5_i64, include_str!("../migrations/0005_relationships.sql")),
-        (6_i64, include_str!("../migrations/0006_assistance_policy.sql")),
+        (
+            6_i64,
+            include_str!("../migrations/0006_assistance_policy.sql"),
+        ),
         (7_i64, include_str!("../migrations/0007_cloud_consent.sql")),
-        (8_i64, include_str!("../migrations/0008_note_enrichment.sql")),
+        (
+            8_i64,
+            include_str!("../migrations/0008_note_enrichment.sql"),
+        ),
         (9_i64, include_str!("../migrations/0009_synthesis.sql")),
     ];
     for (version, sql) in migrations {
@@ -2412,8 +2902,16 @@ fn write_relocated_relationships(
     Ok(())
 }
 
-fn refresh_workspace_search(connection: &Connection, workspace_id: &str) -> Result<(), WorkspaceError> {
-    connection.execute("DELETE FROM note_search WHERE workspace_id = ?1", [workspace_id]).map_err(WorkspaceError::Storage)?;
+fn refresh_workspace_search(
+    connection: &Connection,
+    workspace_id: &str,
+) -> Result<(), WorkspaceError> {
+    connection
+        .execute(
+            "DELETE FROM note_search WHERE workspace_id = ?1",
+            [workspace_id],
+        )
+        .map_err(WorkspaceError::Storage)?;
     connection.execute("INSERT INTO note_search(note_id, workspace_id, content) SELECT notes.id, notes.workspace_id, notes.markdown || ' ' || COALESCE(notes.annotation, '') || ' ' || COALESCE((SELECT group_concat(labels.name, ' ') FROM note_labels JOIN labels ON labels.id = note_labels.label_id WHERE note_labels.note_id = notes.id), '') FROM notes WHERE notes.workspace_id = ?1", [workspace_id]).map_err(WorkspaceError::Storage)?;
     Ok(())
 }
@@ -2457,7 +2955,9 @@ fn read_snapshot(connection: &Connection) -> Result<WorkspaceSnapshot, Workspace
             labels: vec![],
         }))
         .map_err(WorkspaceError::Storage)?.collect::<Result<Vec<_>, _>>().map_err(WorkspaceError::Storage)?;
-    for note in &mut notes { note.labels = labels_for_note(connection, &note.id)?; }
+    for note in &mut notes {
+        note.labels = labels_for_note(connection, &note.id)?;
+    }
     sort_notes(&mut notes);
     let active_workspace_id = read_active_workspace_id(connection)?
         .filter(|id| workspaces.iter().any(|workspace| &workspace.id == id))
@@ -2624,7 +3124,11 @@ mod tests {
         /// so a stale AI result that names the previous revision is rejected
         /// by the application gate.
         fn bump_revision(&mut self, note_id: &str) {
-            if let Some(existing) = self.notes.iter_mut().find(|candidate| candidate.id == note_id) {
+            if let Some(existing) = self
+                .notes
+                .iter_mut()
+                .find(|candidate| candidate.id == note_id)
+            {
                 existing.enrichment_revision += 1;
             }
         }
@@ -2751,7 +3255,8 @@ mod tests {
                 .retain(|relationship| relationship.workspace_id != workspace_id);
             match surviving_workspace_id(&self.workspaces, workspace_id) {
                 Some(survivor_id) => {
-                    self.workspaces.retain(|workspace| workspace.id != workspace_id);
+                    self.workspaces
+                        .retain(|workspace| workspace.id != workspace_id);
                     self.notes.retain(|note| note.workspace_id != workspace_id);
                     if self.active_workspace_id == workspace_id {
                         self.active_workspace_id = survivor_id;
@@ -2835,14 +3340,34 @@ mod tests {
             Ok(())
         }
 
-        fn attach_label(&mut self, note_id: &str, name: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        fn attach_label(
+            &mut self,
+            note_id: &str,
+            name: &str,
+        ) -> Result<WorkspaceSnapshot, WorkspaceError> {
             let workspace_id = self.note(note_id)?.workspace_id;
             let (name, canonical) = validated_label_name(name)?;
-            let label = self.labels.iter().find(|label| label.workspace_id == workspace_id && label.name.to_lowercase() == canonical).cloned().unwrap_or_else(|| {
-                let label = Label { id: id(), workspace_id: workspace_id.clone(), name };
-                self.labels.push(label.clone()); label
-            });
-            let note = self.notes.iter_mut().find(|note| note.id == note_id).ok_or(WorkspaceError::NoteNotFound)?;
+            let label = self
+                .labels
+                .iter()
+                .find(|label| {
+                    label.workspace_id == workspace_id && label.name.to_lowercase() == canonical
+                })
+                .cloned()
+                .unwrap_or_else(|| {
+                    let label = Label {
+                        id: id(),
+                        workspace_id: workspace_id.clone(),
+                        name,
+                    };
+                    self.labels.push(label.clone());
+                    label
+                });
+            let note = self
+                .notes
+                .iter_mut()
+                .find(|note| note.id == note_id)
+                .ok_or(WorkspaceError::NoteNotFound)?;
             if !note.labels.iter().any(|candidate| candidate.id == label.id) {
                 note.labels.push(label);
                 note.enrichment_revision += 1;
@@ -2850,33 +3375,87 @@ mod tests {
             self.snapshot()
         }
 
-        fn detach_label(&mut self, note_id: &str, label_id: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
-            let note = self.notes.iter_mut().find(|note| note.id == note_id).ok_or(WorkspaceError::NoteNotFound)?;
+        fn detach_label(
+            &mut self,
+            note_id: &str,
+            label_id: &str,
+        ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+            let note = self
+                .notes
+                .iter_mut()
+                .find(|note| note.id == note_id)
+                .ok_or(WorkspaceError::NoteNotFound)?;
             let before = note.labels.len();
             note.labels.retain(|label| label.id != label_id);
-            if note.labels.len() != before { note.enrichment_revision += 1; }
-            self.labels.retain(|label| label.id != label_id || self.notes.iter().any(|note| note.labels.iter().any(|candidate| candidate.id == label_id)));
+            if note.labels.len() != before {
+                note.enrichment_revision += 1;
+            }
+            self.labels.retain(|label| {
+                label.id != label_id
+                    || self
+                        .notes
+                        .iter()
+                        .any(|note| note.labels.iter().any(|candidate| candidate.id == label_id))
+            });
             self.snapshot()
         }
 
-        fn rename_label(&mut self, label_id: &str, name: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        fn rename_label(
+            &mut self,
+            label_id: &str,
+            name: &str,
+        ) -> Result<WorkspaceSnapshot, WorkspaceError> {
             let (name, canonical) = validated_label_name(name)?;
-            let original = self.labels.iter().find(|label| label.id == label_id).cloned().ok_or(WorkspaceError::LabelNotFound)?;
-            let collision = self.labels.iter().find(|label| label.id != label_id && label.workspace_id == original.workspace_id && label.name.to_lowercase() == canonical).cloned();
+            let original = self
+                .labels
+                .iter()
+                .find(|label| label.id == label_id)
+                .cloned()
+                .ok_or(WorkspaceError::LabelNotFound)?;
+            let collision = self
+                .labels
+                .iter()
+                .find(|label| {
+                    label.id != label_id
+                        && label.workspace_id == original.workspace_id
+                        && label.name.to_lowercase() == canonical
+                })
+                .cloned();
             if let Some(survivor) = collision {
-                for note in &mut self.notes { if note.labels.iter().any(|label| label.id == label_id) && !note.labels.iter().any(|label| label.id == survivor.id) { note.labels.push(survivor.clone()); } note.labels.retain(|label| label.id != label_id); }
+                for note in &mut self.notes {
+                    if note.labels.iter().any(|label| label.id == label_id)
+                        && !note.labels.iter().any(|label| label.id == survivor.id)
+                    {
+                        note.labels.push(survivor.clone());
+                    }
+                    note.labels.retain(|label| label.id != label_id);
+                }
                 self.labels.retain(|label| label.id != label_id);
             } else {
-                for label in &mut self.labels { if label.id == label_id { label.name = name.clone(); } }
-                for note in &mut self.notes { for label in &mut note.labels { if label.id == label_id { label.name = name.clone(); } } }
+                for label in &mut self.labels {
+                    if label.id == label_id {
+                        label.name = name.clone();
+                    }
+                }
+                for note in &mut self.notes {
+                    for label in &mut note.labels {
+                        if label.id == label_id {
+                            label.name = name.clone();
+                        }
+                    }
+                }
             }
             self.snapshot()
         }
 
         fn remove_label(&mut self, label_id: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
-            if !self.labels.iter().any(|label| label.id == label_id) { return Err(WorkspaceError::LabelNotFound); }
+            if !self.labels.iter().any(|label| label.id == label_id) {
+                return Err(WorkspaceError::LabelNotFound);
+            }
             self.labels.retain(|label| label.id != label_id);
-            for note in &mut self.notes { note.labels.retain(|label| label.id != label_id); }
+            for note in &mut self.notes {
+                note.labels.retain(|label| label.id != label_id);
+            }
             self.snapshot()
         }
 
@@ -2959,15 +3538,26 @@ mod tests {
             next.last_enriched_at = Some(now);
             for label_name in &applied.add_labels {
                 let (name, canonical) = validated_label_name(label_name)?;
-                let label_id = if let Some(existing) = self.labels.iter().find(|label| label.workspace_id == workspace_id && label.name.to_lowercase() == canonical) {
+                let label_id = if let Some(existing) = self.labels.iter().find(|label| {
+                    label.workspace_id == workspace_id && label.name.to_lowercase() == canonical
+                }) {
                     existing.id.clone()
                 } else {
-                    let created = Label { id: id(), workspace_id: workspace_id.to_owned(), name };
+                    let created = Label {
+                        id: id(),
+                        workspace_id: workspace_id.to_owned(),
+                        name,
+                    };
                     self.labels.push(created.clone());
                     created.id
                 };
                 if !next.labels.iter().any(|candidate| candidate.id == label_id) {
-                    if let Some(stored) = self.labels.iter().find(|label| label.id == label_id).cloned() {
+                    if let Some(stored) = self
+                        .labels
+                        .iter()
+                        .find(|label| label.id == label_id)
+                        .cloned()
+                    {
                         next.labels.push(stored);
                     }
                 }
@@ -2993,15 +3583,48 @@ mod tests {
             self.snapshot()
         }
 
-        fn search_notes(&self, workspace_id: &str, query: &str) -> Result<Vec<SearchResult>, WorkspaceError> {
+        fn search_notes(
+            &self,
+            workspace_id: &str,
+            query: &str,
+        ) -> Result<Vec<SearchResult>, WorkspaceError> {
             require_workspace(&self.workspaces, workspace_id)?;
-            let terms: Vec<_> = query.split(|character: char| !character.is_alphanumeric()).filter(|word| !word.is_empty()).map(str::to_lowercase).collect();
-            if terms.is_empty() { return Ok(vec![]); }
-            let mut results: Vec<_> = self.notes.iter().filter(|note| note.workspace_id == workspace_id).filter_map(|note| {
-                let content = format!("{} {} {}", note.markdown, note.annotation.as_deref().unwrap_or(""), note.labels.iter().map(|label| label.name.as_str()).collect::<Vec<_>>().join(" "));
-                let lower = content.to_lowercase();
-                terms.iter().all(|term| lower.contains(term)).then(|| SearchResult { note_id: note.id.clone(), snippet: content.chars().take(160).collect(), note_type: note.note_type.clone(), labels: note.labels.clone(), rank: 0.0 })
-            }).collect();
+            let terms: Vec<_> = query
+                .split(|character: char| !character.is_alphanumeric())
+                .filter(|word| !word.is_empty())
+                .map(str::to_lowercase)
+                .collect();
+            if terms.is_empty() {
+                return Ok(vec![]);
+            }
+            let mut results: Vec<_> = self
+                .notes
+                .iter()
+                .filter(|note| note.workspace_id == workspace_id)
+                .filter_map(|note| {
+                    let content = format!(
+                        "{} {} {}",
+                        note.markdown,
+                        note.annotation.as_deref().unwrap_or(""),
+                        note.labels
+                            .iter()
+                            .map(|label| label.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    );
+                    let lower = content.to_lowercase();
+                    terms
+                        .iter()
+                        .all(|term| lower.contains(term))
+                        .then(|| SearchResult {
+                            note_id: note.id.clone(),
+                            snippet: content.chars().take(160).collect(),
+                            note_type: note.note_type.clone(),
+                            labels: note.labels.clone(),
+                            rank: 0.0,
+                        })
+                })
+                .collect();
             results.sort_by(|left, right| left.note_id.cmp(&right.note_id));
             Ok(results)
         }
@@ -3132,10 +3755,14 @@ mod tests {
         committed(workspace.set_note_type_outcome(note_id, "question"));
 
         // Annotation is written, edited, and cleared independently of the text.
-        let annotated =
-            committed(workspace.set_note_annotation_outcome(note_id, "  Where did this come from? 🧠  "));
+        let annotated = committed(
+            workspace.set_note_annotation_outcome(note_id, "  Where did this come from? 🧠  "),
+        );
         let note = note_in(&annotated, note_id);
-        assert_eq!(note.annotation.as_deref(), Some("Where did this come from? 🧠"));
+        assert_eq!(
+            note.annotation.as_deref(),
+            Some("Where did this come from? 🧠")
+        );
         assert_eq!(note.annotation_provenance, Provenance::Manual);
         assert_eq!(note.markdown, original.markdown);
         assert_eq!(note.note_type, "question");
@@ -3149,15 +3776,18 @@ mod tests {
             .as_deref(),
             Some(bound.as_str())
         );
-        assert!(is_validation_failure(&workspace.set_note_annotation_outcome(
-            note_id,
-            &"🧠".repeat(MAX_ANNOTATION_SCALARS + 1)
-        )));
+        assert!(is_validation_failure(
+            &workspace
+                .set_note_annotation_outcome(note_id, &"🧠".repeat(MAX_ANNOTATION_SCALARS + 1))
+        ));
         let cleared = committed(workspace.set_note_annotation_outcome(note_id, "   "));
         assert_eq!(note_in(&cleared, note_id).annotation, None);
         // Undo restores the previous Annotation rather than the Note text.
         let restored = committed(workspace.undo_outcome(workspace_id));
-        assert_eq!(note_in(&restored, note_id).annotation.as_deref(), Some(bound.as_str()));
+        assert_eq!(
+            note_in(&restored, note_id).annotation.as_deref(),
+            Some(bound.as_str())
+        );
 
         // Pinned Notes sort first while creation order holds inside each group.
         let second = committed(workspace.create_note_outcome(workspace_id, "Second thought"));
@@ -3176,19 +3806,30 @@ mod tests {
                 .map(|note| note.id.clone())
                 .collect()
         };
-        assert_eq!(ordered(&second), vec![note_id.to_owned(), second_id.clone()]);
+        assert_eq!(
+            ordered(&second),
+            vec![note_id.to_owned(), second_id.clone()]
+        );
         let pinned = committed(workspace.set_note_pinned_outcome(&second_id, true));
         assert!(note_in(&pinned, &second_id).pinned);
-        assert_eq!(ordered(&pinned), vec![second_id.clone(), note_id.to_owned()]);
+        assert_eq!(
+            ordered(&pinned),
+            vec![second_id.clone(), note_id.to_owned()]
+        );
         let unpinned = committed(workspace.undo_outcome(workspace_id));
         assert!(!note_in(&unpinned, &second_id).pinned);
-        assert_eq!(ordered(&unpinned), vec![note_id.to_owned(), second_id.clone()]);
+        assert_eq!(
+            ordered(&unpinned),
+            vec![note_id.to_owned(), second_id.clone()]
+        );
 
         // Deleting a Note is reversible with the same identity and fields.
         let before_delete = note_in(&committed(workspace.snapshot_outcome()), &second_id);
         let after_delete = committed(workspace.delete_note_outcome(&second_id));
         assert!(!after_delete.notes.iter().any(|note| note.id == second_id));
-        assert!(is_not_found_failure(&workspace.delete_note_outcome(&second_id)));
+        assert!(is_not_found_failure(
+            &workspace.delete_note_outcome(&second_id)
+        ));
         let after_undo = committed(workspace.undo_outcome(workspace_id));
         assert_eq!(note_in(&after_undo, &second_id), before_delete);
 
@@ -3224,7 +3865,8 @@ mod tests {
             .id
             .clone();
         for step in 0..MAX_REVERSIBLE_COMMANDS + 5 {
-            deep = committed(workspace.edit_note_text_outcome(&overflow_id, &format!("Edit {step}")));
+            deep =
+                committed(workspace.edit_note_text_outcome(&overflow_id, &format!("Edit {step}")));
         }
         assert_eq!(deep.undoable_commands, MAX_REVERSIBLE_COMMANDS);
         for _ in 0..MAX_REVERSIBLE_COMMANDS {
@@ -3268,7 +3910,11 @@ mod tests {
 
     /// The distinct Labels a Workspace holds with one display meaning, read
     /// through the Notes that carry them.
-    fn labels_meaning(snapshot: &WorkspaceSnapshot, workspace_id: &str, meaning: &str) -> Vec<String> {
+    fn labels_meaning(
+        snapshot: &WorkspaceSnapshot,
+        workspace_id: &str,
+        meaning: &str,
+    ) -> Vec<String> {
         let mut ids: Vec<String> = snapshot
             .notes
             .iter()
@@ -3349,8 +3995,14 @@ mod tests {
         // target already knows keeps the target's spelling instead of being
         // duplicated as a second Label; a meaning it did not know is created.
         assert_eq!(label_names(&after), vec!["RIVERS", "Trade"]);
-        assert!(after.labels.iter().all(|label| label.workspace_id == target));
-        assert_eq!(labels_meaning(&moved, &target, "rivers"), vec![target_rivers.clone()]);
+        assert!(after
+            .labels
+            .iter()
+            .all(|label| label.workspace_id == target));
+        assert_eq!(
+            labels_meaning(&moved, &target, "rivers"),
+            vec![target_rivers.clone()]
+        );
         assert_eq!(labels_meaning(&moved, &target, "trade").len(), 1);
 
         // No Relationship crosses the seam, in either direction.
@@ -3400,7 +4052,10 @@ mod tests {
         assert_ne!(copy.created_at, before.created_at);
         assert_eq!(label_names(&copy), vec!["RIVERS", "Trade"]);
         assert!(copy.labels.iter().all(|label| label.workspace_id == target));
-        assert_eq!(labels_meaning(&copied, &target, "rivers"), vec![target_rivers]);
+        assert_eq!(
+            labels_meaning(&copied, &target, "rivers"),
+            vec![target_rivers]
+        );
 
         // The copy inherits no Relationship, and the original keeps its own.
         assert!(related_ids(&copied, &copy.id).is_empty());
@@ -3508,22 +4163,45 @@ mod tests {
         // Case and surrounding whitespace reuse the same Workspace-local Label.
         let same = committed(workspace.attach_label_outcome(&note_id, "rÊVERIE"));
         assert_eq!(note_in(&same, &note_id).labels.len(), 1);
-        let second_note = committed(workspace.create_note_outcome(&research, "Searchable punctuation: C++ & Rust"));
-        let second_note_id = second_note.notes.iter().find(|note| note.markdown.starts_with("Searchable")).unwrap().id.clone();
+        let second_note = committed(
+            workspace.create_note_outcome(&research, "Searchable punctuation: C++ & Rust"),
+        );
+        let second_note_id = second_note
+            .notes
+            .iter()
+            .find(|note| note.markdown.starts_with("Searchable"))
+            .unwrap()
+            .id
+            .clone();
         committed(workspace.attach_label_outcome(&second_note_id, "Reading"));
         let merged = committed(workspace.rename_label_outcome(&label.id, "reading"));
         assert_eq!(note_in(&merged, &note_id).labels[0].name, "Reading");
         assert_eq!(note_in(&merged, &second_note_id).labels[0].name, "Reading");
-        assert_eq!(workspace.search_notes(&research, "reading").unwrap().len(), 2);
+        assert_eq!(
+            workspace.search_notes(&research, "reading").unwrap().len(),
+            2
+        );
         assert_eq!(workspace.search_notes(&research, "C++ &").unwrap().len(), 1);
         assert!(workspace.search_notes(&research, "   ").unwrap().is_empty());
         let isolated = committed(workspace.create_workspace_outcome("Elsewhere"));
         let elsewhere = isolated.active_workspace_id;
-        let outside = committed(workspace.create_note_outcome(&elsewhere, "Reading must stay private"));
-        let outside_id = outside.notes.iter().find(|note| note.workspace_id == elsewhere).unwrap().id.clone();
+        let outside =
+            committed(workspace.create_note_outcome(&elsewhere, "Reading must stay private"));
+        let outside_id = outside
+            .notes
+            .iter()
+            .find(|note| note.workspace_id == elsewhere)
+            .unwrap()
+            .id
+            .clone();
         committed(workspace.attach_label_outcome(&outside_id, "Reading"));
-        assert_eq!(workspace.search_notes(&research, "reading").unwrap().len(), 2);
-        let detached = committed(workspace.detach_label_outcome(&note_id, &note_in(&merged, &note_id).labels[0].id));
+        assert_eq!(
+            workspace.search_notes(&research, "reading").unwrap().len(),
+            2
+        );
+        let detached = committed(
+            workspace.detach_label_outcome(&note_id, &note_in(&merged, &note_id).labels[0].id),
+        );
         assert!(note_in(&detached, &note_id).labels.is_empty());
 
         // A Relationship is one symmetric, untyped association, manual by
@@ -3544,10 +4222,24 @@ mod tests {
 
         // Either endpoint lists the other, in either order, and no endpoint
         // names a Note that is not here.
-        assert_eq!(related_ids(&related, &note_id), vec![second_note_id.clone()]);
-        assert_eq!(related_ids(&related, &second_note_id), vec![note_id.clone()]);
-        assert!(is_related(&related.relationships, &note_id, &second_note_id));
-        assert!(is_related(&related.relationships, &second_note_id, &note_id));
+        assert_eq!(
+            related_ids(&related, &note_id),
+            vec![second_note_id.clone()]
+        );
+        assert_eq!(
+            related_ids(&related, &second_note_id),
+            vec![note_id.clone()]
+        );
+        assert!(is_related(
+            &related.relationships,
+            &note_id,
+            &second_note_id
+        ));
+        assert!(is_related(
+            &related.relationships,
+            &second_note_id,
+            &note_id
+        ));
         assert!(no_dangling_endpoints(&related));
 
         // Asking again in the reversed endpoint order is the same Relationship,
@@ -3603,7 +4295,10 @@ mod tests {
         assert_eq!(after_delete.workspaces.len(), 4);
         assert_eq!(after_delete.workspaces[0].name, DEFAULT_WORKSPACE_NAME);
         assert_eq!(after_delete.workspaces[3].id, newest);
-        assert!(after_delete.notes.iter().all(|note| note.workspace_id != research));
+        assert!(after_delete
+            .notes
+            .iter()
+            .all(|note| note.workspace_id != research));
 
         // Deleting an inactive Workspace leaves the selection alone.
         let after_inactive_delete = committed(workspace.delete_workspace_outcome(&newest));
@@ -3689,8 +4384,15 @@ mod tests {
         let workspace_id = {
             let mut store = WorkspaceStore::open(&path).unwrap();
             let workspace_id = store.snapshot().unwrap().active_workspace_id;
-            let note = store.create_note(&workspace_id, "A Unicode 🧠 search target").unwrap().notes[0].id.clone();
-            store.set_note_annotation(&note, "Contextual commentary").unwrap();
+            let note = store
+                .create_note(&workspace_id, "A Unicode 🧠 search target")
+                .unwrap()
+                .notes[0]
+                .id
+                .clone();
+            store
+                .set_note_annotation(&note, "Contextual commentary")
+                .unwrap();
             store.attach_label(&note, "Rêverie").unwrap();
             workspace_id
         };
@@ -3698,7 +4400,13 @@ mod tests {
         let labels = reopened.search_notes(&workspace_id, "rêverie").unwrap();
         assert_eq!(labels.len(), 1);
         assert_eq!(labels[0].labels[0].name, "Rêverie");
-        assert_eq!(reopened.search_notes(&workspace_id, "commentary").unwrap().len(), 1);
+        assert_eq!(
+            reopened
+                .search_notes(&workspace_id, "commentary")
+                .unwrap()
+                .len(),
+            1
+        );
         remove_database(&path);
     }
 
@@ -3870,7 +4578,10 @@ mod tests {
         // The target's search projection knows both arrivals; the source's does
         // not still hold the Note that left it.
         assert_eq!(reopened.search_notes(&target, "rivers").unwrap().len(), 1);
-        assert_eq!(reopened.search_notes(&target, "other end").unwrap().len(), 1);
+        assert_eq!(
+            reopened.search_notes(&target, "other end").unwrap().len(),
+            1
+        );
         assert!(reopened.search_notes(&source, "rivers").unwrap().is_empty());
         remove_database(&path);
     }
@@ -3927,7 +4638,10 @@ mod tests {
         let moved = committed(store.move_note_outcome(&travelling, &target));
         assert_eq!(note_in(&moved, &travelling).workspace_id, target);
         assert_eq!(store.undo(&before.active_workspace_id).unwrap(), before);
-        assert_eq!(related_ids(&store.snapshot().unwrap(), &companion), vec![travelling]);
+        assert_eq!(
+            related_ids(&store.snapshot().unwrap(), &companion),
+            vec![travelling]
+        );
         drop(store);
         remove_database(&path);
     }
@@ -4017,7 +4731,9 @@ mod tests {
             let mut store = WorkspaceStore::open(&path).unwrap();
             let snapshot = store.create_workspace("Research").unwrap();
             let research = snapshot.active_workspace_id.clone();
-            store.create_note(&research, "Goes with its Workspace").unwrap();
+            store
+                .create_note(&research, "Goes with its Workspace")
+                .unwrap();
             let after_delete = store.delete_workspace(&research).unwrap();
             assert!(after_delete.notes.is_empty());
             after_delete.active_workspace_id
@@ -4045,7 +4761,10 @@ mod tests {
             .execute_batch("DROP TRIGGER reject_workspaces;")
             .unwrap();
 
-        let workspace = store.create_workspace("Research").unwrap().active_workspace_id;
+        let workspace = store
+            .create_workspace("Research")
+            .unwrap()
+            .active_workspace_id;
         store.connection.execute_batch("CREATE TRIGGER reject_notes BEFORE INSERT ON notes BEGIN SELECT RAISE(FAIL, 'injected'); END;").unwrap();
         assert!(matches!(
             store.create_note_outcome(&workspace, "Must not persist"),
@@ -4071,7 +4790,9 @@ mod tests {
             .unwrap();
 
         // A rejected delete leaves the Workspace, its Notes, and the selection intact.
-        store.create_note(&workspace, "Survives a failed delete").unwrap();
+        store
+            .create_note(&workspace, "Survives a failed delete")
+            .unwrap();
         let before_delete = store.snapshot().unwrap();
         store.connection.execute_batch("CREATE TRIGGER reject_deletes BEFORE DELETE ON thinking_workspaces BEGIN SELECT RAISE(FAIL, 'injected'); END;").unwrap();
         assert!(matches!(
@@ -4129,7 +4850,9 @@ mod tests {
                 .notes[0]
                 .id
                 .clone();
-            store.edit_note_text(&note_id, "# Edited *in place*").unwrap();
+            store
+                .edit_note_text(&note_id, "# Edited *in place*")
+                .unwrap();
             store.set_note_type(&note_id, "thesis").unwrap();
             store
                 .set_note_annotation(&note_id, "Source: a walk 🧠")
@@ -4320,7 +5043,11 @@ mod tests {
         let path = temporary_path();
         let mut store = WorkspaceStore::open(&path).unwrap();
         let snapshot = committed(store.create_workspace_outcome("Fresh"));
-        let workspace = snapshot.workspaces.iter().find(|w| w.name == "Fresh").unwrap();
+        let workspace = snapshot
+            .workspaces
+            .iter()
+            .find(|w| w.name == "Fresh")
+            .unwrap();
         assert_eq!(workspace.assistance_policy, AssistancePolicy::Manual);
         assert!(workspace.selected_model.is_none());
         remove_database(&path);
@@ -4368,9 +5095,8 @@ mod tests {
                 .assistance_policy,
             AssistancePolicy::LocalAi
         );
-        let with_model = committed(store.set_selected_model_outcome(&id,
-            Some("unicode-先生-7b:latest"),
-        ));
+        let with_model =
+            committed(store.set_selected_model_outcome(&id, Some("unicode-先生-7b:latest")));
         assert_eq!(
             with_model
                 .workspaces
@@ -4406,7 +5132,11 @@ mod tests {
     fn new_workspace_has_no_cloud_consent() {
         let mut store = MemoryStore::new();
         let snapshot = committed(store.create_workspace_outcome("Cloud candidate"));
-        let workspace = snapshot.workspaces.iter().find(|w| w.name == "Cloud candidate").unwrap();
+        let workspace = snapshot
+            .workspaces
+            .iter()
+            .find(|w| w.name == "Cloud candidate")
+            .unwrap();
         assert!(workspace.cloud_consent_at().is_none());
     }
 
@@ -4416,18 +5146,10 @@ mod tests {
         let snapshot = committed(store.create_workspace_outcome("Cloud candidate"));
         let id = workspace_id_named(&snapshot, "Cloud candidate");
         let with_consent = committed(store.set_cloud_consent_outcome(&id, true));
-        let workspace = with_consent
-            .workspaces
-            .iter()
-            .find(|w| w.id == id)
-            .unwrap();
+        let workspace = with_consent.workspaces.iter().find(|w| w.id == id).unwrap();
         assert!(workspace.cloud_consent_at().is_some());
         let after_clear = committed(store.set_cloud_consent_outcome(&id, false));
-        let cleared = after_clear
-            .workspaces
-            .iter()
-            .find(|w| w.id == id)
-            .unwrap();
+        let cleared = after_clear.workspaces.iter().find(|w| w.id == id).unwrap();
         assert!(cleared.cloud_consent_at().is_none());
     }
 
@@ -4510,16 +5232,30 @@ mod tests {
         committed(store.set_assistance_policy_outcome(&id, "cloud_ai"));
         // A Note and an Annotation that contain the sentinel value, so the
         // test catches a leak in either text or rendered output.
-        let note = committed(store.create_note_outcome(&id, &format!("# Note that quotes a key: {SENTINEL_KEY}")));
+        let note = committed(
+            store.create_note_outcome(&id, &format!("# Note that quotes a key: {SENTINEL_KEY}")),
+        );
         let note_id = note.notes[0].id.clone();
-        committed(store.set_note_annotation_outcome(&note_id, &format!("Key shown to user: {SENTINEL_KEY}")));
+        committed(
+            store.set_note_annotation_outcome(
+                &note_id,
+                &format!("Key shown to user: {SENTINEL_KEY}"),
+            ),
+        );
         let snapshot = committed(store.snapshot_outcome());
         let serialized = serde_json::to_string(&snapshot).unwrap();
         // The sentinel is in Note text by design; this asserts only the
         // sentinel never appears in any non-text durable field.
-        for path in [snapshot.workspaces.iter().flat_map(|w| w.id().chars().chain(w.cloud_consent_at().unwrap_or("").chars()))] {
+        for path in [snapshot.workspaces.iter().flat_map(|w| {
+            w.id()
+                .chars()
+                .chain(w.cloud_consent_at().unwrap_or("").chars())
+        })] {
             let collected: String = path.collect();
-            assert!(!collected.contains(SENTINEL_KEY), "A non-text Workspace field carried the sentinel: {collected}");
+            assert!(
+                !collected.contains(SENTINEL_KEY),
+                "A non-text Workspace field carried the sentinel: {collected}"
+            );
         }
         // The serialized snapshot still has the text because the thinker
         // wrote it; the test only fails if a non-text slot echoes the key.
@@ -4537,7 +5273,11 @@ mod tests {
         }
     }
 
-    fn token_for(workspace_id: &str, note_id: &str, revision: u64) -> crate::enrichment::RequestToken {
+    fn token_for(
+        workspace_id: &str,
+        note_id: &str,
+        revision: u64,
+    ) -> crate::enrichment::RequestToken {
         crate::enrichment::RequestToken {
             workspace_id: workspace_id.to_owned(),
             note_id: note_id.to_owned(),
@@ -4551,7 +5291,8 @@ mod tests {
     #[test]
     fn apply_enrichment_sets_ai_provenance_on_organization_fields() {
         let mut store = MemoryStore::new();
-        let workspace_id = workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
+        let workspace_id =
+            workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
         committed(store.set_assistance_policy_outcome(&workspace_id, "local_ai"));
         let note = committed(store.create_note_outcome(&workspace_id, "an org thought"));
         let note_id = note.notes[0].id.clone();
@@ -4567,7 +5308,11 @@ mod tests {
         assert_eq!(after.note_type_provenance, Provenance::Ai);
         assert_eq!(after.annotation.as_deref(), Some("an additive note"));
         assert_eq!(after.annotation_provenance, Provenance::Ai);
-        let label_names: Vec<String> = after.labels.iter().map(|label| label.name().to_owned()).collect();
+        let label_names: Vec<String> = after
+            .labels
+            .iter()
+            .map(|label| label.name().to_owned())
+            .collect();
         assert_eq!(label_names, vec!["alpha".to_owned(), "beta".to_owned()]);
         assert!(after.last_enriched_at().is_some());
     }
@@ -4575,7 +5320,8 @@ mod tests {
     #[test]
     fn apply_enrichment_never_writes_a_manual_note_type() {
         let mut store = MemoryStore::new();
-        let workspace_id = workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
+        let workspace_id =
+            workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
         committed(store.set_assistance_policy_outcome(&workspace_id, "local_ai"));
         let note = committed(store.create_note_outcome(&workspace_id, "a manual thought"));
         let note_id = note.notes[0].id.clone();
@@ -4596,7 +5342,8 @@ mod tests {
     #[test]
     fn apply_enrichment_replaces_manual_fields_when_forced() {
         let mut store = MemoryStore::new();
-        let workspace_id = workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
+        let workspace_id =
+            workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
         committed(store.set_assistance_policy_outcome(&workspace_id, "local_ai"));
         let note = committed(store.create_note_outcome(&workspace_id, "a manual thought"));
         let note_id = note.notes[0].id.clone();
@@ -4619,7 +5366,8 @@ mod tests {
     #[test]
     fn apply_enrichment_rejects_stale_revision() {
         let mut store = MemoryStore::new();
-        let workspace_id = workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
+        let workspace_id =
+            workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
         committed(store.set_assistance_policy_outcome(&workspace_id, "local_ai"));
         let note = committed(store.create_note_outcome(&workspace_id, "an org thought"));
         let note_id = note.notes[0].id.clone();
@@ -4646,7 +5394,8 @@ mod tests {
     #[test]
     fn apply_enrichment_rejects_manual_policy() {
         let mut store = MemoryStore::new();
-        let workspace_id = workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
+        let workspace_id =
+            workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
         let note = committed(store.create_note_outcome(&workspace_id, "an org thought"));
         let note_id = note.notes[0].id.clone();
         // Policy remains Manual; the request should be rejected.
@@ -4671,7 +5420,8 @@ mod tests {
     #[test]
     fn apply_enrichment_never_overwrites_a_manual_label_membership() {
         let mut store = MemoryStore::new();
-        let workspace_id = workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
+        let workspace_id =
+            workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
         committed(store.set_assistance_policy_outcome(&workspace_id, "local_ai"));
         let note = committed(store.create_note_outcome(&workspace_id, "an org thought"));
         let note_id = note.notes[0].id.clone();
@@ -4686,7 +5436,11 @@ mod tests {
             false,
         ));
         let after = note_in(&outcome, &note_id);
-        let label_names: Vec<String> = after.labels.iter().map(|label| label.name().to_owned()).collect();
+        let label_names: Vec<String> = after
+            .labels
+            .iter()
+            .map(|label| label.name().to_owned())
+            .collect();
         // The manual "alpha" stays; the AI suggestion of "alpha" is skipped
         // because it is already a membership, and "beta" is added.
         assert_eq!(label_names, vec!["alpha".to_owned(), "beta".to_owned()]);
@@ -4695,7 +5449,8 @@ mod tests {
     #[test]
     fn apply_enrichment_does_not_change_note_text() {
         let mut store = MemoryStore::new();
-        let workspace_id = workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
+        let workspace_id =
+            workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
         committed(store.set_assistance_policy_outcome(&workspace_id, "local_ai"));
         let original_text = "A thought that must never be rewritten.";
         let note = committed(store.create_note_outcome(&workspace_id, original_text));
@@ -4715,7 +5470,8 @@ mod tests {
     #[test]
     fn apply_enrichment_adds_relationships_with_ai_provenance() {
         let mut store = MemoryStore::new();
-        let workspace_id = workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
+        let workspace_id =
+            workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
         committed(store.set_assistance_policy_outcome(&workspace_id, "local_ai"));
         let target = committed(store.create_note_outcome(&workspace_id, "target"));
         let other = committed(store.create_note_outcome(&workspace_id, "related"));
@@ -4729,7 +5485,11 @@ mod tests {
             &workspace_id,
             &target_id,
             &parsed,
-            &token_for(&workspace_id, &target_id, before_target.enrichment_revision()),
+            &token_for(
+                &workspace_id,
+                &target_id,
+                before_target.enrichment_revision(),
+            ),
             false,
         ));
         let after = &outcome;
@@ -4781,7 +5541,11 @@ mod tests {
         assert_eq!(after.note_type_provenance, Provenance::Ai);
         assert_eq!(after.annotation.as_deref(), Some("an additive note"));
         assert!(after.last_enriched_at().is_some());
-        let label_names: Vec<String> = after.labels.iter().map(|label| label.name().to_owned()).collect();
+        let label_names: Vec<String> = after
+            .labels
+            .iter()
+            .map(|label| label.name().to_owned())
+            .collect();
         assert_eq!(label_names, vec!["alpha".to_owned(), "beta".to_owned()]);
         drop(reopened);
         remove_database(&path);
@@ -4793,7 +5557,8 @@ mod tests {
     #[test]
     fn apply_enrichment_drops_results_when_the_thinker_edits_during_inference() {
         let mut store = MemoryStore::new();
-        let workspace_id = workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
+        let workspace_id =
+            workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
         committed(store.set_assistance_policy_outcome(&workspace_id, "local_ai"));
         let note = committed(store.create_note_outcome(&workspace_id, "an org thought"));
         let note_id = note.notes[0].id.clone();
@@ -4933,7 +5698,9 @@ mod tests {
             .unwrap();
         let synthesis_id = snapshot.pending_syntheses[0].id.clone();
 
-        store.edit_note_text(&note_ids[0], "The thinker moved on").unwrap();
+        store
+            .edit_note_text(&note_ids[0], "The thinker moved on")
+            .unwrap();
         let snapshot = store.snapshot().unwrap();
         assert!(snapshot.pending_syntheses[0].stale);
         assert!(matches!(
@@ -4973,11 +5740,18 @@ mod tests {
             .unwrap();
         store.delete_note(&note_ids[0]).unwrap();
         let snapshot = store.snapshot().unwrap();
-        assert_eq!(snapshot.pending_syntheses.len(), 1, "the Synthesis is still shown");
+        assert_eq!(
+            snapshot.pending_syntheses.len(),
+            1,
+            "the Synthesis is still shown"
+        );
         assert!(snapshot.pending_syntheses[0].stale);
 
         // The same is true of a Note that left for another Workspace.
-        let other = store.create_workspace("Elsewhere").unwrap().active_workspace_id;
+        let other = store
+            .create_workspace("Elsewhere")
+            .unwrap()
+            .active_workspace_id;
         let fresh = sources_of(&store, &[&note_ids[1], &note_ids[2]]);
         let snapshot = store
             .store_pending_synthesis(
@@ -5031,7 +5805,11 @@ mod tests {
         assert_eq!(accepted.note_type, "thesis");
         assert_eq!(accepted.note_type_provenance, Provenance::Ai);
         assert_eq!(
-            accepted.labels.iter().map(|label| label.name.as_str()).collect::<Vec<_>>(),
+            accepted
+                .labels
+                .iter()
+                .map(|label| label.name.as_str())
+                .collect::<Vec<_>>(),
             vec!["delivery tradeoffs"]
         );
         // Accepting never touches a source Note, and writes no Relationship.
@@ -5050,7 +5828,10 @@ mod tests {
         let reopened = WorkspaceStore::open(&path).unwrap();
         let snapshot = reopened.snapshot().unwrap();
         assert!(snapshot.pending_syntheses.is_empty());
-        assert!(snapshot.notes.iter().any(|note| note.markdown == SYNTHESIS_TEXT));
+        assert!(snapshot
+            .notes
+            .iter()
+            .any(|note| note.markdown == SYNTHESIS_TEXT));
         assert!(!reopened
             .search_notes(&workspace_id, "maintenance")
             .unwrap()
@@ -5077,7 +5858,10 @@ mod tests {
 
         let snapshot = store.dismiss_synthesis(&synthesis_id).unwrap();
         assert!(snapshot.pending_syntheses.is_empty());
-        assert!(!snapshot.notes.iter().any(|note| note.markdown == SYNTHESIS_TEXT));
+        assert!(!snapshot
+            .notes
+            .iter()
+            .any(|note| note.markdown == SYNTHESIS_TEXT));
         assert_eq!(
             store.previous_synthesis_texts(&workspace_id).unwrap(),
             vec![SYNTHESIS_TEXT.to_owned()],
@@ -5144,7 +5928,9 @@ mod tests {
         let (workspace_id, note_ids) = organized_workspace(&mut store);
         let sources = sources_of(&store, &[&note_ids[0], &note_ids[1]]);
         // The thinker edits a source while the request is in flight.
-        store.edit_note_text(&note_ids[0], "Rewritten mid-flight").unwrap();
+        store
+            .edit_note_text(&note_ids[0], "Rewritten mid-flight")
+            .unwrap();
         assert!(matches!(
             store.store_pending_synthesis(
                 &workspace_id,
@@ -5158,7 +5944,10 @@ mod tests {
         let snapshot = store.snapshot().unwrap();
         assert!(snapshot.pending_syntheses.is_empty());
         assert!(
-            store.previous_synthesis_texts(&workspace_id).unwrap().is_empty(),
+            store
+                .previous_synthesis_texts(&workspace_id)
+                .unwrap()
+                .is_empty(),
             "a refused result contributes nothing, not even novelty history"
         );
         remove_database(&path);
@@ -5283,6 +6072,420 @@ mod tests {
         store.create_workspace("Somewhere else").unwrap();
         let snapshot = store.delete_workspace(&workspace_id).unwrap();
         assert!(snapshot.pending_syntheses.is_empty());
+        remove_database(&path);
+    }
+
+    /// A rich Thinking Workspace for archive round-trip: a Unicode name, every
+    /// Note Type, manual and AI provenance, Labels, manual and AI
+    /// Relationships, a pending Synthesis with sources, and Synthesis history.
+    fn archive_source_workspace(store: &mut WorkspaceStore) -> String {
+        let workspace_id = store.snapshot().unwrap().active_workspace_id;
+        store
+            .rename_workspace(&workspace_id, "Café — 日本語")
+            .unwrap();
+        // A Cloud AI workspace with a selected model and consent, so the
+        // byte-scan test can prove none of that leaves the durable layer.
+        store
+            .set_assistance_policy(&workspace_id, AssistancePolicy::CloudAi)
+            .unwrap();
+        store
+            .set_selected_model(&workspace_id, Some("SENTINEL-MODEL-DO-NOT-LEAK"))
+            .unwrap();
+        store.set_cloud_consent(&workspace_id, true).unwrap();
+
+        // Three Notes: two for an AI Relationship and a manual Relationship,
+        // and a third for the rest of the taxonomy.
+        let first = store
+            .create_note(&workspace_id, "Cities grew around rivers")
+            .unwrap();
+        let first_id = first
+            .notes
+            .iter()
+            .find(|note| note.markdown == "Cities grew around rivers")
+            .unwrap()
+            .id
+            .clone();
+        let second = store
+            .create_note(&workspace_id, "Trade follows water")
+            .unwrap();
+        let second_id = second
+            .notes
+            .iter()
+            .find(|note| note.markdown == "Trade follows water")
+            .unwrap()
+            .id
+            .clone();
+        let third = store.create_note(&workspace_id, "A third thought").unwrap();
+        let third_id = third
+            .notes
+            .iter()
+            .find(|note| note.markdown == "A third thought")
+            .unwrap()
+            .id
+            .clone();
+
+        // An AI Relationship and AI provenance on the first Note, by running
+        // one enrichment organization under a non-Manual policy. The policy is
+        // CloudAi; enrichment is admitted for any non-Manual policy.
+        let token = crate::enrichment::RequestToken {
+            workspace_id: workspace_id.clone(),
+            note_id: first_id.clone(),
+            revision: store.note(&first_id).unwrap().enrichment_revision(),
+            policy: "cloud_ai".to_owned(),
+            endpoint: crate::cloud::OLLAMA_CLOUD_BASE_URL.to_owned(),
+            model: "phi3:latest".to_owned(),
+        };
+        let enrichment = crate::enrichment::ParsedEnrichmentResult {
+            note_type: "claim".to_owned(),
+            labels: vec!["Rivers".to_owned()],
+            annotation: Some("An additive note".to_owned()),
+            related_note_ids: vec![second_id.clone()],
+        };
+        store
+            .apply_enrichment(&workspace_id, &first_id, &enrichment, &token, false)
+            .unwrap();
+
+        // A manual Relationship between the second and third Notes, so both
+        // provenances travel and neither pair overlaps the other.
+        store.relate_notes(&second_id, &third_id).unwrap();
+
+        // A manual Note Type and Annotation on the second Note, so manual
+        // provenance is also exercised.
+        store.set_note_type(&second_id, "question").unwrap();
+        store.set_note_annotation(&second_id, "Why here?").unwrap();
+        // A Label with no Note, so the Workspace vocabulary is not only the
+        // Labels in use.
+        store.attach_label(&third_id, "Distant").unwrap();
+        let distant_label_id = store.note(&third_id).unwrap().labels[0].id.clone();
+        store.detach_label(&third_id, &distant_label_id).unwrap();
+
+        // One Note of every remaining Note Type, so the full taxonomy travels.
+        for note_type in [
+            "task",
+            "idea",
+            "entity",
+            "quote",
+            "reference",
+            "definition",
+            "opinion",
+            "reflection",
+            "narrative",
+            "comparison",
+            "thesis",
+            "general",
+        ] {
+            let snapshot = store
+                .create_note(&workspace_id, &format!("{note_type} thought"))
+                .unwrap();
+            let note_id = snapshot
+                .notes
+                .iter()
+                .find(|note| note.markdown == format!("{note_type} thought"))
+                .unwrap()
+                .id
+                .clone();
+            store.set_note_type(&note_id, note_type).unwrap();
+        }
+
+        // A pending Synthesis built from the first two Notes, plus the
+        // bounded novelty history its proposal writes.
+        let sources = sources_of(store, &[&first_id, &second_id]);
+        store
+            .store_pending_synthesis(
+                &workspace_id,
+                &parsed(SYNTHESIS_TEXT, &["Rivers"]),
+                &sources,
+                "phi3:latest",
+                AssistancePolicy::LocalAi,
+            )
+            .unwrap();
+        workspace_id
+    }
+
+    #[test]
+    fn archive_round_trip_preserves_domain_meaning_with_fresh_identities() {
+        let path = temporary_path();
+        let mut store = WorkspaceStore::open(&path).unwrap();
+        let source_id = archive_source_workspace(&mut store);
+        let exported = store.archive_export_data(&source_id).unwrap();
+        let archive =
+            crate::archive::build_archive(&exported, "0.1.0", "2026-07-23T12:00:00+00:00");
+        let bytes = crate::archive::serialize_archive(&archive).unwrap();
+        let parsed = crate::archive::parse_and_validate(bytes.as_bytes()).unwrap();
+
+        // Import into a fresh store, so the imported ids cannot collide with
+        // the source ids and the round trip is observed on its own.
+        let import_path = temporary_path();
+        let mut imported = WorkspaceStore::open(&import_path).unwrap();
+        let before_count = imported.snapshot().unwrap().workspaces.len();
+        let snapshot = imported.import_archive(&parsed).unwrap();
+        let imported_workspace = snapshot
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.name == "Café — 日本語")
+            .unwrap();
+        // Fresh identity, Manual policy, no imported model or consent.
+        assert_ne!(imported_workspace.id, source_id);
+        assert_eq!(
+            imported_workspace.assistance_policy,
+            AssistancePolicy::Manual
+        );
+        assert_eq!(imported_workspace.selected_model, None);
+        assert_eq!(imported_workspace.cloud_consent_at, None);
+        assert_eq!(snapshot.workspaces.len(), before_count + 1);
+
+        // Every Note travels with fresh ids and preserved authored fields.
+        let source_snapshot = store.snapshot().unwrap();
+        let source_notes: Vec<&Note> = source_snapshot
+            .notes
+            .iter()
+            .filter(|note| note.workspace_id == source_id)
+            .collect();
+        let imported_notes: Vec<&Note> = snapshot
+            .notes
+            .iter()
+            .filter(|note| note.workspace_id == imported_workspace.id)
+            .collect();
+        assert_eq!(imported_notes.len(), source_notes.len());
+        for (source, imported) in source_notes.iter().zip(imported_notes.iter()) {
+            assert_ne!(imported.id, source.id, "Notes receive fresh ids");
+            assert_eq!(imported.markdown, source.markdown);
+            assert_eq!(imported.note_type, source.note_type);
+            assert_eq!(imported.note_type_provenance, source.note_type_provenance);
+            assert_eq!(imported.annotation, source.annotation);
+            assert_eq!(imported.annotation_provenance, source.annotation_provenance);
+            assert_eq!(imported.pinned, source.pinned);
+            assert_eq!(imported.created_at, source.created_at);
+            assert_eq!(imported.enrichment_revision, source.enrichment_revision);
+            assert_eq!(imported.last_enriched_at, source.last_enriched_at);
+        }
+
+        // Relationships travel with fresh ids and preserved provenance.
+        let source_relationships: Vec<&Relationship> = source_snapshot
+            .relationships
+            .iter()
+            .filter(|relationship| relationship.workspace_id == source_id)
+            .collect();
+        let imported_relationships: Vec<&Relationship> = snapshot
+            .relationships
+            .iter()
+            .filter(|relationship| relationship.workspace_id == imported_workspace.id)
+            .collect();
+        assert_eq!(imported_relationships.len(), source_relationships.len());
+        let provenance: Vec<&RelationshipProvenance> = imported_relationships
+            .iter()
+            .map(|relationship| &relationship.provenance)
+            .collect();
+        assert!(provenance.contains(&&RelationshipProvenance::Manual));
+        assert!(provenance.contains(&&RelationshipProvenance::Ai));
+        for relationship in &imported_relationships {
+            assert!(
+                !source_relationships
+                    .iter()
+                    .any(|source| source.id == relationship.id),
+                "Relationships receive fresh ids"
+            );
+        }
+
+        // The pending Synthesis and its source mapping travel.
+        let imported_pending: Vec<&PendingSynthesis> = snapshot
+            .pending_syntheses
+            .iter()
+            .filter(|pending| pending.workspace_id == imported_workspace.id)
+            .collect();
+        assert_eq!(imported_pending.len(), 1);
+        assert_eq!(imported_pending[0].text, SYNTHESIS_TEXT);
+        assert_eq!(imported_pending[0].source_note_ids.len(), 2);
+        // Every source names an imported Note of this Workspace.
+        for source_id in &imported_pending[0].source_note_ids {
+            assert!(imported_notes.iter().any(|note| &note.id == source_id));
+        }
+        // A non-stale exported Synthesis stays non-stale after import.
+        assert!(!imported_pending[0].stale);
+
+        // The novelty history travels.
+        assert_eq!(
+            imported
+                .synthesis_history(&imported_workspace.id)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // Everything is durable: reopen and assert the same shape.
+        drop(imported);
+        let reopened = WorkspaceStore::open(&import_path).unwrap();
+        let reopened_snapshot = reopened.snapshot().unwrap();
+        let reopened_workspace = reopened_snapshot
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.name == "Café — 日本語")
+            .unwrap();
+        assert_eq!(
+            reopened_workspace.assistance_policy,
+            AssistancePolicy::Manual
+        );
+        assert_eq!(
+            reopened_snapshot
+                .notes
+                .iter()
+                .filter(|note| note.workspace_id == reopened_workspace.id)
+                .count(),
+            source_notes.len()
+        );
+
+        remove_database(&path);
+        remove_database(&import_path);
+    }
+
+    #[test]
+    fn archive_import_rolls_back_leaving_the_database_unchanged() {
+        let path = temporary_path();
+        let mut store = WorkspaceStore::open(&path).unwrap();
+        let workspace_id = store.snapshot().unwrap().active_workspace_id;
+        // The archive must carry a Note, so the injected trigger fires inside
+        // the import transaction rather than before it begins.
+        store
+            .create_note(&workspace_id, "A thought to import")
+            .unwrap();
+        let before = store.snapshot().unwrap();
+        let workspace_count = before.workspaces.len();
+        let note_count = before.notes.len();
+        let relationship_count = before.relationships.len();
+
+        // A valid archive built from this Workspace.
+        let archive = crate::archive::build_archive(
+            &store.archive_export_data(&workspace_id).unwrap(),
+            "0.1.0",
+            "2026-07-23T12:00:00+00:00",
+        );
+        // Inject a failure inside the import transaction: nothing may commit.
+        store.connection.execute_batch("CREATE TRIGGER reject_imported_notes BEFORE INSERT ON notes BEGIN SELECT RAISE(FAIL, 'injected'); END;").unwrap();
+        let result = store.import_archive(&archive);
+        assert!(result.is_err(), "the injected failure surfaces as an error");
+        let after = store.snapshot().unwrap();
+        assert_eq!(
+            after.workspaces.len(),
+            workspace_count,
+            "no Workspace was added"
+        );
+        assert_eq!(after.notes.len(), note_count, "no Note was added");
+        assert_eq!(
+            after.relationships.len(),
+            relationship_count,
+            "no Relationship was added"
+        );
+        remove_database(&path);
+    }
+
+    #[test]
+    fn archive_bytes_carry_no_secrets_or_transient_state() {
+        let path = temporary_path();
+        let mut store = WorkspaceStore::open(&path).unwrap();
+        archive_source_workspace(&mut store);
+        let exported = store
+            .archive_export_data(&store.snapshot().unwrap().active_workspace_id)
+            .unwrap();
+        let archive =
+            crate::archive::build_archive(&exported, "0.1.0", "2026-07-23T12:00:00+00:00");
+        let bytes = crate::archive::serialize_archive(&archive).unwrap();
+        // Secrets and transient state never leave the durable layer.
+        assert!(
+            !bytes.contains("SENTINEL-MODEL-DO-NOT-LEAK"),
+            "the selected model is not exported"
+        );
+        assert!(
+            !bytes.contains("selectedModel"),
+            "selected model field is absent"
+        );
+        assert!(!bytes.contains("cloudConsent"), "cloud consent is absent");
+        assert!(
+            !bytes.contains("activeWorkspace"),
+            "active workspace preference is absent"
+        );
+        assert!(
+            !bytes.contains("undoableCommands"),
+            "undo history is absent"
+        );
+        assert!(
+            !bytes.contains("keychain"),
+            "keychain references are absent"
+        );
+        // The durable content the archive is meant to carry is present.
+        assert!(
+            bytes.contains("Café — 日本語"),
+            "the Workspace name travels"
+        );
+        assert!(
+            bytes.contains("Cities grew around rivers"),
+            "a Note travels"
+        );
+        remove_database(&path);
+    }
+
+    #[test]
+    fn archive_import_appends_a_deterministic_name_suffix_on_collision() {
+        let path = temporary_path();
+        let mut store = WorkspaceStore::open(&path).unwrap();
+        store
+            .rename_workspace(&store.snapshot().unwrap().active_workspace_id, "Research")
+            .unwrap();
+        let exported = store
+            .archive_export_data(&store.snapshot().unwrap().active_workspace_id)
+            .unwrap();
+        let archive =
+            crate::archive::build_archive(&exported, "0.1.0", "2026-07-23T12:00:00+00:00");
+        let bytes = crate::archive::serialize_archive(&archive).unwrap();
+
+        // Import the same archive twice: the first lands as "Research (2)",
+        // the second as "Research (3)", and neither overwrites the original.
+        let parsed = crate::archive::parse_and_validate(bytes.as_bytes()).unwrap();
+        let first = store.import_archive(&parsed).unwrap();
+        assert!(first
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.name == "Research (2)"));
+        assert_eq!(
+            first
+                .workspaces
+                .iter()
+                .filter(|workspace| workspace.name == "Research")
+                .count(),
+            1,
+            "the original is untouched"
+        );
+        let second = store.import_archive(&parsed).unwrap();
+        assert!(second
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.name == "Research (3)"));
+        let researches = second
+            .workspaces
+            .iter()
+            .filter(|workspace| workspace.name.starts_with("Research"))
+            .count();
+        assert_eq!(
+            researches, 3,
+            "three distinct Workspaces share the name stem"
+        );
+        remove_database(&path);
+    }
+
+    #[test]
+    fn archive_import_rejects_a_malformed_archive_before_mutation() {
+        let path = temporary_path();
+        let store = WorkspaceStore::open(&path).unwrap();
+        let before = store.snapshot().unwrap().workspaces.len();
+        let error = crate::archive::parse_and_validate(b"{ not json");
+        assert!(matches!(
+            error,
+            Err(crate::archive::ArchiveError::MalformedJson)
+        ));
+        let after = store.snapshot().unwrap().workspaces.len();
+        assert_eq!(
+            before, after,
+            "nothing mutated before validation rejected the input"
+        );
         remove_database(&path);
     }
 }

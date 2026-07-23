@@ -1,3 +1,4 @@
+mod archive;
 mod cloud;
 mod enrichment;
 mod markdown_export;
@@ -8,25 +9,28 @@ mod thinking_graph;
 mod url_metadata;
 mod workspace;
 
-use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Manager, State};
-use tauri_plugin_dialog::DialogExt;
 use cloud::{CloudOllamaProvider, CloudTagsClient, HttpCloudTagsClient, OLLAMA_CLOUD_BASE_URL};
 use enrichment::{
     EnrichmentClient, EnrichmentFailureCode, EnrichmentOutcome, EnrichmentRequest,
     HttpEnrichmentClient, ParsedEnrichmentResult, RequestToken,
 };
-use ollama::{DiscoveryOutcome, HttpTagsClient, OllamaProvider, OLLAMA_LOCAL_BASE_URL_PUBLIC as OLLAMA_LOCAL_BASE_URL};
-use secrets::{
-    KeychainAdapter, KeychainFailure, KeychainOutcome, OLLAMA_CLOUD_KEYCHAIN_ACCOUNT,
-    OLLAMA_CLOUD_KEYCHAIN_SERVICE, SecurityCliKeychain,
+use ollama::{
+    DiscoveryOutcome, HttpTagsClient, OllamaProvider,
+    OLLAMA_LOCAL_BASE_URL_PUBLIC as OLLAMA_LOCAL_BASE_URL,
 };
+use secrets::{
+    KeychainAdapter, KeychainFailure, KeychainOutcome, SecurityCliKeychain,
+    OLLAMA_CLOUD_KEYCHAIN_ACCOUNT, OLLAMA_CLOUD_KEYCHAIN_SERVICE,
+};
+use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Manager, State};
+use tauri_plugin_dialog::DialogExt;
+use url_metadata::{HttpUrlMetadataClient, UrlMetadataClient};
 use workspace::{
     unavailable_search_outcome, AssistancePolicy, StorageOpenFailure, StorageOpenFailureCategory,
-    ThinkingWorkspaceInterface, WorkspaceCommandResult, WorkspaceFailureCode, WorkspaceSearchOutcome,
-    WorkspaceSnapshot, WorkspaceStore,
+    ThinkingWorkspaceInterface, WorkspaceCommandResult, WorkspaceFailureCode,
+    WorkspaceSearchOutcome, WorkspaceSnapshot, WorkspaceStore,
 };
-use url_metadata::{HttpUrlMetadataClient, UrlMetadataClient};
 
 /// Storage may be unavailable at startup; the app stays running so the thinker
 /// can retry or quit without the database ever being reset.
@@ -48,7 +52,12 @@ impl AppState {
         &self,
         intent: impl FnOnce(&mut WorkspaceStore) -> WorkspaceCommandResult,
     ) -> WorkspaceCommandResult {
-        match self.storage.lock().expect("workspace lock poisoned").as_mut() {
+        match self
+            .storage
+            .lock()
+            .expect("workspace lock poisoned")
+            .as_mut()
+        {
             Ok(store) => intent(store),
             Err(failure) => WorkspaceCommandResult::Unavailable {
                 failure: failure.clone(),
@@ -60,7 +69,12 @@ impl AppState {
         &self,
         intent: impl FnOnce(&WorkspaceStore) -> WorkspaceSearchOutcome,
     ) -> WorkspaceSearchOutcome {
-        match self.storage.lock().expect("workspace lock poisoned").as_ref() {
+        match self
+            .storage
+            .lock()
+            .expect("workspace lock poisoned")
+            .as_ref()
+        {
             Ok(store) => intent(store),
             Err(failure) => unavailable_search_outcome(failure),
         }
@@ -169,17 +183,29 @@ fn copy_note(
 }
 
 #[tauri::command]
-fn attach_label(note_id: String, name: String, state: State<'_, AppState>) -> WorkspaceCommandResult {
+fn attach_label(
+    note_id: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> WorkspaceCommandResult {
     state.dispatch(|store| store.attach_label_outcome(&note_id, &name))
 }
 
 #[tauri::command]
-fn detach_label(note_id: String, label_id: String, state: State<'_, AppState>) -> WorkspaceCommandResult {
+fn detach_label(
+    note_id: String,
+    label_id: String,
+    state: State<'_, AppState>,
+) -> WorkspaceCommandResult {
     state.dispatch(|store| store.detach_label_outcome(&note_id, &label_id))
 }
 
 #[tauri::command]
-fn rename_label(label_id: String, name: String, state: State<'_, AppState>) -> WorkspaceCommandResult {
+fn rename_label(
+    label_id: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> WorkspaceCommandResult {
     state.dispatch(|store| store.rename_label_outcome(&label_id, &name))
 }
 
@@ -209,7 +235,11 @@ fn unrelate_notes(
 }
 
 #[tauri::command]
-fn search_notes(workspace_id: String, query: String, state: State<'_, AppState>) -> WorkspaceSearchOutcome {
+fn search_notes(
+    workspace_id: String,
+    query: String,
+    state: State<'_, AppState>,
+) -> WorkspaceSearchOutcome {
     state.dispatch_search(|store| store.search_outcome(&workspace_id, &query))
 }
 
@@ -222,24 +252,184 @@ fn undo_last_change(workspace_id: String, state: State<'_, AppState>) -> Workspa
 
 #[derive(serde::Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
-enum MarkdownExportOutcome { Exported { filename: String }, Cancelled, Failed { message: String } }
+enum MarkdownExportOutcome {
+    Exported { filename: String },
+    Cancelled,
+    Failed { message: String },
+}
 
 #[tauri::command]
-fn export_workspace(workspace_id: String, app: AppHandle, state: State<'_, AppState>) -> MarkdownExportOutcome {
-    let document = match state.storage.lock().expect("workspace lock poisoned").as_ref() {
+fn export_workspace(
+    workspace_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> MarkdownExportOutcome {
+    let document = match state
+        .storage
+        .lock()
+        .expect("workspace lock poisoned")
+        .as_ref()
+    {
         Ok(store) => store.markdown_export(&workspace_id),
-        Err(failure) => return MarkdownExportOutcome::Failed { message: failure.message.clone() },
+        Err(failure) => {
+            return MarkdownExportOutcome::Failed {
+                message: failure.message.clone(),
+            }
+        }
     };
     let (markdown, filename) = match document {
         Ok(document) => document,
-        Err(error) => return MarkdownExportOutcome::Failed { message: error.failure().message },
+        Err(error) => {
+            return MarkdownExportOutcome::Failed {
+                message: error.failure().message,
+            }
+        }
     };
-    let destination = app.dialog().file().add_filter("Markdown", &["md"]).set_file_name(&filename).blocking_save_file();
-    let Some(destination) = destination else { return MarkdownExportOutcome::Cancelled; };
-    let Some(destination) = destination.as_path() else { return MarkdownExportOutcome::Failed { message: "Nodepad could not use the selected export location.".to_owned() }; };
+    let destination = app
+        .dialog()
+        .file()
+        .add_filter("Markdown", &["md"])
+        .set_file_name(&filename)
+        .blocking_save_file();
+    let Some(destination) = destination else {
+        return MarkdownExportOutcome::Cancelled;
+    };
+    let Some(destination) = destination.as_path() else {
+        return MarkdownExportOutcome::Failed {
+            message: "Nodepad could not use the selected export location.".to_owned(),
+        };
+    };
     match markdown_export::write_atomically(destination, &markdown) {
         Ok(()) => MarkdownExportOutcome::Exported { filename },
-        Err(error) => MarkdownExportOutcome::Failed { message: format!("Nodepad could not export this Thinking Workspace: {error}") },
+        Err(error) => MarkdownExportOutcome::Failed {
+            message: format!("Nodepad could not export this Thinking Workspace: {error}"),
+        },
+    }
+}
+
+#[derive(serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum ArchiveExportOutcome {
+    Exported { filename: String },
+    Cancelled,
+    Failed { message: String },
+}
+
+#[derive(serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum ArchiveImportOutcome {
+    Imported { snapshot: WorkspaceSnapshot },
+    Cancelled,
+    Failed { message: String },
+}
+
+/// Exports one Thinking Workspace as a versioned Nodepad archive. The native
+/// save dialog chooses the destination; a cancel is a successful no-op. The
+/// durable bytes carry no secrets and no transient state.
+#[tauri::command]
+fn export_workspace_archive(
+    workspace_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> ArchiveExportOutcome {
+    let data = match state
+        .storage
+        .lock()
+        .expect("workspace lock poisoned")
+        .as_ref()
+    {
+        Ok(store) => store.archive_export_data(&workspace_id),
+        Err(failure) => {
+            return ArchiveExportOutcome::Failed {
+                message: failure.message.clone(),
+            }
+        }
+    };
+    let data = match data {
+        Ok(data) => data,
+        Err(error) => {
+            return ArchiveExportOutcome::Failed {
+                message: error.failure().message,
+            }
+        }
+    };
+    let archive = archive::build_archive(&data, env!("CARGO_PKG_VERSION"), &now_rfc3339());
+    let filename = archive::default_filename(&data.workspace.name);
+    let json = match archive::serialize_archive(&archive) {
+        Ok(json) => json,
+        Err(error) => {
+            return ArchiveExportOutcome::Failed {
+                message: error.message(),
+            }
+        }
+    };
+    let destination = app
+        .dialog()
+        .file()
+        .add_filter("Nodepad archive", &["json"])
+        .set_file_name(&filename)
+        .blocking_save_file();
+    let Some(destination) = destination else {
+        return ArchiveExportOutcome::Cancelled;
+    };
+    let Some(destination) = destination.as_path() else {
+        return ArchiveExportOutcome::Failed {
+            message: "Nodepad could not use the selected archive location.".to_owned(),
+        };
+    };
+    match markdown_export::write_atomically(destination, &json) {
+        Ok(()) => ArchiveExportOutcome::Exported { filename },
+        Err(error) => ArchiveExportOutcome::Failed {
+            message: format!("Nodepad could not write the archive: {error}"),
+        },
+    }
+}
+
+/// Imports one validated V0 archive as a fresh Thinking Workspace. Validation
+/// completes before any durable row is touched; a malformed archive fails
+/// closed. A cancel of the open dialog is a successful no-op.
+#[tauri::command]
+fn import_workspace_archive(app: AppHandle, state: State<'_, AppState>) -> ArchiveImportOutcome {
+    let Some(source) = app
+        .dialog()
+        .file()
+        .add_filter("Nodepad archive", &["json"])
+        .blocking_pick_file()
+    else {
+        return ArchiveImportOutcome::Cancelled;
+    };
+    let Some(source) = source.as_path() else {
+        return ArchiveImportOutcome::Failed {
+            message: "Nodepad could not use the selected archive.".to_owned(),
+        };
+    };
+    let bytes = match std::fs::read(source) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return ArchiveImportOutcome::Failed {
+                message: format!("Nodepad could not read the archive: {error}"),
+            }
+        }
+    };
+    let archive = match archive::parse_and_validate(&bytes) {
+        Ok(archive) => archive,
+        Err(error) => {
+            return ArchiveImportOutcome::Failed {
+                message: error.message(),
+            }
+        }
+    };
+    let mut storage = state.storage.lock().expect("workspace lock poisoned");
+    match storage.as_mut() {
+        Ok(store) => match store.import_archive(&archive) {
+            Ok(snapshot) => ArchiveImportOutcome::Imported { snapshot },
+            Err(error) => ArchiveImportOutcome::Failed {
+                message: error.failure().message,
+            },
+        },
+        Err(failure) => ArchiveImportOutcome::Failed {
+            message: failure.message.clone(),
+        },
     }
 }
 
@@ -305,11 +495,10 @@ fn set_cloud_api_key(
 /// they try to discover cloud models.
 #[tauri::command]
 fn delete_cloud_api_key(state: State<'_, AppState>) -> Result<CloudSecretOutcome, String> {
-    Ok(secret_outcome(
-        state
-            .keychain
-            .delete(OLLAMA_CLOUD_KEYCHAIN_SERVICE, OLLAMA_CLOUD_KEYCHAIN_ACCOUNT),
-    ))
+    Ok(secret_outcome(state.keychain.delete(
+        OLLAMA_CLOUD_KEYCHAIN_SERVICE,
+        OLLAMA_CLOUD_KEYCHAIN_ACCOUNT,
+    )))
 }
 
 /// Whether a key is currently in the keychain. The key itself is never
@@ -363,21 +552,38 @@ async fn discover_cloud_models(
 #[serde(tag = "status", rename_all = "snake_case")]
 enum EnrichmentCommandOutcome {
     /// The result was parsed and applied. The snapshot is the new state.
-    Applied { result: ParsedEnrichmentResult, snapshot: WorkspaceSnapshot },
+    Applied {
+        result: ParsedEnrichmentResult,
+        snapshot: WorkspaceSnapshot,
+    },
     /// The result was parsed but the gate rejected it (manual provenance,
     /// stale revision, or the policy reverted to Manual mid-flight). The
     /// Note is unchanged.
-    Rejected { result: ParsedEnrichmentResult, snapshot: WorkspaceSnapshot, reason: String },
+    Rejected {
+        result: ParsedEnrichmentResult,
+        snapshot: WorkspaceSnapshot,
+        reason: String,
+    },
     /// The provider returned something we could not apply. The Note is
     /// unchanged and the UI renders a typed retry state.
-    ProviderFailed { code: EnrichmentFailureCode, message: String, snapshot: WorkspaceSnapshot },
+    ProviderFailed {
+        code: EnrichmentFailureCode,
+        message: String,
+        snapshot: WorkspaceSnapshot,
+    },
     /// The provider returned a body that did not match the structured
     /// contract. The Note is unchanged.
-    InvalidSchema { reason: String, snapshot: WorkspaceSnapshot },
+    InvalidSchema {
+        reason: String,
+        snapshot: WorkspaceSnapshot,
+    },
     /// The Workspace is not in a policy that permits AI assistance, the
     /// selected model is missing, or the Note disappeared. The Note is
     /// unchanged.
-    Unavailable { reason: String, snapshot: WorkspaceSnapshot },
+    Unavailable {
+        reason: String,
+        snapshot: WorkspaceSnapshot,
+    },
 }
 
 #[tauri::command]
@@ -465,7 +671,10 @@ async fn enrich_note(
                         snapshot,
                     });
                 }
-                match state.keychain.read(OLLAMA_CLOUD_KEYCHAIN_SERVICE, OLLAMA_CLOUD_KEYCHAIN_ACCOUNT) {
+                match state
+                    .keychain
+                    .read(OLLAMA_CLOUD_KEYCHAIN_SERVICE, OLLAMA_CLOUD_KEYCHAIN_ACCOUNT)
+                {
                     KeychainOutcome::Ok(value) => (OLLAMA_CLOUD_BASE_URL.to_owned(), Some(value)),
                     KeychainOutcome::Failed { failure } => {
                         return Ok(EnrichmentCommandOutcome::Unavailable {
@@ -516,7 +725,10 @@ async fn enrich_note(
     // URL retrieval is an optional, bounded input. It neither owns Note
     // persistence nor blocks ordinary AI organization when it fails.
     let request = EnrichmentRequest {
-        url_metadata: state.url_metadata.retrieve_from_note(&request.target_text).await,
+        url_metadata: state
+            .url_metadata
+            .retrieve_from_note(&request.target_text)
+            .await,
         ..request
     };
     // Step 2: call the right HTTP client. The bearer key is dropped from
@@ -581,12 +793,20 @@ async fn enrich_note(
     // Step 3: handle the result. Parsed results are committed; the rest
     // surface as typed failures.
     match outcome {
-        EnrichmentOutcome::Parsed { token: result_token, parsed } => {
+        EnrichmentOutcome::Parsed {
+            token: result_token,
+            parsed,
+        } => {
             let snapshot = {
                 let mut storage = state.storage.lock().expect("workspace lock poisoned");
                 match storage.as_mut() {
-                    Ok(store) => store
-                        .apply_enrichment_outcome(&workspace_id, &note_id, &parsed, &result_token, force),
+                    Ok(store) => store.apply_enrichment_outcome(
+                        &workspace_id,
+                        &note_id,
+                        &parsed,
+                        &result_token,
+                        force,
+                    ),
                     Err(failure) => {
                         return Ok(EnrichmentCommandOutcome::Unavailable {
                             reason: failure.message.clone(),
@@ -597,13 +817,25 @@ async fn enrich_note(
             };
             match snapshot {
                 WorkspaceCommandResult::Committed { snapshot } => {
-                    Ok(EnrichmentCommandOutcome::Applied { result: parsed, snapshot })
+                    Ok(EnrichmentCommandOutcome::Applied {
+                        result: parsed,
+                        snapshot,
+                    })
                 }
-                WorkspaceCommandResult::Failed { failure } if matches!(failure.code, WorkspaceFailureCode::Stale) => {
+                WorkspaceCommandResult::Failed { failure }
+                    if matches!(failure.code, WorkspaceFailureCode::Stale) =>
+                {
                     // A stale response leaves the Note unchanged. The UI
                     // renders the typed retry state on the same view.
-                    let current_snapshot = match state.storage.lock().expect("workspace lock poisoned").as_ref() {
-                        Ok(store) => store.snapshot().unwrap_or_else(|_| WorkspaceSnapshot::default_unavailable()),
+                    let current_snapshot = match state
+                        .storage
+                        .lock()
+                        .expect("workspace lock poisoned")
+                        .as_ref()
+                    {
+                        Ok(store) => store
+                            .snapshot()
+                            .unwrap_or_else(|_| WorkspaceSnapshot::default_unavailable()),
                         Err(_) => WorkspaceSnapshot::default_unavailable(),
                     };
                     Ok(EnrichmentCommandOutcome::Rejected {
@@ -626,12 +858,15 @@ async fn enrich_note(
                 }
             }
         }
-        EnrichmentOutcome::InvalidSchema { reason, .. } => Ok(EnrichmentCommandOutcome::InvalidSchema {
-            reason,
-            snapshot,
-        }),
+        EnrichmentOutcome::InvalidSchema { reason, .. } => {
+            Ok(EnrichmentCommandOutcome::InvalidSchema { reason, snapshot })
+        }
         EnrichmentOutcome::ProviderFailed { code, message, .. } => {
-            Ok(EnrichmentCommandOutcome::ProviderFailed { code, message, snapshot })
+            Ok(EnrichmentCommandOutcome::ProviderFailed {
+                code,
+                message,
+                snapshot,
+            })
         }
     }
 }
@@ -661,14 +896,23 @@ enum SynthesisCommandOutcome {
     },
     /// A source Note changed, was deleted, or left the Workspace while the
     /// request was in flight. Nothing is stored.
-    Stale { reason: String, snapshot: WorkspaceSnapshot },
-    InvalidSchema { reason: String, snapshot: WorkspaceSnapshot },
+    Stale {
+        reason: String,
+        snapshot: WorkspaceSnapshot,
+    },
+    InvalidSchema {
+        reason: String,
+        snapshot: WorkspaceSnapshot,
+    },
     ProviderFailed {
         code: EnrichmentFailureCode,
         message: String,
         snapshot: WorkspaceSnapshot,
     },
-    Unavailable { reason: String, snapshot: WorkspaceSnapshot },
+    Unavailable {
+        reason: String,
+        snapshot: WorkspaceSnapshot,
+    },
 }
 
 /// Runs one bounded Synthesis attempt for one Thinking Workspace.
@@ -845,11 +1089,9 @@ async fn propose_synthesis(
         .map(|candidate| candidate.id.clone())
         .collect();
     let outcome = match body {
-        Ok(body) => synthesis::parse_synthesis_response(
-            request.token.clone(),
-            &body,
-            &candidate_ids,
-        ),
+        Ok(body) => {
+            synthesis::parse_synthesis_response(request.token.clone(), &body, &candidate_ids)
+        }
         Err(code) => synthesis::SynthesisOutcome::ProviderFailed {
             token: request.token.clone(),
             code,
@@ -898,10 +1140,12 @@ fn commit_synthesis_outcome(
                 .source_note_ids
                 .iter()
                 .filter_map(|note_id| {
-                    token.revision_of(note_id).map(|revision| synthesis::SourceRevision {
-                        note_id: note_id.clone(),
-                        revision,
-                    })
+                    token
+                        .revision_of(note_id)
+                        .map(|revision| synthesis::SourceRevision {
+                            note_id: note_id.clone(),
+                            revision,
+                        })
                 })
                 .collect();
             if sources.len() != result.source_note_ids.len() {
@@ -930,7 +1174,9 @@ fn commit_synthesis_outcome(
                             synthesis,
                             snapshot: committed,
                         },
-                        None => SynthesisCommandOutcome::NoInsight { snapshot: committed },
+                        None => SynthesisCommandOutcome::NoInsight {
+                            snapshot: committed,
+                        },
                     }
                 }
                 Err(error) => {
@@ -957,7 +1203,11 @@ fn commit_synthesis_outcome(
                 snapshot: store.snapshot().unwrap_or(snapshot),
             }
         }
-        synthesis::SynthesisOutcome::ProviderFailed { token, code, message } => {
+        synthesis::SynthesisOutcome::ProviderFailed {
+            token,
+            code,
+            message,
+        } => {
             let _ = store.record_synthesis_cooldown(&token.workspace_id);
             SynthesisCommandOutcome::ProviderFailed {
                 code,
@@ -1127,6 +1377,8 @@ pub fn run() {
             search_notes,
             undo_last_change,
             export_workspace,
+            export_workspace_archive,
+            import_workspace_archive,
             set_assistance_policy,
             set_cloud_consent,
             select_model,

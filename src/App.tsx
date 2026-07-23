@@ -182,6 +182,21 @@ export function App() {
     })
   }
 
+  function exportWorkspaceArchive() {
+    if (!activeWorkspace) return
+    void thinkingWorkspace.exportWorkspaceArchive(activeWorkspace.id).then((outcome) => {
+      if (outcome.status === "failed") reportFailure({ code: "storage", message: outcome.message })
+    })
+  }
+
+  function importWorkspaceArchive() {
+    void thinkingWorkspace.importWorkspaceArchive().then((outcome) => {
+      if (outcome.status === "imported") adoptSnapshot(outcome.snapshot)
+      else if (outcome.status === "failed")
+        reportFailure({ code: "storage", message: outcome.message })
+    })
+  }
+
   function saveRenamedLabel(event: FormEvent) {
     event.preventDefault()
     if (!renameLabelDraft) return
@@ -295,6 +310,8 @@ export function App() {
         onNoteMarkdownChange={setNoteMarkdown}
         onCreateNote={createNote}
         onExport={exportWorkspace}
+        onExportArchive={exportWorkspaceArchive}
+        onImportArchive={importWorkspaceArchive}
       />
 
       <AssistanceSection
