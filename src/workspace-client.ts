@@ -34,6 +34,21 @@ export interface Note {
   createdAt: string
   updatedAt: string
   pinned: boolean
+  labels: Label[]
+}
+
+export interface Label {
+  id: string
+  workspaceId: string
+  name: string
+}
+
+export interface SearchResult {
+  noteId: string
+  snippet: string
+  noteType: NoteType
+  labels: Label[]
+  rank: number
 }
 
 export interface ThinkingWorkspace {
@@ -68,6 +83,10 @@ export type WorkspaceOutcome =
   | { status: "failed"; failure: WorkspaceFailure }
   | { status: "unavailable"; failure: StorageOpenFailure }
 
+export type SearchOutcome =
+  | { status: "committed"; results: SearchResult[] }
+  | { status: "failed"; failure: WorkspaceFailure }
+
 /** The UI's only durable-state interface; it never accesses SQLite directly. */
 export const thinkingWorkspace = {
   getSnapshot: () => invoke<WorkspaceOutcome>("get_workspace_snapshot"),
@@ -90,6 +109,15 @@ export const thinkingWorkspace = {
   setNotePinned: (noteId: string, pinned: boolean) =>
     invoke<WorkspaceOutcome>("set_note_pinned", { noteId, pinned }),
   deleteNote: (noteId: string) => invoke<WorkspaceOutcome>("delete_note", { noteId }),
+  attachLabel: (noteId: string, name: string) =>
+    invoke<WorkspaceOutcome>("attach_label", { noteId, name }),
+  detachLabel: (noteId: string, labelId: string) =>
+    invoke<WorkspaceOutcome>("detach_label", { noteId, labelId }),
+  renameLabel: (labelId: string, name: string) =>
+    invoke<WorkspaceOutcome>("rename_label", { labelId, name }),
+  removeLabel: (labelId: string) => invoke<WorkspaceOutcome>("remove_label", { labelId }),
+  searchNotes: (workspaceId: string, query: string) =>
+    invoke<SearchOutcome>("search_notes", { workspaceId, query }),
   undoLastChange: (workspaceId: string) =>
     invoke<WorkspaceOutcome>("undo_last_change", { workspaceId }),
   retryStorageOpen: () => invoke<WorkspaceOutcome>("retry_storage_open"),

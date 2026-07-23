@@ -10,6 +10,7 @@ const DEFAULT_WORKSPACE_NAME: &str = "My Thinking Workspace";
 const MAX_WORKSPACE_NAME_SCALARS: usize = 120;
 /// Annotations are bounded in Unicode scalar values for the same reason.
 const MAX_ANNOTATION_SCALARS: usize = 2_000;
+const MAX_LABEL_NAME_SCALARS: usize = 60;
 const ACTIVE_WORKSPACE_PREFERENCE: &str = "active_workspace_id";
 const DEFAULT_NOTE_TYPE: &str = "general";
 /// The fixed structural classifications a Note may carry. Nothing outside this
@@ -80,6 +81,25 @@ pub struct Note {
     created_at: String,
     updated_at: String,
     pinned: bool,
+    labels: Vec<Label>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Label {
+    id: String,
+    workspace_id: String,
+    name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResult {
+    note_id: String,
+    snippet: String,
+    note_type: String,
+    labels: Vec<Label>,
+    rank: f64,
 }
 
 /// The only shapes a Note row may change in. Every Note intent and every undo
@@ -221,6 +241,22 @@ pub enum WorkspaceCommandResult {
     Unavailable { failure: StorageOpenFailure },
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum WorkspaceSearchOutcome {
+    Committed { results: Vec<SearchResult> },
+    Failed { failure: WorkspaceFailure },
+}
+
+pub fn unavailable_search_outcome(failure: &StorageOpenFailure) -> WorkspaceSearchOutcome {
+    WorkspaceSearchOutcome::Failed {
+        failure: WorkspaceFailure {
+            code: WorkspaceFailureCode::Storage,
+            message: failure.message.clone(),
+        },
+    }
+}
+
 #[derive(Debug, Error)]
 pub(crate) enum WorkspaceError {
     #[error("A Thinking Workspace name is required.")]
@@ -233,6 +269,10 @@ pub(crate) enum WorkspaceError {
     AnnotationTooLong,
     #[error("That is not a Note Type Nodepad recognizes.")]
     UnknownNoteType,
+    #[error("A Label needs one to four words and may not exceed {MAX_LABEL_NAME_SCALARS} characters.")]
+    InvalidLabelName,
+    #[error("That Label no longer exists.")]
+    LabelNotFound,
     #[error("The selected Thinking Workspace no longer exists.")]
     WorkspaceNotFound,
     #[error("That Note no longer exists.")]
@@ -250,8 +290,8 @@ impl WorkspaceError {
             | Self::WorkspaceNameTooLong
             | Self::EmptyNote
             | Self::AnnotationTooLong
-            | Self::UnknownNoteType => WorkspaceFailureCode::Validation,
-            Self::WorkspaceNotFound | Self::NoteNotFound => WorkspaceFailureCode::NotFound,
+            | Self::UnknownNoteType | Self::InvalidLabelName => WorkspaceFailureCode::Validation,
+            Self::WorkspaceNotFound | Self::NoteNotFound | Self::LabelNotFound => WorkspaceFailureCode::NotFound,
             Self::NothingToUndo => WorkspaceFailureCode::NothingToUndo,
             Self::Storage(_) => WorkspaceFailureCode::Storage,
         };
@@ -280,6 +320,11 @@ pub trait ThinkingWorkspaceInterface {
     /// Commits exactly one Note row change, atomically.
     fn apply_note_mutation(&mut self, mutation: &NoteMutation) -> Result<(), WorkspaceError>;
     fn history(&mut self) -> &mut UndoHistory;
+    fn attach_label(&mut self, note_id: &str, name: &str) -> Result<WorkspaceSnapshot, WorkspaceError>;
+    fn detach_label(&mut self, note_id: &str, label_id: &str) -> Result<WorkspaceSnapshot, WorkspaceError>;
+    fn rename_label(&mut self, label_id: &str, name: &str) -> Result<WorkspaceSnapshot, WorkspaceError>;
+    fn remove_label(&mut self, label_id: &str) -> Result<WorkspaceSnapshot, WorkspaceError>;
+    fn search_notes(&self, workspace_id: &str, query: &str) -> Result<Vec<SearchResult>, WorkspaceError>;
 
     fn delete_workspace(
         &mut self,
@@ -318,6 +363,7 @@ pub trait ThinkingWorkspaceInterface {
             created_at: now.clone(),
             updated_at: now,
             pinned: false,
+            labels: vec![],
         };
         let note_id = note.id.clone();
         self.commit_note(NoteMutation::Insert(note), NoteMutation::Delete { note_id })
@@ -475,6 +521,24 @@ pub trait ThinkingWorkspaceInterface {
     }
     fn undo_outcome(&mut self, workspace_id: &str) -> WorkspaceCommandResult {
         outcome(self.undo(workspace_id))
+    }
+    fn attach_label_outcome(&mut self, note_id: &str, name: &str) -> WorkspaceCommandResult {
+        outcome(self.attach_label(note_id, name))
+    }
+    fn detach_label_outcome(&mut self, note_id: &str, label_id: &str) -> WorkspaceCommandResult {
+        outcome(self.detach_label(note_id, label_id))
+    }
+    fn rename_label_outcome(&mut self, label_id: &str, name: &str) -> WorkspaceCommandResult {
+        outcome(self.rename_label(label_id, name))
+    }
+    fn remove_label_outcome(&mut self, label_id: &str) -> WorkspaceCommandResult {
+        outcome(self.remove_label(label_id))
+    }
+    fn search_outcome(&self, workspace_id: &str, query: &str) -> WorkspaceSearchOutcome {
+        match self.search_notes(workspace_id, query) {
+            Ok(results) => WorkspaceSearchOutcome::Committed { results },
+            Err(error) => WorkspaceSearchOutcome::Failed { failure: error.failure() },
+        }
     }
 }
 
@@ -658,12 +722,21 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
                 workspace_id.to_owned()
             }
         };
+        transaction
+            .execute("DELETE FROM note_search WHERE workspace_id = ?1", [workspace_id])
+            .map_err(WorkspaceError::Storage)?;
         write_active_workspace_id(&transaction, &next_active)?;
         transaction.commit().map_err(WorkspaceError::Storage)?;
         self.snapshot()
     }
 
     fn apply_note_mutation(&mut self, mutation: &NoteMutation) -> Result<(), WorkspaceError> {
+        let affected_workspace_id = match mutation {
+            NoteMutation::Insert(note) | NoteMutation::Replace(note) => Some(note.workspace_id.clone()),
+            NoteMutation::Delete { note_id } => self.connection.query_row(
+                "SELECT workspace_id FROM notes WHERE id = ?1", [note_id], |row| row.get(0)
+            ).optional().map_err(WorkspaceError::Storage)?,
+        };
         let transaction = self
             .connection
             .transaction()
@@ -706,7 +779,80 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
             // The transaction is dropped unfinished, so nothing is committed.
             return Err(WorkspaceError::NoteNotFound);
         }
+        if let Some(workspace_id) = affected_workspace_id {
+            refresh_workspace_search(&transaction, &workspace_id)?;
+        }
         transaction.commit().map_err(WorkspaceError::Storage)
+    }
+
+    fn attach_label(&mut self, note_id: &str, name: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        let note = self.note(note_id)?;
+        let (name, canonical_name) = validated_label_name(name)?;
+        let transaction = self.connection.transaction().map_err(WorkspaceError::Storage)?;
+        let label_id: Option<String> = transaction.query_row(
+            "SELECT id FROM labels WHERE workspace_id = ?1 AND canonical_name = ?2",
+            params![note.workspace_id, canonical_name], |row| row.get(0)
+        ).optional().map_err(WorkspaceError::Storage)?;
+        let label_id = match label_id {
+            Some(id) => id,
+            None => {
+                let id = id();
+                transaction.execute("INSERT INTO labels (id, workspace_id, name, canonical_name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)", params![id, note.workspace_id, name, canonical_name, timestamp()]).map_err(WorkspaceError::Storage)?;
+                id
+            }
+        };
+        transaction.execute("INSERT OR IGNORE INTO note_labels (note_id, label_id) VALUES (?1, ?2)", params![note_id, label_id]).map_err(WorkspaceError::Storage)?;
+        refresh_workspace_search(&transaction, &note.workspace_id)?;
+        transaction.commit().map_err(WorkspaceError::Storage)?;
+        self.snapshot()
+    }
+
+    fn detach_label(&mut self, note_id: &str, label_id: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        let note = self.note(note_id)?;
+        let transaction = self.connection.transaction().map_err(WorkspaceError::Storage)?;
+        transaction.execute("DELETE FROM note_labels WHERE note_id = ?1 AND label_id = ?2", params![note_id, label_id]).map_err(WorkspaceError::Storage)?;
+        transaction.execute("DELETE FROM labels WHERE id = ?1 AND NOT EXISTS (SELECT 1 FROM note_labels WHERE label_id = ?1)", [label_id]).map_err(WorkspaceError::Storage)?;
+        refresh_workspace_search(&transaction, &note.workspace_id)?;
+        transaction.commit().map_err(WorkspaceError::Storage)?;
+        self.snapshot()
+    }
+
+    fn rename_label(&mut self, label_id: &str, name: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        let (name, canonical_name) = validated_label_name(name)?;
+        let transaction = self.connection.transaction().map_err(WorkspaceError::Storage)?;
+        let (workspace_id, old_id): (String, String) = transaction.query_row("SELECT workspace_id, id FROM labels WHERE id = ?1", [label_id], |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(WorkspaceError::Storage)?.ok_or(WorkspaceError::LabelNotFound)?;
+        let collision: Option<String> = transaction.query_row("SELECT id FROM labels WHERE workspace_id = ?1 AND canonical_name = ?2", params![workspace_id, canonical_name], |row| row.get(0)).optional().map_err(WorkspaceError::Storage)?;
+        if let Some(survivor) = collision.filter(|candidate| candidate != &old_id) {
+            transaction.execute("INSERT OR IGNORE INTO note_labels (note_id, label_id) SELECT note_id, ?1 FROM note_labels WHERE label_id = ?2", params![survivor, old_id]).map_err(WorkspaceError::Storage)?;
+            transaction.execute("DELETE FROM labels WHERE id = ?1", [old_id]).map_err(WorkspaceError::Storage)?;
+        } else {
+            transaction.execute("UPDATE labels SET name = ?2, canonical_name = ?3, updated_at = ?4 WHERE id = ?1", params![old_id, name, canonical_name, timestamp()]).map_err(WorkspaceError::Storage)?;
+        }
+        refresh_workspace_search(&transaction, &workspace_id)?;
+        transaction.commit().map_err(WorkspaceError::Storage)?;
+        self.snapshot()
+    }
+
+    fn remove_label(&mut self, label_id: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        let transaction = self.connection.transaction().map_err(WorkspaceError::Storage)?;
+        let workspace_id: String = transaction.query_row("SELECT workspace_id FROM labels WHERE id = ?1", [label_id], |row| row.get(0)).optional().map_err(WorkspaceError::Storage)?.ok_or(WorkspaceError::LabelNotFound)?;
+        transaction.execute("DELETE FROM labels WHERE id = ?1", [label_id]).map_err(WorkspaceError::Storage)?;
+        refresh_workspace_search(&transaction, &workspace_id)?;
+        transaction.commit().map_err(WorkspaceError::Storage)?;
+        self.snapshot()
+    }
+
+    fn search_notes(&self, workspace_id: &str, query: &str) -> Result<Vec<SearchResult>, WorkspaceError> {
+        require_workspace(&read_workspaces(&self.connection)?, workspace_id)?;
+        let query = fts_query(query);
+        if query.is_empty() { return Ok(vec![]); }
+        let mut statement = self.connection.prepare("SELECT note_id, snippet(note_search, 2, '', '', '…', 24), bm25(note_search) FROM note_search WHERE note_search MATCH ?1 AND workspace_id = ?2 ORDER BY bm25(note_search), note_id").map_err(WorkspaceError::Storage)?;
+        let results = statement.query_map(params![query, workspace_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, f64>(2)?))).map_err(WorkspaceError::Storage)?.map(|row| {
+            let (note_id, snippet, rank) = row.map_err(WorkspaceError::Storage)?;
+            let note_type: String = self.connection.query_row("SELECT note_type FROM notes WHERE id = ?1", [&note_id], |row| row.get(0)).map_err(WorkspaceError::Storage)?;
+            Ok(SearchResult { labels: labels_for_note(&self.connection, &note_id)?, note_id, snippet, note_type, rank })
+        }).collect();
+        results
     }
 }
 
@@ -756,6 +902,27 @@ fn validated_annotation(annotation: &str) -> Result<Option<String>, WorkspaceErr
         return Err(WorkspaceError::AnnotationTooLong);
     }
     Ok(Some(annotation.to_owned()))
+}
+
+/// Label identity is Unicode lowercase rather than SQLite NOCASE, whose
+/// comparison is ASCII-only. Display spelling remains the thinker's choice.
+fn validated_label_name(name: &str) -> Result<(String, String), WorkspaceError> {
+    let name = name.trim();
+    let words = name.split_whitespace().count();
+    if name.is_empty() || words == 0 || words > 4 || name.chars().count() > MAX_LABEL_NAME_SCALARS {
+        return Err(WorkspaceError::InvalidLabelName);
+    }
+    Ok((name.to_owned(), name.to_lowercase()))
+}
+
+/// FTS receives quoted words only, never raw query syntax. Punctuation is a
+/// separator, so copied search text cannot inject operators or fail parsing.
+fn fts_query(query: &str) -> String {
+    query.split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(|word| format!("\"{word}\""))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Pinned Notes come first; creation order is stable inside each group, and the
@@ -808,6 +975,7 @@ fn migrate(connection: &mut Connection) -> Result<(), WorkspaceError> {
         (1_i64, include_str!("../migrations/0001_initial.sql")),
         (2_i64, include_str!("../migrations/0002_preferences.sql")),
         (3_i64, include_str!("../migrations/0003_note_controls.sql")),
+        (4_i64, include_str!("../migrations/0004_labels_and_search.sql")),
     ];
     for (version, sql) in migrations {
         let transaction = connection.transaction().map_err(WorkspaceError::Storage)?;
@@ -878,6 +1046,18 @@ fn write_active_workspace_id(
         .map_err(WorkspaceError::Storage)
 }
 
+fn labels_for_note(connection: &Connection, note_id: &str) -> Result<Vec<Label>, WorkspaceError> {
+    connection.prepare("SELECT labels.id, labels.workspace_id, labels.name FROM labels JOIN note_labels ON note_labels.label_id = labels.id WHERE note_labels.note_id = ?1 ORDER BY labels.name, labels.id")
+        .map_err(WorkspaceError::Storage)?.query_map([note_id], |row| Ok(Label { id: row.get(0)?, workspace_id: row.get(1)?, name: row.get(2)? }))
+        .map_err(WorkspaceError::Storage)?.collect::<Result<Vec<_>, _>>().map_err(WorkspaceError::Storage)
+}
+
+fn refresh_workspace_search(connection: &Connection, workspace_id: &str) -> Result<(), WorkspaceError> {
+    connection.execute("DELETE FROM note_search WHERE workspace_id = ?1", [workspace_id]).map_err(WorkspaceError::Storage)?;
+    connection.execute("INSERT INTO note_search(note_id, workspace_id, content) SELECT notes.id, notes.workspace_id, notes.markdown || ' ' || COALESCE(notes.annotation, '') || ' ' || COALESCE((SELECT group_concat(labels.name, ' ') FROM note_labels JOIN labels ON labels.id = note_labels.label_id WHERE note_labels.note_id = notes.id), '') FROM notes WHERE notes.workspace_id = ?1", [workspace_id]).map_err(WorkspaceError::Storage)?;
+    Ok(())
+}
+
 fn read_snapshot(connection: &Connection) -> Result<WorkspaceSnapshot, WorkspaceError> {
     let workspaces = read_workspaces(connection)?;
     let mut notes = connection.prepare("SELECT id, workspace_id, markdown, note_type, note_type_provenance, annotation, annotation_provenance, created_at, updated_at, pinned FROM notes")
@@ -893,8 +1073,10 @@ fn read_snapshot(connection: &Connection) -> Result<WorkspaceSnapshot, Workspace
             created_at: row.get(7)?,
             updated_at: row.get(8)?,
             pinned: row.get::<_, i64>(9)? != 0,
+            labels: vec![],
         }))
         .map_err(WorkspaceError::Storage)?.collect::<Result<Vec<_>, _>>().map_err(WorkspaceError::Storage)?;
+    for note in &mut notes { note.labels = labels_for_note(connection, &note.id)?; }
     sort_notes(&mut notes);
     let active_workspace_id = read_active_workspace_id(connection)?
         .filter(|id| workspaces.iter().any(|workspace| &workspace.id == id))
@@ -940,6 +1122,7 @@ mod tests {
         notes: Vec<Note>,
         active_workspace_id: String,
         history: UndoHistory,
+        labels: Vec<Label>,
     }
 
     impl MemoryStore {
@@ -949,6 +1132,7 @@ mod tests {
                 notes: vec![],
                 active_workspace_id: String::new(),
                 history: UndoHistory::default(),
+                labels: vec![],
             };
             store.create_workspace(DEFAULT_WORKSPACE_NAME).unwrap();
             store
@@ -1060,6 +1244,59 @@ mod tests {
                 }
             }
             Ok(())
+        }
+
+        fn attach_label(&mut self, note_id: &str, name: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
+            let workspace_id = self.note(note_id)?.workspace_id;
+            let (name, canonical) = validated_label_name(name)?;
+            let label = self.labels.iter().find(|label| label.workspace_id == workspace_id && label.name.to_lowercase() == canonical).cloned().unwrap_or_else(|| {
+                let label = Label { id: id(), workspace_id: workspace_id.clone(), name };
+                self.labels.push(label.clone()); label
+            });
+            let note = self.notes.iter_mut().find(|note| note.id == note_id).ok_or(WorkspaceError::NoteNotFound)?;
+            if !note.labels.iter().any(|candidate| candidate.id == label.id) { note.labels.push(label); }
+            self.snapshot()
+        }
+
+        fn detach_label(&mut self, note_id: &str, label_id: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
+            let note = self.notes.iter_mut().find(|note| note.id == note_id).ok_or(WorkspaceError::NoteNotFound)?;
+            note.labels.retain(|label| label.id != label_id);
+            self.labels.retain(|label| label.id != label_id || self.notes.iter().any(|note| note.labels.iter().any(|candidate| candidate.id == label_id)));
+            self.snapshot()
+        }
+
+        fn rename_label(&mut self, label_id: &str, name: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
+            let (name, canonical) = validated_label_name(name)?;
+            let original = self.labels.iter().find(|label| label.id == label_id).cloned().ok_or(WorkspaceError::LabelNotFound)?;
+            let collision = self.labels.iter().find(|label| label.id != label_id && label.workspace_id == original.workspace_id && label.name.to_lowercase() == canonical).cloned();
+            if let Some(survivor) = collision {
+                for note in &mut self.notes { if note.labels.iter().any(|label| label.id == label_id) && !note.labels.iter().any(|label| label.id == survivor.id) { note.labels.push(survivor.clone()); } note.labels.retain(|label| label.id != label_id); }
+                self.labels.retain(|label| label.id != label_id);
+            } else {
+                for label in &mut self.labels { if label.id == label_id { label.name = name.clone(); } }
+                for note in &mut self.notes { for label in &mut note.labels { if label.id == label_id { label.name = name.clone(); } } }
+            }
+            self.snapshot()
+        }
+
+        fn remove_label(&mut self, label_id: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
+            if !self.labels.iter().any(|label| label.id == label_id) { return Err(WorkspaceError::LabelNotFound); }
+            self.labels.retain(|label| label.id != label_id);
+            for note in &mut self.notes { note.labels.retain(|label| label.id != label_id); }
+            self.snapshot()
+        }
+
+        fn search_notes(&self, workspace_id: &str, query: &str) -> Result<Vec<SearchResult>, WorkspaceError> {
+            require_workspace(&self.workspaces, workspace_id)?;
+            let terms: Vec<_> = query.split(|character: char| !character.is_alphanumeric()).filter(|word| !word.is_empty()).map(str::to_lowercase).collect();
+            if terms.is_empty() { return Ok(vec![]); }
+            let mut results: Vec<_> = self.notes.iter().filter(|note| note.workspace_id == workspace_id).filter_map(|note| {
+                let content = format!("{} {} {}", note.markdown, note.annotation.as_deref().unwrap_or(""), note.labels.iter().map(|label| label.name.as_str()).collect::<Vec<_>>().join(" "));
+                let lower = content.to_lowercase();
+                terms.iter().all(|term| lower.contains(term)).then(|| SearchResult { note_id: note.id.clone(), snippet: content.chars().take(160).collect(), note_type: note.note_type.clone(), labels: note.labels.clone(), rank: 0.0 })
+            }).collect();
+            results.sort_by(|left, right| left.note_id.cmp(&right.note_id));
+            Ok(results)
         }
     }
 
@@ -1362,6 +1599,30 @@ mod tests {
 
         note_control_conformance(&mut workspace, &research, &note_id);
 
+        let labeled = committed(workspace.attach_label_outcome(&note_id, "  Rêverie  "));
+        let label = note_in(&labeled, &note_id).labels[0].clone();
+        assert_eq!(label.name, "Rêverie");
+        // Case and surrounding whitespace reuse the same Workspace-local Label.
+        let same = committed(workspace.attach_label_outcome(&note_id, "rÊVERIE"));
+        assert_eq!(note_in(&same, &note_id).labels.len(), 1);
+        let second_note = committed(workspace.create_note_outcome(&research, "Searchable punctuation: C++ & Rust"));
+        let second_note_id = second_note.notes.iter().find(|note| note.markdown.starts_with("Searchable")).unwrap().id.clone();
+        committed(workspace.attach_label_outcome(&second_note_id, "Reading"));
+        let merged = committed(workspace.rename_label_outcome(&label.id, "reading"));
+        assert_eq!(note_in(&merged, &note_id).labels[0].name, "Reading");
+        assert_eq!(note_in(&merged, &second_note_id).labels[0].name, "Reading");
+        assert_eq!(workspace.search_notes(&research, "reading").unwrap().len(), 2);
+        assert_eq!(workspace.search_notes(&research, "C++ &").unwrap().len(), 1);
+        assert!(workspace.search_notes(&research, "   ").unwrap().is_empty());
+        let isolated = committed(workspace.create_workspace_outcome("Elsewhere"));
+        let elsewhere = isolated.active_workspace_id;
+        let outside = committed(workspace.create_note_outcome(&elsewhere, "Reading must stay private"));
+        let outside_id = outside.notes.iter().find(|note| note.workspace_id == elsewhere).unwrap().id.clone();
+        committed(workspace.attach_label_outcome(&outside_id, "Reading"));
+        assert_eq!(workspace.search_notes(&research, "reading").unwrap().len(), 2);
+        let detached = committed(workspace.detach_label_outcome(&note_id, &note_in(&merged, &note_id).labels[0].id));
+        assert!(note_in(&detached, &note_id).labels.is_empty());
+
         // Deleting the active Workspace selects the most recently updated
         // survivor. The survivor here is neither the newest, the oldest, the
         // first, nor the last Workspace, so no weaker rule can pass this.
@@ -1375,10 +1636,10 @@ mod tests {
         committed(workspace.select_workspace_outcome(&research));
         let after_delete = committed(workspace.delete_workspace_outcome(&research));
         assert_eq!(after_delete.active_workspace_id, second_research);
-        assert_eq!(after_delete.workspaces.len(), 3);
+        assert_eq!(after_delete.workspaces.len(), 4);
         assert_eq!(after_delete.workspaces[0].name, DEFAULT_WORKSPACE_NAME);
-        assert_eq!(after_delete.workspaces[2].id, newest);
-        assert!(after_delete.notes.is_empty());
+        assert_eq!(after_delete.workspaces[3].id, newest);
+        assert!(after_delete.notes.iter().all(|note| note.workspace_id != research));
 
         // Deleting an inactive Workspace leaves the selection alone.
         let after_inactive_delete = committed(workspace.delete_workspace_outcome(&newest));
@@ -1452,6 +1713,25 @@ mod tests {
             .notes
             .iter()
             .any(|note| note.id == note_id && note.markdown == "Committed before close"));
+        remove_database(&path);
+    }
+
+    #[test]
+    fn sqlite_recovers_labels_and_fts_search_after_reopen() {
+        let path = temporary_path();
+        let workspace_id = {
+            let mut store = WorkspaceStore::open(&path).unwrap();
+            let workspace_id = store.snapshot().unwrap().active_workspace_id;
+            let note = store.create_note(&workspace_id, "A Unicode 🧠 search target").unwrap().notes[0].id.clone();
+            store.set_note_annotation(&note, "Contextual commentary").unwrap();
+            store.attach_label(&note, "Rêverie").unwrap();
+            workspace_id
+        };
+        let reopened = WorkspaceStore::open(&path).unwrap();
+        let labels = reopened.search_notes(&workspace_id, "rêverie").unwrap();
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].labels[0].name, "Rêverie");
+        assert_eq!(reopened.search_notes(&workspace_id, "commentary").unwrap().len(), 1);
         remove_database(&path);
     }
 
