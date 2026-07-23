@@ -5,13 +5,14 @@ import { NOTE_TYPES, type Note, type NoteType, type SearchResult } from "./works
  * reading a Thinking Workspace, never a place a Note lives, so nothing here is
  * committed and no arrangement changes what a Note means.
  */
-export const NOTE_VIEWS = ["tiling", "kanban"] as const
+export const NOTE_VIEWS = ["tiling", "kanban", "graph"] as const
 
 export type NoteView = (typeof NOTE_VIEWS)[number]
 
 const NOTE_VIEW_LABELS: Record<NoteView, string> = {
   tiling: "Tiling",
   kanban: "Kanban",
+  graph: "Graph",
 }
 
 export function noteViewLabel(view: NoteView): string {

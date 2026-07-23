@@ -35,10 +35,21 @@ select { border: 1px solid #bcae9d; border-radius: 6px; font: inherit; padding: 
 .kanban-column { display: grid; gap: .8rem; align-content: start; flex: 0 0 22rem; }
 .kanban-column h3 { font-weight: 500; margin: 0; }
 .kanban-column > [role="group"] { display: grid; gap: .8rem; }
+/* The Thinking Graph drawn. The arrangement is derived on every render, so
+   nothing here survives a restart except the committed Notes it is read from. */
+.graph { display: grid; gap: 1rem; }
+.graph-canvas { background: #fffdf8; border: 1px solid #dfd5c8; border-radius: 10px; width: 100%; }
+.graph-link { stroke: #bcae9d; stroke-width: 1.5; }
+.graph-mark { fill: #cdbfb0; stroke: #8f3d27; stroke-width: 0; cursor: pointer; }
+.graph-mark:hover, .graph-mark:focus-visible { stroke-width: 2; outline: none; }
+.graph-mark.locked { fill: #8f3d27; stroke-width: 2; }
+.graph-label { fill: #5d4f47; font: 400 11px/1 Georgia, serif; pointer-events: none; }
 .note { background: #fffdf8; border: 1px solid #dfd5c8; border-radius: 10px; padding: .8rem; white-space: normal; }
 .note.pinned { border-color: #8f3d27; }
 /* Where the thinker navigated to. Transient, so it survives no reload. */
 .note.focused { box-shadow: 0 0 0 2px #8f3d27; outline: none; }
+/* Focus elsewhere, unrelated to this Note. Reading, never a durable change. */
+.note.dimmed, .graph-node.dimmed, .graph-link.dimmed { opacity: .3; }
 .relate { display: grid; gap: .4rem; }
 .transfer { display: grid; gap: .4rem; }
 .transfer p { margin: 0; }

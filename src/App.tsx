@@ -11,6 +11,7 @@ import { NoteCard, type NoteCardContext } from "./note-card"
 import { buildNoteIntents } from "./note-intents"
 import { useNoteDrafts } from "./note-drafts"
 import { useNoteFocus } from "./note-focus"
+import { thinkingGraph } from "./thinking-graph"
 import { useWorkspaceSnapshot } from "./workspace-snapshot"
 import { useUndoShortcut } from "./undo-shortcut"
 import { WorkspaceSection } from "./workspace-section"
@@ -38,21 +39,27 @@ export function App() {
     () => snapshot?.workspaces.find(({ id }) => id === snapshot.activeWorkspaceId),
     [snapshot],
   )
-  const notes = workspaceNotes(snapshot?.notes ?? [], activeWorkspace?.id)
+  const notes = useMemo(
+    () => workspaceNotes(snapshot?.notes ?? [], activeWorkspace?.id),
+    [snapshot, activeWorkspace?.id],
+  )
   const workspaces = snapshot?.workspaces ?? []
-  // The one result set both views read, so they can never disagree about which
-  // Notes are on screen or in what order.
+  // The one result set the arranged views read, so they can never disagree
+  // about which Notes are on screen or in what order.
   const visible = useMemo(
     () => visibleNotes(snapshot?.notes ?? [], activeWorkspace?.id, matchingNoteIds(searchResults)),
     [snapshot, activeWorkspace?.id, searchResults],
   )
-  const focus = useNoteFocus(visible)
+  // The one Thinking Graph projection. Degree, related Notes, relate
+  // candidates, dimming, and the drawn graph are all read from this value, so
+  // no two surfaces can count the same Relationship differently.
+  const graph = useMemo(
+    () => thinkingGraph(notes, snapshot?.relationships ?? []),
+    [notes, snapshot?.relationships],
+  )
+  const focus = useNoteFocus(visible, graph)
 
-  const cardContext: NoteCardContext = {
-    notes,
-    relationships: snapshot?.relationships ?? [],
-    workspaces,
-  }
+  const cardContext: NoteCardContext = { graph, workspaces }
 
   // One set of Note intents, built once and handed to every card, so a layout
   // decides only where a Note appears and never what may be done to one.
@@ -74,6 +81,7 @@ export function App() {
         drafts={drafts}
         intents={noteIntents}
         focused={focus.focusedNoteId === note.id}
+        dimmed={focus.litNoteIds !== null && !focus.litNoteIds.has(note.id)}
         registerElement={(element) => focus.registerNoteElement(note.id, element)}
       />
     )
@@ -197,6 +205,8 @@ export function App() {
 
       <CommittedNotesSection
         notes={visible}
+        graph={graph}
+        focus={focus}
         searching={searchResults !== null}
         view={view}
         canUndo={Boolean(snapshot) && snapshot!.undoableCommands > 0}

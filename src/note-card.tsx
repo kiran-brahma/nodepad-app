@@ -6,7 +6,6 @@ import {
   type Label,
   type Note,
   type NoteType,
-  type Relationship,
   type ThinkingWorkspace,
 } from "./workspace-client"
 import {
@@ -17,7 +16,7 @@ import {
   notePreview,
   noteTypeLabel,
 } from "./note-controls"
-import { degree, relatableNotes, relatedNotes } from "./thinking-graph"
+import { nodeDegree, relatableNotes, relatedNotes, type ThinkingGraph } from "./thinking-graph"
 import {
   copyExplanation,
   moveExplanation,
@@ -66,12 +65,12 @@ export interface NoteIntents {
 }
 
 /**
- * The Notes and Relationships a card reads to draw itself. A card commits
- * nothing from this; it only shows what already exists.
+ * What a card reads to draw itself: the one Thinking Graph projection every
+ * view shares, and the Thinking Workspaces a Note may travel to. A card
+ * commits nothing from this; it only shows what already exists.
  */
 export interface NoteCardContext {
-  notes: Note[]
-  relationships: Relationship[]
+  graph: ThinkingGraph
   workspaces: ThinkingWorkspace[]
 }
 
@@ -231,12 +230,12 @@ function NoteRelationships({
   intents: NoteIntents
 }) {
   const draft = drafts.relateDraft
-  const { notes, relationships } = context
+  const { graph } = context
   return (
     // Related Notes are candidates, not list items, so a Note card
     // stays the only list item a reader can land on.
     <div className="row" aria-label="Related Notes">
-      {relatedNotes(notes, relationships, note.id).map((related) => (
+      {relatedNotes(graph, note.id).map((related) => (
         <span className="badge" key={related.id}>
           {notePreview(related)}
           <button
@@ -264,7 +263,7 @@ function NoteRelationships({
             onChange={(event) => intents.editRelateQuery(event.target.value)}
           />
           <div className="row">
-            {relatableNotes(notes, relationships, note.id, draft.query).map((candidate) => (
+            {relatableNotes(graph, note.id, draft.query).map((candidate) => (
               <button key={candidate.id} onClick={() => intents.relate(note, candidate.id)}>
                 {notePreview(candidate)}
               </button>
@@ -332,6 +331,7 @@ export function NoteCard({
   drafts,
   intents,
   focused,
+  dimmed,
   registerElement,
 }: {
   note: Note
@@ -339,12 +339,16 @@ export function NoteCard({
   drafts: NoteDrafts
   intents: NoteIntents
   focused: boolean
+  /** Focus elsewhere leaves this Note unrelated to it. Dimming commits nothing. */
+  dimmed: boolean
   registerElement: (element: HTMLDivElement | null) => void
 }) {
-  const relatedCount = degree(context.relationships, note.id)
+  // The badge counts the same links the graph draws and the chips below list,
+  // because all three read one projection.
+  const relatedCount = nodeDegree(context.graph, note.id)
   return (
     <div
-      className={["note", note.pinned ? "pinned" : "", focused ? "focused" : ""]
+      className={["note", note.pinned ? "pinned" : "", focused ? "focused" : "", dimmed ? "dimmed" : ""]
         .filter(Boolean)
         .join(" ")}
       // A Note card is one self-contained piece of the thinking, whichever
