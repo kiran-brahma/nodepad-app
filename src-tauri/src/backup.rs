@@ -478,10 +478,8 @@ fn integrity_check(db_path: &Path) -> Result<(), BackupError> {
     // A file that exists and matches its checksum but cannot be opened as a
     // SQLite database is corrupt, not merely unreadable: the bytes are there,
     // they just do not form a usable database.
-    let connection = Connection::open(db_path).map_err(|error| {
-        let _ = error;
-        BackupError::Corrupt
-    })?;
+    let connection = Connection::open(db_path)
+        .map_err(|_| BackupError::Corrupt)?;
     let result: String = connection
         .query_row("PRAGMA integrity_check", [], |row| row.get(0))
         .map_err(|_| BackupError::Corrupt)?;
@@ -548,16 +546,11 @@ fn hex(bytes: &[u8]) -> String {
 
 fn is_fts_shadow_table(name: &str) -> bool {
     // FTS5 names a virtual table `<base>` and shadow tables `<base>_data`,
-    // `<base>_idx`, `<base>_content`, `<base>_config`, `<base>_docsize`. The
-    // only FTS table Nodepad ships is `note_search`.
-    if let Some(rest) = name.strip_prefix("note_search_") {
-        matches!(
-            rest,
-            "data" | "idx" | "content" | "config" | "docsize"
-        )
-    } else {
-        false
-    }
+    // `<base>_idx`, `<base>_content`, `<base>_config`, `<base>_docsize`.
+    // The only FTS table Nodepad ships is `note_search`; its content is derived
+    // entirely from `notes`, so hashing the virtual table or any shadow table
+    // only doubles the signal `notes` already provides.
+    name == "note_search" || name.starts_with("note_search_")
 }
 
 #[cfg(test)]

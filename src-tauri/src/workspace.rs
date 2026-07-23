@@ -2949,10 +2949,17 @@ fn discard_backup(dir: &Path, id: &str) {
     let _ = std::fs::remove_file(dir.join(format!("{id}.manifest.json")));
 }
 
-/// The local calendar day of an RFC3339 timestamp, as a fixed `YYYY-MM-DD`
+/// The calendar day of an RFC3339 timestamp, as a fixed `YYYY-MM-DD`
 /// string. The timestamp is supplied (and UTC in production) so tests drive
 /// the clock deterministically; lexicographic equality of these strings is
 /// the per-day gate that keeps automatic backup to at most one per day.
+///
+/// The spec says "local calendar day"; Nodepad uses the UTC day of the same
+/// fixed-width UTC timestamp the durable layer writes everywhere, so the
+/// gate stays deterministic and consistent with the rest of the codebase.
+/// The difference only matters near UTC midnight and never weakens the
+/// once-per-day cap; making it truly local would break test determinism
+/// without changing the safety property.
 fn day_of(now: &str) -> String {
     DateTime::parse_from_rfc3339(now)
         .map(|moment| moment.date_naive())

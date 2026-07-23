@@ -51,19 +51,6 @@ fn remove_database(path: &Path) {
     }
 }
 
-fn backup_count(dir: &Path) -> usize {
-    fs::read_dir(dir)
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter(|entry| {
-                    entry.path().extension().and_then(|ext| ext.to_str()) == Some("sqlite")
-                })
-                .count()
-        })
-        .unwrap_or(0)
-}
-
 #[test]
 fn a_wal_active_database_backs_up_safely() {
     let dir = backups_folder();
@@ -375,4 +362,96 @@ fn create_backup_deletes_an_invalid_backup_and_reports_the_error() {
     connection.close().unwrap();
     remove_database(&db);
     fs::remove_file(&file_as_dir).unwrap();
+}
+#[test]
+fn a_failed_pre_restore_backup_preserves_the_current_database() {
+    // The restore flow makes a pre-restore backup before touching the live
+    // database; a failure there must leave the current database intact. Here
+    // a valid automatic backup exists, then the pre-restore attempt is pointed
+    // at an unusable folder so it fails — and the automatic backup and the live
+    // database are both unchanged.
+    let dir = backups_folder();
+    let live = database_path();
+    let manifest;
+    {
+        let connection = open_database(&live);
+        seed(&connection);
+        write_note(&connection, "live", "live note");
+        manifest = create_backup(
+            &connection,
+            &dir,
+            BackupKind::Automatic,
+            "2026-07-22T00:00:00.000000Z",
+            "0.1.0",
+        )
+        .unwrap();
+        connection.close().unwrap();
+    }
+    // A file where the pre-restore backups folder should be makes that backup
+    // fail, exactly as an injected restore-time failure would.
+    let blocked = std::env::temp_dir().join(format!("nodepad-prerestore-block-{}", Uuid::new_v4()));
+    fs::write(&blocked, b"block").unwrap();
+    let pre_restore = create_backup(
+        // Reopen read-only-ish: a fresh connection cannot VACUUM INTO a blocked
+        // folder, so this fails before any durable file moves.
+        &Connection::open(&live).unwrap(),
+        &blocked,
+        BackupKind::PreRestore,
+        "2026-07-22T00:00:00.000000Z",
+        "0.1.0",
+    );
+    assert!(matches!(pre_restore, Err(BackupError::BackupsDir(_))));
+    // The automatic backup and the live database are untouched.
+    validate_backup(&dir, &manifest).unwrap();
+    let connection = open_database(&live);
+    let count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM notes WHERE id = 'live'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(count, 1);
+    connection.close().unwrap();
+    fs::remove_file(&blocked).unwrap();
+    remove_database(&live);
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_replacement_with_a_tampered_source_preserves_the_current_database() {
+    // The restore replacement verifies the source backup's checksum before
+    // moving any file. A tampered source fails closed and the live database is
+    // preserved.
+    let dir = backups_folder();
+    let live = database_path();
+    let manifest;
+    {
+        let connection = open_database(&live);
+        seed(&connection);
+        write_note(&connection, "live", "live note");
+        manifest = create_backup(
+            &connection,
+            &dir,
+            BackupKind::Automatic,
+            "2026-07-22T00:00:00.000000Z",
+            "0.1.0",
+        )
+        .unwrap();
+        connection.close().unwrap();
+    }
+    // Tamper with the backup file so its checksum no longer matches the manifest.
+    let backup_db = backup_db_path(&dir, &manifest.id);
+    fs::write(&backup_db, b"tampered bytes").unwrap();
+    let result = replace_database(&dir, &manifest, &live);
+    assert_eq!(result, Err(BackupError::ChecksumMismatch));
+    // The live database is untouched.
+    let connection = open_database(&live);
+    let count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM notes WHERE id = 'live'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(count, 1);
+    connection.close().unwrap();
+    remove_database(&live);
+    fs::remove_dir_all(&dir).unwrap();
 }

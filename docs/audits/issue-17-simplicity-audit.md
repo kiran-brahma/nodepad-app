@@ -48,14 +48,25 @@ pending-count helper. **CLEAN after resolution.**
 
 ### Automatic backup once per local calendar day after durable data changed
 
-**CLEAN.** The new state is two `app_preferences` rows —
-`backup.last_automatic_day` and `backup.last_fingerprint` — so no new table
-or migration is introduced. The fingerprint is a full-scan hash over every
-user table enumerated from `sqlite_master`, so a future migration that adds a
-table is detected automatically instead of requiring a forgotten edit here.
-The fingerprint and the day gate live in one method on `WorkspaceStore`; the
-backup bytes come from `backup::create_backup`. State is isolated behind the
-backup module + one store method.
+**CLEAN.** The new state is a `backup-state.json` sidecar in the backups
+folder — `last_automatic_day` and `last_fingerprint` — kept beside the
+backups rather than in the thinker's database, so recording it never changes
+the durable-data fingerprint it is meant to compare against. (An earlier
+draft stored these as `app_preferences` rows; that created a feedback loop
+where writing the tracking row changed the fingerprint, so every check read
+"changed.") The fingerprint is a full-scan hash over every user table
+enumerated from `sqlite_master` (FTS virtual table and shadow tables
+excluded), so a future migration that adds a table is detected
+automatically instead of requiring a forgotten edit here. The fingerprint and
+the day gate live in one method on `WorkspaceStore`; the backup bytes come
+from `backup::create_backup`. State is isolated behind the backup module +
+one store method.
+
+The spec says "local calendar day"; Nodepad uses the UTC day of the same
+fixed-width UTC timestamp the durable layer writes everywhere, so the gate
+stays deterministic and consistent with the codebase. The difference only
+matters near UTC midnight and never weakens the once-per-day cap; this is a
+documented, deliberate deviation, not a re-litigation.
 
 ### Retention of seven automatic backups plus explicit backups
 

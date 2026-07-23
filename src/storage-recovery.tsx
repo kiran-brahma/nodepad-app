@@ -4,6 +4,7 @@ import {
   type BackupRecord,
   type RestoreOutcome,
   type StorageOpenFailure,
+  type WorkspaceSnapshot,
 } from "./workspace-client"
 
 const RECOVERY_HEADLINE: Record<StorageOpenFailure["category"], string> = {
@@ -37,7 +38,7 @@ export function StorageRecovery({
   failure: StorageOpenFailure
   onRetry: () => void
   onQuit: () => void
-  onRestored: (snapshot: import("./workspace-client").WorkspaceSnapshot) => void
+  onRestored: (snapshot: WorkspaceSnapshot) => void
 }) {
   const [backups, setBackups] = useState<BackupRecord[] | null>(null)
   const [restoringId, setRestoringId] = useState<string | null>(null)
