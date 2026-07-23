@@ -175,6 +175,13 @@ export function App() {
     })
   }
 
+  function exportWorkspace() {
+    if (!activeWorkspace) return
+    void thinkingWorkspace.exportWorkspace(activeWorkspace.id).then((outcome) => {
+      if (outcome.status === "failed") reportFailure({ code: "storage", message: outcome.message })
+    })
+  }
+
   function saveRenamedLabel(event: FormEvent) {
     event.preventDefault()
     if (!renameLabelDraft) return
@@ -287,6 +294,7 @@ export function App() {
         onAnswerDelete={answerDeleteConfirmation}
         onNoteMarkdownChange={setNoteMarkdown}
         onCreateNote={createNote}
+        onExport={exportWorkspace}
       />
 
       <AssistanceSection

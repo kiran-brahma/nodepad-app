@@ -167,6 +167,11 @@ export type SearchOutcome =
   | { status: "committed"; results: SearchResult[] }
   | { status: "failed"; failure: WorkspaceFailure }
 
+export type MarkdownExportOutcome =
+  | { status: "exported"; filename: string }
+  | { status: "cancelled" }
+  | { status: "failed"; message: string }
+
 export type DiscoveryFailureCode =
   | "unavailable"
   | "timeout"
@@ -242,6 +247,8 @@ export const thinkingWorkspace = {
     invoke<SearchOutcome>("search_notes", { workspaceId, query }),
   undoLastChange: (workspaceId: string) =>
     invoke<WorkspaceOutcome>("undo_last_change", { workspaceId }),
+  exportWorkspace: (workspaceId: string) =>
+    invoke<MarkdownExportOutcome>("export_workspace", { workspaceId }),
   /** Changes the Assistance Policy of the active Thinking Workspace. */
   setAssistancePolicy: (workspaceId: string, policy: AssistancePolicy) =>
     invoke<WorkspaceOutcome>("set_assistance_policy", { workspaceId, policy }),

@@ -1,5 +1,6 @@
 mod cloud;
 mod enrichment;
+mod markdown_export;
 mod ollama;
 mod secrets;
 mod synthesis;
@@ -9,6 +10,7 @@ mod workspace;
 
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, State};
+use tauri_plugin_dialog::DialogExt;
 use cloud::{CloudOllamaProvider, CloudTagsClient, HttpCloudTagsClient, OLLAMA_CLOUD_BASE_URL};
 use enrichment::{
     EnrichmentClient, EnrichmentFailureCode, EnrichmentOutcome, EnrichmentRequest,
@@ -216,6 +218,29 @@ fn search_notes(workspace_id: String, query: String, state: State<'_, AppState>)
 #[tauri::command]
 fn undo_last_change(workspace_id: String, state: State<'_, AppState>) -> WorkspaceCommandResult {
     state.dispatch(|store| store.undo_outcome(&workspace_id))
+}
+
+#[derive(serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum MarkdownExportOutcome { Exported { filename: String }, Cancelled, Failed { message: String } }
+
+#[tauri::command]
+fn export_workspace(workspace_id: String, app: AppHandle, state: State<'_, AppState>) -> MarkdownExportOutcome {
+    let document = match state.storage.lock().expect("workspace lock poisoned").as_ref() {
+        Ok(store) => store.markdown_export(&workspace_id),
+        Err(failure) => return MarkdownExportOutcome::Failed { message: failure.message.clone() },
+    };
+    let (markdown, filename) = match document {
+        Ok(document) => document,
+        Err(error) => return MarkdownExportOutcome::Failed { message: error.failure().message },
+    };
+    let destination = app.dialog().file().add_filter("Markdown", &["md"]).set_file_name(&filename).blocking_save_file();
+    let Some(destination) = destination else { return MarkdownExportOutcome::Cancelled; };
+    let Some(destination) = destination.as_path() else { return MarkdownExportOutcome::Failed { message: "Nodepad could not use the selected export location.".to_owned() }; };
+    match markdown_export::write_atomically(destination, &markdown) {
+        Ok(()) => MarkdownExportOutcome::Exported { filename },
+        Err(error) => MarkdownExportOutcome::Failed { message: format!("Nodepad could not export this Thinking Workspace: {error}") },
+    }
 }
 
 /// Changes the Assistance Policy of the active Thinking Workspace. Switching
@@ -1101,6 +1126,7 @@ pub fn run() {
             unrelate_notes,
             search_notes,
             undo_last_change,
+            export_workspace,
             set_assistance_policy,
             set_cloud_consent,
             select_model,
@@ -1116,6 +1142,7 @@ pub fn run() {
             accept_synthesis,
             dismiss_synthesis
         ])
+        .plugin(tauri_plugin_dialog::init())
         .run(tauri::generate_context!())
         .expect("error while running Nodepad");
 }
