@@ -3,7 +3,13 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event"
 // `vi.mock` is hoisted above this import, so App sees the fake interface.
 import { App } from "./App"
-import type { Note, NoteType, WorkspaceOutcome, WorkspaceSnapshot } from "./workspace-client"
+import type {
+  Note,
+  NoteType,
+  Relationship,
+  WorkspaceOutcome,
+  WorkspaceSnapshot,
+} from "./workspace-client"
 
 /**
  * A stand-in for the Rust interface, so these tests exercise the real controls
@@ -15,6 +21,12 @@ let snapshot: WorkspaceSnapshot
 let history: WorkspaceSnapshot[]
 let created = 0
 let createdLabels = 0
+let createdRelationships = 0
+
+/** The canonical pair the durable interface stores; order is not direction. */
+function canonicalPair(left: string, right: string): [string, string] {
+  return left <= right ? [left, right] : [right, left]
+}
 
 function committed(): WorkspaceOutcome {
   const notes = [...snapshot.notes].sort(
@@ -25,10 +37,23 @@ function committed(): WorkspaceOutcome {
   return { status: "committed", snapshot }
 }
 
-/** Every mutation records the state it replaced, the way undo history does. */
+/**
+ * Every mutation records the state it replaced, the way undo history does.
+ * Deleting a Note takes its Relationships with it, as the schema's cascade
+ * does.
+ */
 function mutate(change: (notes: Note[]) => Note[]): WorkspaceOutcome {
   history.push(snapshot)
-  snapshot = { ...snapshot, notes: change(snapshot.notes) }
+  const notes = change(snapshot.notes)
+  const surviving = new Set(notes.map((note) => note.id))
+  snapshot = {
+    ...snapshot,
+    notes,
+    relationships: snapshot.relationships.filter(
+      (relationship) =>
+        surviving.has(relationship.noteIdA) && surviving.has(relationship.noteIdB),
+    ),
+  }
   return committed()
 }
 
@@ -94,6 +119,42 @@ vi.mock("@tauri-apps/api/core", () => ({
         return Promise.resolve(mutate((notes) => notes.map((note) => ({ ...note, labels: note.labels.map((label) => label.id === args.labelId ? { ...label, name: String(args.name).trim() } : label) }))))
       case "remove_label":
         return Promise.resolve(mutate((notes) => notes.map((note) => ({ ...note, labels: note.labels.filter((label) => label.id !== args.labelId) }))))
+      case "relate_notes": {
+        const [noteIdA, noteIdB] = canonicalPair(String(args.noteId), String(args.otherNoteId))
+        if (
+          noteIdA === noteIdB ||
+          snapshot.relationships.some(
+            (relationship) =>
+              relationship.noteIdA === noteIdA && relationship.noteIdB === noteIdB,
+          )
+        ) {
+          return Promise.resolve(committed())
+        }
+        createdRelationships += 1
+        const relationship: Relationship = {
+          id: `relationship-${createdRelationships}`,
+          workspaceId,
+          noteIdA,
+          noteIdB,
+          provenance: "manual",
+          createdAt: `2026-07-22T11:0${createdRelationships}:00+00:00`,
+        }
+        history.push(snapshot)
+        snapshot = { ...snapshot, relationships: [...snapshot.relationships, relationship] }
+        return Promise.resolve(committed())
+      }
+      case "unrelate_notes": {
+        const [noteIdA, noteIdB] = canonicalPair(String(args.noteId), String(args.otherNoteId))
+        history.push(snapshot)
+        snapshot = {
+          ...snapshot,
+          relationships: snapshot.relationships.filter(
+            (relationship) =>
+              relationship.noteIdA !== noteIdA || relationship.noteIdB !== noteIdB,
+          ),
+        }
+        return Promise.resolve(committed())
+      }
       case "search_notes": {
         const query = String(args.query).toLowerCase()
         return Promise.resolve({ status: "committed", results: snapshot.notes.filter((note) => `${note.markdown} ${note.annotation ?? ""} ${note.labels.map((label) => label.name).join(" ")}`.toLowerCase().includes(query)).map((note) => ({ noteId: note.id, snippet: note.markdown, noteType: note.noteType, labels: note.labels, rank: 0 })) })
@@ -118,6 +179,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 beforeEach(() => {
   created = 0
   createdLabels = 0
+  createdRelationships = 0
   history = []
   snapshot = {
     workspaces: [
@@ -129,6 +191,7 @@ beforeEach(() => {
       },
     ],
     notes: [],
+    relationships: [],
     activeWorkspaceId: workspaceId,
     undoableCommands: 0,
   }
@@ -272,5 +335,125 @@ describe("manual Note controls", () => {
     await user.type(screen.getByLabelText("Search this Thinking Workspace"), "Rêverie")
     await user.click(screen.getByRole("button", { name: "Search" }))
     expect(within(screen.getByLabelText("Search Notes")).getByText("A thought to recover")).toBeDefined()
+  })
+})
+
+describe("Relationships on the Note detail surface", () => {
+  /** Relates the first Note card to a Note matching `preview`. */
+  async function relateFirstNote(
+    user: ReturnType<typeof userEvent.setup>,
+    query: string,
+    preview: string,
+  ) {
+    await user.click(within(noteCards()[0]).getByRole("button", { name: "Relate Note" }))
+    await user.type(screen.getByLabelText("Relate to Note"), query)
+    await user.click(within(noteCards()[0]).getByRole("button", { name: preview }))
+  }
+
+  it("adds a Relationship, lists it on either endpoint, and removes it", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await captureNote(user, "Cities grew around rivers")
+    await captureNote(user, "Trade follows water")
+
+    await relateFirstNote(user, "Trade", "Trade follows water")
+
+    // Either endpoint lists the other, from one committed Relationship.
+    await waitFor(() =>
+      expect(
+        within(within(noteCards()[0]).getByLabelText("Related Notes")).getByText(
+          "Trade follows water",
+        ),
+      ).toBeDefined(),
+    )
+    expect(
+      within(within(noteCards()[1]).getByLabelText("Related Notes")).getByText(
+        "Cities grew around rivers",
+      ),
+    ).toBeDefined()
+    expect(within(noteCards()[0]).getByText("1 related")).toBeDefined()
+
+    await user.click(
+      within(noteCards()[1]).getByRole("button", {
+        name: "Remove Relationship to Cities grew around rivers",
+      }),
+    )
+    await waitFor(() =>
+      expect(
+        within(within(noteCards()[0]).getByLabelText("Related Notes")).queryByText(
+          "Trade follows water",
+        ),
+      ).toBeNull(),
+    )
+    expect(within(noteCards()[1]).queryByText("1 related")).toBeNull()
+  })
+
+  it("offers only Notes that are neither this one nor already related", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await captureNote(user, "Cities grew around rivers")
+    await captureNote(user, "Trade follows water")
+
+    await user.click(within(noteCards()[0]).getByRole("button", { name: "Relate Note" }))
+    const editor = within(noteCards()[0])
+    // A Note can never be offered itself.
+    expect(editor.queryByRole("button", { name: "Cities grew around rivers" })).toBeNull()
+    expect(editor.getByRole("button", { name: "Trade follows water" })).toBeDefined()
+    // The search narrows the candidates to the Notes the thinker means.
+    await user.type(screen.getByLabelText("Relate to Note"), "nothing matches this")
+    expect(editor.queryByRole("button", { name: "Trade follows water" })).toBeNull()
+
+    await user.clear(screen.getByLabelText("Relate to Note"))
+    await user.click(editor.getByRole("button", { name: "Trade follows water" }))
+    await waitFor(() => expect(within(noteCards()[0]).getByText("1 related")).toBeDefined())
+
+    // An already-related Note is not offered a second time.
+    await user.click(within(noteCards()[0]).getByRole("button", { name: "Relate Note" }))
+    expect(
+      within(noteCards()[0]).queryByRole("button", { name: "Trade follows water" }),
+    ).toBeNull()
+  })
+
+  it("navigates to a related Note without changing the Relationship", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await captureNote(user, "Cities grew around rivers")
+    await captureNote(user, "Trade follows water")
+    await relateFirstNote(user, "Trade", "Trade follows water")
+    await waitFor(() => expect(within(noteCards()[0]).getByText("1 related")).toBeDefined())
+
+    await user.click(
+      within(noteCards()[0]).getByRole("button", { name: "Go to Trade follows water" }),
+    )
+
+    await waitFor(() => expect(noteCards()[1].getAttribute("aria-current")).toBe("true"))
+    expect(document.activeElement).toBe(noteCards()[1])
+    // Focus is transient UI state: the Relationship is untouched on both ends.
+    expect(within(noteCards()[0]).getByText("1 related")).toBeDefined()
+    expect(within(noteCards()[1]).getByText("1 related")).toBeDefined()
+  })
+
+  it("drops the Relationship when either Note is deleted", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await captureNote(user, "Cities grew around rivers")
+    await captureNote(user, "Trade follows water")
+    await relateFirstNote(user, "Trade", "Trade follows water")
+    await waitFor(() => expect(within(noteCards()[0]).getByText("1 related")).toBeDefined())
+
+    await user.click(within(noteCards()[1]).getByRole("button", { name: "Delete Note" }))
+    await user.click(
+      within(screen.getByRole("alertdialog", { name: "Confirm delete Note" })).getByRole("button", {
+        name: "Delete Note",
+      }),
+    )
+
+    await waitFor(() => expect(screen.queryByText("Trade follows water")).toBeNull())
+    expect(within(noteCards()[0]).queryByText("1 related")).toBeNull()
+    expect(
+      within(within(noteCards()[0]).getByLabelText("Related Notes")).queryByRole("button", {
+        name: /^Go to/,
+      }),
+    ).toBeNull()
   })
 })

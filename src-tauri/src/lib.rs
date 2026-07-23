@@ -1,3 +1,4 @@
+mod thinking_graph;
 mod workspace;
 
 use std::sync::Mutex;
@@ -136,6 +137,26 @@ fn remove_label(label_id: String, state: State<'_, AppState>) -> WorkspaceComman
     state.dispatch(|store| store.remove_label_outcome(&label_id))
 }
 
+/// Records one symmetric, untyped Relationship with manual provenance. Asking
+/// for one that already exists is not an error and adds no second row.
+#[tauri::command]
+fn relate_notes(
+    note_id: String,
+    other_note_id: String,
+    state: State<'_, AppState>,
+) -> WorkspaceCommandResult {
+    state.dispatch(|store| store.relate_notes_outcome(&note_id, &other_note_id))
+}
+
+#[tauri::command]
+fn unrelate_notes(
+    note_id: String,
+    other_note_id: String,
+    state: State<'_, AppState>,
+) -> WorkspaceCommandResult {
+    state.dispatch(|store| store.unrelate_notes_outcome(&note_id, &other_note_id))
+}
+
 #[tauri::command]
 fn search_notes(workspace_id: String, query: String, state: State<'_, AppState>) -> WorkspaceSearchOutcome {
     state.dispatch_search(|store| store.search_outcome(&workspace_id, &query))
@@ -213,6 +234,8 @@ pub fn run() {
             detach_label,
             rename_label,
             remove_label,
+            relate_notes,
+            unrelate_notes,
             search_notes,
             undo_last_change,
             retry_storage_open,

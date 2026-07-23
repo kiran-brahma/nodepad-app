@@ -51,6 +51,23 @@ export interface SearchResult {
   rank: number
 }
 
+/** Who created a Relationship. Only `manual` is written today. */
+export type RelationshipProvenance = "manual" | "ai"
+
+/**
+ * A symmetric, untyped association between two distinct Notes in one Thinking
+ * Workspace. `noteIdA` sorts before `noteIdB` so a pair has one row; that
+ * ordering is storage, never direction.
+ */
+export interface Relationship {
+  id: string
+  workspaceId: string
+  noteIdA: string
+  noteIdB: string
+  provenance: RelationshipProvenance
+  createdAt: string
+}
+
 export interface ThinkingWorkspace {
   id: string
   name: string
@@ -61,6 +78,8 @@ export interface ThinkingWorkspace {
 export interface WorkspaceSnapshot {
   workspaces: ThinkingWorkspace[]
   notes: Note[]
+  /** Every committed Relationship; each endpoint always names a Note above. */
+  relationships: Relationship[]
   /** Always names a Workspace in `workspaces`; it is a preference, not content. */
   activeWorkspaceId: string
   /** Reversible changes left in this session for the active Workspace. */
@@ -116,6 +135,11 @@ export const thinkingWorkspace = {
   renameLabel: (labelId: string, name: string) =>
     invoke<WorkspaceOutcome>("rename_label", { labelId, name }),
   removeLabel: (labelId: string) => invoke<WorkspaceOutcome>("remove_label", { labelId }),
+  /** Creating a Relationship that already exists commits no second one. */
+  relateNotes: (noteId: string, otherNoteId: string) =>
+    invoke<WorkspaceOutcome>("relate_notes", { noteId, otherNoteId }),
+  unrelateNotes: (noteId: string, otherNoteId: string) =>
+    invoke<WorkspaceOutcome>("unrelate_notes", { noteId, otherNoteId }),
   searchNotes: (workspaceId: string, query: string) =>
     invoke<SearchOutcome>("search_notes", { workspaceId, query }),
   undoLastChange: (workspaceId: string) =>

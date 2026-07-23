@@ -5,6 +5,11 @@ use std::path::Path;
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::thinking_graph::{
+    canonical_pair, is_related, relatable_workspace_id, GraphViolation, Relationship,
+    RelationshipProvenance,
+};
+
 const DEFAULT_WORKSPACE_NAME: &str = "My Thinking Workspace";
 /// Names are bounded in Unicode scalar values, never bytes or grapheme clusters.
 const MAX_WORKSPACE_NAME_SCALARS: usize = 120;
@@ -82,6 +87,17 @@ pub struct Note {
     updated_at: String,
     pinned: bool,
     labels: Vec<Label>,
+}
+
+impl Note {
+    /// The Thinking Graph identifies endpoints by these two values alone.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn workspace_id(&self) -> &str {
+        &self.workspace_id
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -183,6 +199,9 @@ impl UndoHistory {
 pub struct WorkspaceSnapshot {
     workspaces: Vec<ThinkingWorkspace>,
     notes: Vec<Note>,
+    /// Every Relationship in every Workspace, in creation order. Each endpoint
+    /// always names a Note in `notes`.
+    relationships: Vec<Relationship>,
     active_workspace_id: String,
     /// How many mutations in the active Workspace can still be undone in this
     /// session. Always zero right after a restart.
@@ -277,6 +296,10 @@ pub(crate) enum WorkspaceError {
     WorkspaceNotFound,
     #[error("That Note no longer exists.")]
     NoteNotFound,
+    #[error("A Relationship connects two different Notes.")]
+    SelfRelationship,
+    #[error("A Relationship connects two Notes in the same Thinking Workspace.")]
+    CrossWorkspaceRelationship,
     #[error("There is nothing left to undo in this Thinking Workspace.")]
     NothingToUndo,
     #[error("Local storage could not commit this change. Please try again.")]
@@ -290,7 +313,10 @@ impl WorkspaceError {
             | Self::WorkspaceNameTooLong
             | Self::EmptyNote
             | Self::AnnotationTooLong
-            | Self::UnknownNoteType | Self::InvalidLabelName => WorkspaceFailureCode::Validation,
+            | Self::UnknownNoteType
+            | Self::InvalidLabelName
+            | Self::SelfRelationship
+            | Self::CrossWorkspaceRelationship => WorkspaceFailureCode::Validation,
             Self::WorkspaceNotFound | Self::NoteNotFound | Self::LabelNotFound => WorkspaceFailureCode::NotFound,
             Self::NothingToUndo => WorkspaceFailureCode::NothingToUndo,
             Self::Storage(_) => WorkspaceFailureCode::Storage,
@@ -298,6 +324,16 @@ impl WorkspaceError {
         WorkspaceFailure {
             code,
             message: self.to_string(),
+        }
+    }
+}
+
+impl From<GraphViolation> for WorkspaceError {
+    fn from(violation: GraphViolation) -> Self {
+        match violation {
+            GraphViolation::SelfRelationship => Self::SelfRelationship,
+            GraphViolation::CrossWorkspace => Self::CrossWorkspaceRelationship,
+            GraphViolation::MissingNote => Self::NoteNotFound,
         }
     }
 }
@@ -325,6 +361,20 @@ pub trait ThinkingWorkspaceInterface {
     fn rename_label(&mut self, label_id: &str, name: &str) -> Result<WorkspaceSnapshot, WorkspaceError>;
     fn remove_label(&mut self, label_id: &str) -> Result<WorkspaceSnapshot, WorkspaceError>;
     fn search_notes(&self, workspace_id: &str, query: &str) -> Result<Vec<SearchResult>, WorkspaceError>;
+    /// Records one symmetric, untyped Relationship between two distinct Notes
+    /// in the same Workspace, with manual provenance. Asking for a Relationship
+    /// that already exists commits nothing and adds no second row.
+    fn relate_notes(
+        &mut self,
+        note_id: &str,
+        other_note_id: &str,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError>;
+    /// Removes the Relationship between two Notes, in either endpoint order.
+    fn unrelate_notes(
+        &mut self,
+        note_id: &str,
+        other_note_id: &str,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError>;
 
     fn delete_workspace(
         &mut self,
@@ -533,6 +583,16 @@ pub trait ThinkingWorkspaceInterface {
     }
     fn remove_label_outcome(&mut self, label_id: &str) -> WorkspaceCommandResult {
         outcome(self.remove_label(label_id))
+    }
+    fn relate_notes_outcome(&mut self, note_id: &str, other_note_id: &str) -> WorkspaceCommandResult {
+        outcome(self.relate_notes(note_id, other_note_id))
+    }
+    fn unrelate_notes_outcome(
+        &mut self,
+        note_id: &str,
+        other_note_id: &str,
+    ) -> WorkspaceCommandResult {
+        outcome(self.unrelate_notes(note_id, other_note_id))
     }
     fn search_outcome(&self, workspace_id: &str, query: &str) -> WorkspaceSearchOutcome {
         match self.search_notes(workspace_id, query) {
@@ -842,6 +902,64 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
         self.snapshot()
     }
 
+    fn relate_notes(
+        &mut self,
+        note_id: &str,
+        other_note_id: &str,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        let snapshot = self.snapshot()?;
+        // Every rejection is decided here, before a transaction exists, so an
+        // invalid pair leaves nothing behind to roll back.
+        let workspace_id = relatable_workspace_id(&snapshot.notes, note_id, other_note_id)?;
+        if is_related(&snapshot.relationships, note_id, other_note_id) {
+            return Ok(snapshot);
+        }
+        let (first, second) = canonical_pair(note_id, other_note_id);
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(WorkspaceError::Storage)?;
+        // The unique index is the second guard: a pair raced past the check
+        // above is ignored rather than stored twice.
+        transaction
+            .execute(
+                "INSERT INTO relationships (id, workspace_id, note_id_a, note_id_b, provenance, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(note_id_a, note_id_b) DO NOTHING",
+                params![
+                    id(),
+                    workspace_id,
+                    first,
+                    second,
+                    RelationshipProvenance::Manual.as_str(),
+                    timestamp()
+                ],
+            )
+            .map_err(WorkspaceError::Storage)?;
+        transaction.commit().map_err(WorkspaceError::Storage)?;
+        self.snapshot()
+    }
+
+    fn unrelate_notes(
+        &mut self,
+        note_id: &str,
+        other_note_id: &str,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        let snapshot = self.snapshot()?;
+        relatable_workspace_id(&snapshot.notes, note_id, other_note_id)?;
+        let (first, second) = canonical_pair(note_id, other_note_id);
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(WorkspaceError::Storage)?;
+        transaction
+            .execute(
+                "DELETE FROM relationships WHERE note_id_a = ?1 AND note_id_b = ?2",
+                params![first, second],
+            )
+            .map_err(WorkspaceError::Storage)?;
+        transaction.commit().map_err(WorkspaceError::Storage)?;
+        self.snapshot()
+    }
+
     fn search_notes(&self, workspace_id: &str, query: &str) -> Result<Vec<SearchResult>, WorkspaceError> {
         require_workspace(&read_workspaces(&self.connection)?, workspace_id)?;
         let query = fts_query(query);
@@ -976,6 +1094,7 @@ fn migrate(connection: &mut Connection) -> Result<(), WorkspaceError> {
         (2_i64, include_str!("../migrations/0002_preferences.sql")),
         (3_i64, include_str!("../migrations/0003_note_controls.sql")),
         (4_i64, include_str!("../migrations/0004_labels_and_search.sql")),
+        (5_i64, include_str!("../migrations/0005_relationships.sql")),
     ];
     for (version, sql) in migrations {
         let transaction = connection.transaction().map_err(WorkspaceError::Storage)?;
@@ -1058,6 +1177,25 @@ fn refresh_workspace_search(connection: &Connection, workspace_id: &str) -> Resu
     Ok(())
 }
 
+fn read_relationships(connection: &Connection) -> Result<Vec<Relationship>, WorkspaceError> {
+    connection
+        .prepare("SELECT id, workspace_id, note_id_a, note_id_b, provenance, created_at FROM relationships ORDER BY created_at, id")
+        .map_err(WorkspaceError::Storage)?
+        .query_map([], |row| {
+            Ok(Relationship {
+                id: row.get(0)?,
+                workspace_id: row.get(1)?,
+                note_id_a: row.get(2)?,
+                note_id_b: row.get(3)?,
+                provenance: RelationshipProvenance::from_str(&row.get::<_, String>(4)?),
+                created_at: row.get(5)?,
+            })
+        })
+        .map_err(WorkspaceError::Storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(WorkspaceError::Storage)
+}
+
 fn read_snapshot(connection: &Connection) -> Result<WorkspaceSnapshot, WorkspaceError> {
     let workspaces = read_workspaces(connection)?;
     let mut notes = connection.prepare("SELECT id, workspace_id, markdown, note_type, note_type_provenance, annotation, annotation_provenance, created_at, updated_at, pinned FROM notes")
@@ -1085,6 +1223,7 @@ fn read_snapshot(connection: &Connection) -> Result<WorkspaceSnapshot, Workspace
     Ok(WorkspaceSnapshot {
         workspaces,
         notes,
+        relationships: read_relationships(connection)?,
         active_workspace_id,
         undoable_commands: 0,
     })
@@ -1120,6 +1259,7 @@ mod tests {
     struct MemoryStore {
         workspaces: Vec<ThinkingWorkspace>,
         notes: Vec<Note>,
+        relationships: Vec<Relationship>,
         active_workspace_id: String,
         history: UndoHistory,
         labels: Vec<Label>,
@@ -1130,6 +1270,7 @@ mod tests {
             let mut store = Self {
                 workspaces: vec![],
                 notes: vec![],
+                relationships: vec![],
                 active_workspace_id: String::new(),
                 history: UndoHistory::default(),
                 labels: vec![],
@@ -1143,9 +1284,14 @@ mod tests {
         fn snapshot(&self) -> Result<WorkspaceSnapshot, WorkspaceError> {
             let mut notes = self.notes.clone();
             sort_notes(&mut notes);
+            let mut relationships = self.relationships.clone();
+            relationships.sort_by(|left, right| {
+                (&left.created_at, &left.id).cmp(&(&right.created_at, &right.id))
+            });
             Ok(WorkspaceSnapshot {
                 workspaces: self.workspaces.clone(),
                 notes,
+                relationships,
                 active_workspace_id: self.active_workspace_id.clone(),
                 undoable_commands: self.history.depth(&self.active_workspace_id),
             })
@@ -1199,6 +1345,9 @@ mod tests {
             workspace_id: &str,
         ) -> Result<WorkspaceSnapshot, WorkspaceError> {
             require_workspace(&self.workspaces, workspace_id)?;
+            // Mirrors the schema's cascade from Workspace to Relationship.
+            self.relationships
+                .retain(|relationship| relationship.workspace_id != workspace_id);
             match surviving_workspace_id(&self.workspaces, workspace_id) {
                 Some(survivor_id) => {
                     self.workspaces.retain(|workspace| workspace.id != workspace_id);
@@ -1241,6 +1390,11 @@ mod tests {
                     if self.notes.len() == before {
                         return Err(WorkspaceError::NoteNotFound);
                     }
+                    // Mirrors the schema's cascade from either endpoint, so no
+                    // projection can observe a dangling endpoint here either.
+                    self.relationships.retain(|relationship| {
+                        &relationship.note_id_a != note_id && &relationship.note_id_b != note_id
+                    });
                 }
             }
             Ok(())
@@ -1283,6 +1437,40 @@ mod tests {
             if !self.labels.iter().any(|label| label.id == label_id) { return Err(WorkspaceError::LabelNotFound); }
             self.labels.retain(|label| label.id != label_id);
             for note in &mut self.notes { note.labels.retain(|label| label.id != label_id); }
+            self.snapshot()
+        }
+
+        fn relate_notes(
+            &mut self,
+            note_id: &str,
+            other_note_id: &str,
+        ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+            let workspace_id = relatable_workspace_id(&self.notes, note_id, other_note_id)?;
+            if is_related(&self.relationships, note_id, other_note_id) {
+                return self.snapshot();
+            }
+            let (first, second) = canonical_pair(note_id, other_note_id);
+            self.relationships.push(Relationship {
+                id: id(),
+                workspace_id,
+                note_id_a: first.to_owned(),
+                note_id_b: second.to_owned(),
+                provenance: RelationshipProvenance::Manual,
+                created_at: timestamp(),
+            });
+            self.snapshot()
+        }
+
+        fn unrelate_notes(
+            &mut self,
+            note_id: &str,
+            other_note_id: &str,
+        ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+            relatable_workspace_id(&self.notes, note_id, other_note_id)?;
+            let (first, second) = canonical_pair(note_id, other_note_id);
+            self.relationships.retain(|relationship| {
+                relationship.note_id_a != first || relationship.note_id_b != second
+            });
             self.snapshot()
         }
 
@@ -1348,6 +1536,26 @@ mod tests {
             .find(|note| note.id == note_id)
             .unwrap_or_else(|| panic!("no Note {note_id}"))
             .clone()
+    }
+
+    /// The Notes a Note is related to, read from committed state through the
+    /// Thinking Graph's own endpoint rule rather than a second copy of it.
+    fn related_ids(snapshot: &WorkspaceSnapshot, note_id: &str) -> Vec<String> {
+        snapshot
+            .relationships
+            .iter()
+            .filter_map(|relationship| relationship.other_endpoint(note_id))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// Every endpoint of every Relationship names a Note that is still here.
+    fn no_dangling_endpoints(snapshot: &WorkspaceSnapshot) -> bool {
+        snapshot.relationships.iter().all(|relationship| {
+            [&relationship.note_id_a, &relationship.note_id_b]
+                .iter()
+                .all(|endpoint| snapshot.notes.iter().any(|note| &&note.id == endpoint))
+        })
     }
 
     fn is_nothing_to_undo(result: &WorkspaceCommandResult) -> bool {
@@ -1623,6 +1831,67 @@ mod tests {
         let detached = committed(workspace.detach_label_outcome(&note_id, &note_in(&merged, &note_id).labels[0].id));
         assert!(note_in(&detached, &note_id).labels.is_empty());
 
+        // A Relationship is one symmetric, untyped association, manual by
+        // default, and stored once under the canonical pair ordering.
+        let related = committed(workspace.relate_notes_outcome(&note_id, &second_note_id));
+        assert_eq!(related.relationships.len(), 1);
+        let relationship = related.relationships[0].clone();
+        assert_eq!(relationship.provenance, RelationshipProvenance::Manual);
+        assert!(!relationship.created_at.is_empty());
+        assert_eq!(relationship.workspace_id, research);
+        assert_eq!(
+            canonical_pair(&note_id, &second_note_id),
+            (
+                relationship.note_id_a.as_str(),
+                relationship.note_id_b.as_str()
+            )
+        );
+
+        // Either endpoint lists the other, in either order, and no endpoint
+        // names a Note that is not here.
+        assert_eq!(related_ids(&related, &note_id), vec![second_note_id.clone()]);
+        assert_eq!(related_ids(&related, &second_note_id), vec![note_id.clone()]);
+        assert!(is_related(&related.relationships, &note_id, &second_note_id));
+        assert!(is_related(&related.relationships, &second_note_id, &note_id));
+        assert!(no_dangling_endpoints(&related));
+
+        // Asking again in the reversed endpoint order is the same Relationship,
+        // down to its identity, so nothing is stored twice.
+        let again = committed(workspace.relate_notes_outcome(&second_note_id, &note_id));
+        assert_eq!(again.relationships, vec![relationship.clone()]);
+
+        // A Relationship needs two distinct Notes in one Thinking Workspace,
+        // and a refusal leaves the graph exactly as it was.
+        assert!(is_validation_failure(
+            &workspace.relate_notes_outcome(&note_id, &note_id)
+        ));
+        assert!(is_validation_failure(
+            &workspace.relate_notes_outcome(&note_id, &outside_id)
+        ));
+        assert!(is_not_found_failure(
+            &workspace.relate_notes_outcome(&note_id, "missing")
+        ));
+        assert!(is_not_found_failure(
+            &workspace.unrelate_notes_outcome(&note_id, "missing")
+        ));
+        assert_eq!(
+            committed(workspace.snapshot_outcome()).relationships,
+            vec![relationship.clone()]
+        );
+
+        // Removing works from either endpoint order.
+        let unrelated = committed(workspace.unrelate_notes_outcome(&second_note_id, &note_id));
+        assert!(unrelated.relationships.is_empty());
+        assert!(related_ids(&unrelated, &note_id).is_empty());
+
+        // Deleting either Note takes the Relationship with it, so no projection
+        // can reach an endpoint that no longer names a Note.
+        committed(workspace.relate_notes_outcome(&note_id, &second_note_id));
+        let cascaded = committed(workspace.delete_note_outcome(&second_note_id));
+        assert!(cascaded.relationships.is_empty());
+        assert!(related_ids(&cascaded, &note_id).is_empty());
+        assert!(no_dangling_endpoints(&cascaded));
+
         // Deleting the active Workspace selects the most recently updated
         // survivor. The survivor here is neither the newest, the oldest, the
         // first, nor the last Workspace, so no weaker rule can pass this.
@@ -1658,6 +1927,7 @@ mod tests {
         assert_eq!(last.workspaces[0].name, DEFAULT_WORKSPACE_NAME);
         assert_eq!(last.active_workspace_id, last.workspaces[0].id);
         assert!(last.notes.is_empty());
+        assert!(last.relationships.is_empty());
     }
 
     fn temporary_path() -> std::path::PathBuf {
@@ -1732,6 +2002,123 @@ mod tests {
         assert_eq!(labels.len(), 1);
         assert_eq!(labels[0].labels[0].name, "Rêverie");
         assert_eq!(reopened.search_notes(&workspace_id, "commentary").unwrap().len(), 1);
+        remove_database(&path);
+    }
+
+    /// Commits two Notes in the active Workspace and returns their ids.
+    fn two_notes(store: &mut WorkspaceStore) -> (String, String, String) {
+        let workspace_id = store.snapshot().unwrap().active_workspace_id;
+        let note_id = |snapshot: &WorkspaceSnapshot, markdown: &str| {
+            snapshot
+                .notes
+                .iter()
+                .find(|note| note.markdown == markdown)
+                .expect("the Note is committed")
+                .id
+                .clone()
+        };
+        let first = note_id(
+            &store.create_note(&workspace_id, "One end").unwrap(),
+            "One end",
+        );
+        let second = note_id(
+            &store.create_note(&workspace_id, "The other end").unwrap(),
+            "The other end",
+        );
+        (workspace_id, first, second)
+    }
+
+    #[test]
+    fn sqlite_recovers_manual_relationships_and_their_cascade_after_reopen() {
+        let path = temporary_path();
+        let (workspace_id, first, second, created_at) = {
+            let mut store = WorkspaceStore::open(&path).unwrap();
+            let (workspace_id, first, second) = two_notes(&mut store);
+            let snapshot = store.relate_notes(&first, &second).unwrap();
+            (
+                workspace_id,
+                first,
+                second,
+                snapshot.relationships[0].created_at.clone(),
+            )
+        };
+
+        let mut reopened = WorkspaceStore::open(&path).unwrap();
+        let snapshot = reopened.snapshot().unwrap();
+        assert_eq!(snapshot.relationships.len(), 1);
+        assert_eq!(
+            snapshot.relationships[0].provenance,
+            RelationshipProvenance::Manual
+        );
+        assert_eq!(snapshot.relationships[0].created_at, created_at);
+        assert_eq!(snapshot.relationships[0].workspace_id, workspace_id);
+        assert_eq!(related_ids(&snapshot, &first), vec![second.clone()]);
+        assert_eq!(related_ids(&snapshot, &second), vec![first.clone()]);
+        assert!(no_dangling_endpoints(&snapshot));
+        // A duplicate asked for in a later session is still one row.
+        assert_eq!(
+            reopened
+                .relate_notes(&second, &first)
+                .unwrap()
+                .relationships
+                .len(),
+            1
+        );
+
+        // The endpoint cascade is the schema's, so it survives the session too.
+        reopened.delete_note(&first).unwrap();
+        drop(reopened);
+        assert!(WorkspaceStore::open(&path)
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .relationships
+            .is_empty());
+        remove_database(&path);
+    }
+
+    #[test]
+    fn storage_refuses_a_duplicate_reversed_or_self_relationship_written_around_the_module() {
+        let path = temporary_path();
+        let mut store = WorkspaceStore::open(&path).unwrap();
+        let (workspace_id, first, second) = two_notes(&mut store);
+        let existing = store.relate_notes(&first, &second).unwrap().relationships[0].clone();
+
+        // Nothing below goes through the Thinking Graph module, so these prove
+        // the database itself cannot hold a second row for one pair.
+        let write = |note_id_a: &str, note_id_b: &str| {
+            store.connection.execute(
+                "INSERT INTO relationships (id, workspace_id, note_id_a, note_id_b, provenance, created_at) VALUES (?1, ?2, ?3, ?4, 'manual', ?5)",
+                params![id(), workspace_id, note_id_a, note_id_b, timestamp()],
+            )
+        };
+        assert!(write(&existing.note_id_a, &existing.note_id_b).is_err());
+        assert!(write(&existing.note_id_b, &existing.note_id_a).is_err());
+        assert!(write(&first, &first).is_err());
+        assert!(write(&existing.note_id_a, "vanished").is_err());
+        assert_eq!(store.snapshot().unwrap().relationships, vec![existing]);
+        remove_database(&path);
+    }
+
+    #[test]
+    fn a_failed_relationship_commit_leaves_the_thinking_graph_unchanged() {
+        let path = temporary_path();
+        let mut store = WorkspaceStore::open(&path).unwrap();
+        let (_, first, second) = two_notes(&mut store);
+        store.connection.execute_batch("CREATE TRIGGER reject_relationships BEFORE INSERT ON relationships BEGIN SELECT RAISE(FAIL, 'injected'); END;").unwrap();
+
+        assert!(matches!(
+            store.relate_notes_outcome(&first, &second),
+            WorkspaceCommandResult::Failed {
+                failure: WorkspaceFailure {
+                    code: WorkspaceFailureCode::Storage,
+                    ..
+                }
+            }
+        ));
+        let unchanged = store.snapshot().unwrap();
+        assert!(unchanged.relationships.is_empty());
+        assert!(related_ids(&unchanged, &first).is_empty());
         remove_database(&path);
     }
 

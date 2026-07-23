@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react"
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import {
@@ -25,11 +25,13 @@ import {
   isUndoShortcut,
   MAX_ANNOTATION_SCALARS,
   noteDeleteConfirmationPrompt,
+  notePreview,
   noteTypeLabel,
   requestNoteDelete,
   resolveNoteDeleteConfirmation,
   type PendingNoteDelete,
 } from "./note-controls"
+import { degree, relatableNotes, relatedNotes } from "./thinking-graph"
 
 const RECOVERY_HEADLINE: Record<StorageOpenFailure["category"], string> = {
   unreadable: "Nodepad could not read its local database.",
@@ -52,12 +54,18 @@ export function App() {
   const [renameLabelDraft, setRenameLabelDraft] = useState<{ id: string; name: string } | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null)
+  const [relateDraft, setRelateDraft] = useState<{ noteId: string; query: string } | null>(null)
+  // Which Note the thinker navigated to. Focus is transient: it is never
+  // committed, and moving it can change no Relationship.
+  const [focusedNoteId, setFocusedNoteId] = useState<string | null>(null)
+  const noteElements = useRef(new Map<string, HTMLLIElement>())
 
   const activeWorkspace = useMemo(
     () => snapshot?.workspaces.find(({ id }) => id === snapshot.activeWorkspaceId),
     [snapshot],
   )
   const notes = snapshot?.notes.filter((note) => note.workspaceId === activeWorkspace?.id) ?? []
+  const relationships = snapshot?.relationships ?? []
 
   const submit = useCallback(async (pending: Promise<WorkspaceOutcome>) => {
     const outcome = await pending
@@ -179,6 +187,24 @@ export function App() {
       setSearchResults(outcome.results)
     })
   }
+
+  function relate(noteId: string, otherNoteId: string) {
+    void submit(thinkingWorkspace.relateNotes(noteId, otherNoteId)).then((committed) => {
+      if (committed) setRelateDraft(null)
+    })
+  }
+
+  // Navigating to a related Note only moves the reader; it commits nothing.
+  function focusNote(noteId: string) {
+    setFocusedNoteId(noteId)
+  }
+
+  useEffect(() => {
+    if (!focusedNoteId) return
+    const element = noteElements.current.get(focusedNoteId)
+    element?.scrollIntoView?.({ block: "center" })
+    element?.focus()
+  }, [focusedNoteId])
 
   const undoLastChange = useCallback(() => {
     if (!snapshot?.activeWorkspaceId) return
@@ -330,10 +356,28 @@ export function App() {
         ) : (
           <ul className="notes">
             {notes.map((note) => (
-              <li key={note.id} className={note.pinned ? "note pinned" : "note"}>
+              <li
+                key={note.id}
+                className={[
+                  "note",
+                  note.pinned ? "pinned" : "",
+                  focusedNoteId === note.id ? "focused" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                tabIndex={-1}
+                aria-current={focusedNoteId === note.id ? "true" : undefined}
+                ref={(element) => {
+                  if (element) noteElements.current.set(note.id, element)
+                  else noteElements.current.delete(note.id)
+                }}
+              >
                 <div className="row">
                   <span className="badge">{noteTypeLabel(note.noteType)}</span>
                   {note.pinned && <span className="badge">Pinned</span>}
+                  {degree(relationships, note.id) > 0 && (
+                    <span className="badge">{degree(relationships, note.id)} related</span>
+                  )}
                 </div>
 
                 {noteDraft?.id === note.id ? (
@@ -396,6 +440,58 @@ export function App() {
                   {labelDraft?.noteId === note.id ? (
                     <form onSubmit={saveLabel}><label htmlFor={`label-${note.id}`}>Label</label><input autoFocus id={`label-${note.id}`} value={labelDraft.name} onChange={(event) => setLabelDraft({ ...labelDraft, name: event.target.value })} /><button type="submit">Save Label</button><button type="button" onClick={() => setLabelDraft(null)}>Cancel</button></form>
                   ) : <button onClick={() => setLabelDraft({ noteId: note.id, name: "" })}>Add Label</button>}
+                </div>
+
+                {/* Related Notes are candidates, not list items, so a Note card
+                    stays the only list item a reader can land on. */}
+                <div className="row" aria-label="Related Notes">
+                  {relatedNotes(notes, relationships, note.id).map((related) => (
+                    <span className="badge" key={related.id}>
+                      {notePreview(related)}
+                      <button
+                        aria-label={`Go to ${notePreview(related)}`}
+                        onClick={() => focusNote(related.id)}
+                      >
+                        Go to Note
+                      </button>
+                      <button
+                        aria-label={`Remove Relationship to ${notePreview(related)}`}
+                        onClick={() => void submit(thinkingWorkspace.unrelateNotes(note.id, related.id))}
+                      >
+                        Remove Relationship
+                      </button>
+                    </span>
+                  ))}
+                  {relateDraft?.noteId === note.id ? (
+                    <div className="relate">
+                      <label htmlFor={`relate-${note.id}`}>Relate to Note</label>
+                      <input
+                        autoFocus
+                        id={`relate-${note.id}`}
+                        value={relateDraft.query}
+                        placeholder="Search Notes in this Thinking Workspace"
+                        onChange={(event) =>
+                          setRelateDraft({ ...relateDraft, query: event.target.value })
+                        }
+                      />
+                      <div className="row">
+                        {relatableNotes(notes, relationships, note.id, relateDraft.query).map(
+                          (candidate) => (
+                            <button key={candidate.id} onClick={() => relate(note.id, candidate.id)}>
+                              {notePreview(candidate)}
+                            </button>
+                          ),
+                        )}
+                      </div>
+                      <button type="button" onClick={() => setRelateDraft(null)}>
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button onClick={() => setRelateDraft({ noteId: note.id, query: "" })}>
+                      Relate Note
+                    </button>
+                  )}
                 </div>
 
                 <div className="row">
