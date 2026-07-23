@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import {
@@ -40,6 +40,45 @@ import {
   transferDestinations,
   type PendingTransfer,
 } from "./note-transfer"
+import {
+  arrangementWeight,
+  kanbanColumns,
+  matchingNoteIds,
+  noteArrangement,
+  noteViewLabel,
+  NOTE_VIEWS,
+  preservedSelection,
+  tilingPages,
+  visibleNotes,
+  workspaceNotes,
+  type NoteArrangement,
+  type NoteView,
+} from "./note-views"
+
+/**
+ * One page of the tiling view, arranged by repeated halving. Layout decides
+ * only where a Note appears; the card it places is the same card every view
+ * uses, so no view can offer an action another one lacks.
+ */
+function TiledNotes({
+  arrangement,
+  card,
+}: {
+  arrangement: NoteArrangement
+  card: (note: Note) => ReactNode
+}) {
+  if (arrangement.kind === "note") return <>{card(arrangement.note)}</>
+  return (
+    <div className={`split ${arrangement.direction}`}>
+      <div className="split-side" style={{ flex: arrangementWeight(arrangement.first) }}>
+        <TiledNotes arrangement={arrangement.first} card={card} />
+      </div>
+      <div className="split-side" style={{ flex: arrangementWeight(arrangement.second) }}>
+        <TiledNotes arrangement={arrangement.second} card={card} />
+      </div>
+    </div>
+  )
+}
 
 /**
  * The destination choice for one Note, with the two transfers named and
@@ -116,14 +155,23 @@ export function App() {
   // Which Note the thinker navigated to. Focus is transient: it is never
   // committed, and moving it can change no Relationship.
   const [focusedNoteId, setFocusedNoteId] = useState<string | null>(null)
-  const noteElements = useRef(new Map<string, HTMLLIElement>())
+  // How the same committed Notes are arranged. Not committed, so a restart
+  // reconstructs both views from SQLite alone.
+  const [view, setView] = useState<NoteView>("tiling")
+  const noteElements = useRef(new Map<string, HTMLDivElement>())
 
   const activeWorkspace = useMemo(
     () => snapshot?.workspaces.find(({ id }) => id === snapshot.activeWorkspaceId),
     [snapshot],
   )
-  const notes = snapshot?.notes.filter((note) => note.workspaceId === activeWorkspace?.id) ?? []
+  const notes = workspaceNotes(snapshot?.notes ?? [], activeWorkspace?.id)
   const relationships = snapshot?.relationships ?? []
+  // The one result set both views read, so they can never disagree about which
+  // Notes are on screen or in what order.
+  const visible = useMemo(
+    () => visibleNotes(snapshot?.notes ?? [], activeWorkspace?.id, matchingNoteIds(searchResults)),
+    [snapshot, activeWorkspace?.id, searchResults],
+  )
 
   const submit = useCallback(async (pending: Promise<WorkspaceOutcome>) => {
     const outcome = await pending
@@ -278,6 +326,12 @@ export function App() {
     element?.focus()
   }, [focusedNoteId])
 
+  // Switching view, searching, or deleting can take the focused Note off
+  // screen. Focus follows the Note while it is visible and is otherwise let go.
+  useEffect(() => {
+    setFocusedNoteId((current) => preservedSelection(current, visible))
+  }, [visible])
+
   const undoLastChange = useCallback(() => {
     if (!snapshot?.activeWorkspaceId) return
     void submit(thinkingWorkspace.undoLastChange(snapshot.activeWorkspaceId))
@@ -305,6 +359,232 @@ export function App() {
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [undoLastChange])
+
+  /**
+   * One committed Note, with every manual control the thinker has over it.
+   * Both views place this card, so mutation policy has one home and a view
+   * can only decide where a Note appears, never what may be done to it.
+   */
+  function noteCard(note: Note): ReactNode {
+    return (
+      <div
+        key={note.id}
+        className={[
+          "note",
+          note.pinned ? "pinned" : "",
+          focusedNoteId === note.id ? "focused" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        // A Note card is one self-contained piece of the thinking, whichever
+        // arrangement the surrounding layout gives it. Neither view nests a
+        // card directly under its group, so it carries no list semantics.
+        role="article"
+        aria-label={notePreview(note)}
+        tabIndex={-1}
+        aria-current={focusedNoteId === note.id ? "true" : undefined}
+        ref={(element) => {
+          if (element) noteElements.current.set(note.id, element)
+          else noteElements.current.delete(note.id)
+        }}
+      >
+        <div className="row">
+          <span className="badge">{noteTypeLabel(note.noteType)}</span>
+          {note.pinned && <span className="badge">Pinned</span>}
+          {degree(relationships, note.id) > 0 && (
+            <span className="badge">{degree(relationships, note.id)} related</span>
+          )}
+        </div>
+
+        {noteDraft?.id === note.id ? (
+          <form onSubmit={saveNoteText}>
+            <label htmlFor={`note-text-${note.id}`}>Note text</label>
+            <textarea
+              autoFocus
+              id={`note-text-${note.id}`}
+              rows={5}
+              value={noteDraft.markdown}
+              onChange={(event) => setNoteDraft({ ...noteDraft, markdown: event.target.value })}
+            />
+            <div className="row">
+              <button type="submit">Save Note text</button>
+              <button type="button" onClick={() => setNoteDraft(null)}>
+                Cancel
+              </button>
+            </div>
+          </form>
+        ) : (
+          // Markdown renders without raw HTML, so nothing in a Note executes.
+          <div className="markdown">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{note.markdown}</ReactMarkdown>
+          </div>
+        )}
+
+        {annotationDraft?.id === note.id ? (
+          <form onSubmit={saveAnnotation}>
+            <label htmlFor={`annotation-${note.id}`}>Annotation</label>
+            <textarea
+              autoFocus
+              id={`annotation-${note.id}`}
+              rows={3}
+              value={annotationDraft.text}
+              placeholder="Plain-text commentary; leave empty to clear it"
+              onChange={(event) =>
+                setAnnotationDraft({ ...annotationDraft, text: event.target.value })
+              }
+            />
+            <p className={isAnnotationTooLong(annotationDraft.text) ? "over-limit" : ""}>
+              {annotationLength(annotationDraft.text)} / {MAX_ANNOTATION_SCALARS} characters
+            </p>
+            <div className="row">
+              <button type="submit" disabled={isAnnotationTooLong(annotationDraft.text)}>
+                Save Annotation
+              </button>
+              <button type="button" onClick={() => setAnnotationDraft(null)}>
+                Cancel
+              </button>
+            </div>
+          </form>
+        ) : (
+          note.annotation && <p className="annotation">{note.annotation}</p>
+        )}
+
+        <div className="row" aria-label="Labels">
+          {note.labels.map((label) => (
+            <span className="badge" key={label.id}>{label.name} <button aria-label={`Detach ${label.name}`} onClick={() => void submit(thinkingWorkspace.detachLabel(note.id, label.id))}>×</button> <button aria-label={`Rename ${label.name}`} onClick={() => setRenameLabelDraft({ id: label.id, name: label.name })}>Rename</button> <button aria-label={`Remove ${label.name}`} onClick={() => void submit(thinkingWorkspace.removeLabel(label.id))}>Remove</button></span>
+          ))}
+          {labelDraft?.noteId === note.id ? (
+            <form onSubmit={saveLabel}><label htmlFor={`label-${note.id}`}>Label</label><input autoFocus id={`label-${note.id}`} value={labelDraft.name} onChange={(event) => setLabelDraft({ ...labelDraft, name: event.target.value })} /><button type="submit">Save Label</button><button type="button" onClick={() => setLabelDraft(null)}>Cancel</button></form>
+          ) : <button onClick={() => setLabelDraft({ noteId: note.id, name: "" })}>Add Label</button>}
+        </div>
+
+        {/* Related Notes are candidates, not list items, so a Note card
+            stays the only list item a reader can land on. */}
+        <div className="row" aria-label="Related Notes">
+          {relatedNotes(notes, relationships, note.id).map((related) => (
+            <span className="badge" key={related.id}>
+              {notePreview(related)}
+              <button
+                aria-label={`Go to ${notePreview(related)}`}
+                onClick={() => focusNote(related.id)}
+              >
+                Go to Note
+              </button>
+              <button
+                aria-label={`Remove Relationship to ${notePreview(related)}`}
+                onClick={() => void submit(thinkingWorkspace.unrelateNotes(note.id, related.id))}
+              >
+                Remove Relationship
+              </button>
+            </span>
+          ))}
+          {relateDraft?.noteId === note.id ? (
+            <div className="relate">
+              <label htmlFor={`relate-${note.id}`}>Relate to Note</label>
+              <input
+                autoFocus
+                id={`relate-${note.id}`}
+                value={relateDraft.query}
+                placeholder="Search Notes in this Thinking Workspace"
+                onChange={(event) =>
+                  setRelateDraft({ ...relateDraft, query: event.target.value })
+                }
+              />
+              <div className="row">
+                {relatableNotes(notes, relationships, note.id, relateDraft.query).map(
+                  (candidate) => (
+                    <button key={candidate.id} onClick={() => relate(note.id, candidate.id)}>
+                      {notePreview(candidate)}
+                    </button>
+                  ),
+                )}
+              </div>
+              <button type="button" onClick={() => setRelateDraft(null)}>
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button onClick={() => setRelateDraft({ noteId: note.id, query: "" })}>
+              Relate Note
+            </button>
+          )}
+        </div>
+
+        {/* Moving and copying are the only two ways a Note reaches
+            another Thinking Workspace, and each says what it does. */}
+        <div className="row" aria-label="Move or copy Note">
+          {pendingTransfer?.noteId === note.id ? (
+            <NoteTransfer
+              note={note}
+              workspaces={snapshot?.workspaces ?? []}
+              pending={pendingTransfer}
+              onChoose={(targetWorkspaceId) =>
+                setPendingTransfer({ ...pendingTransfer, targetWorkspaceId })
+              }
+              onTransfer={transfer}
+              onCancel={() => setPendingTransfer(null)}
+            />
+          ) : (
+            <button
+              disabled={transferDestinations(snapshot?.workspaces ?? [], note).length === 0}
+              onClick={() => setPendingTransfer(requestTransfer(snapshot?.workspaces ?? [], note))}
+            >
+              Move or Copy Note
+            </button>
+          )}
+        </div>
+
+        <div className="row">
+          <label htmlFor={`note-type-${note.id}`}>Note Type</label>
+          <select
+            id={`note-type-${note.id}`}
+            value={note.noteType}
+            onChange={(event) =>
+              void submit(
+                thinkingWorkspace.setNoteType(note.id, event.target.value as NoteType),
+              )
+            }
+          >
+            {NOTE_TYPES.map((noteType) => (
+              <option key={noteType} value={noteType}>
+                {noteTypeLabel(noteType)}
+              </option>
+            ))}
+          </select>
+          <button onClick={() => startNoteEdit(note)} disabled={noteDraft?.id === note.id}>
+            Edit Note
+          </button>
+          <button
+            onClick={() => startAnnotation(note)}
+            disabled={annotationDraft?.id === note.id}
+          >
+            {note.annotation ? "Edit Annotation" : "Add Annotation"}
+          </button>
+          <button
+            aria-pressed={note.pinned}
+            onClick={() => void submit(thinkingWorkspace.setNotePinned(note.id, !note.pinned))}
+          >
+            {note.pinned ? "Unpin" : "Pin"}
+          </button>
+          <button onClick={() => setPendingNoteDelete(requestNoteDelete(note))}>
+            Delete Note
+          </button>
+        </div>
+
+        {pendingNoteDelete?.noteId === note.id && (
+          <div className="confirm" role="alertdialog" aria-label="Confirm delete Note">
+            <p>{noteDeleteConfirmationPrompt(pendingNoteDelete)}</p>
+            <div className="row">
+              <button onClick={() => answerNoteDeleteConfirmation("confirm")}>
+                Delete Note
+              </button>
+              <button onClick={() => answerNoteDeleteConfirmation("cancel")}>Keep it</button>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
 
   if (openFailure) {
     return (
@@ -409,7 +689,13 @@ export function App() {
           <input id="search-notes" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search Notes, Annotations, or Labels" />
           <div className="row"><button type="submit" disabled={!activeWorkspace}>Search</button><button type="button" onClick={() => { setSearchQuery(""); setSearchResults(null) }}>Clear search</button></div>
         </form>
-        {searchResults && <ul className="search-results">{searchResults.map((result) => <li key={result.noteId}><span className="badge">{noteTypeLabel(result.noteType)}</span> {result.snippet} {result.labels.map((label) => <span className="badge" key={label.id}>{label.name}</span>)}</li>)}</ul>}
+        {/* A search narrows the Notes both views show; it never renders a
+            second copy of them. */}
+        {searchResults && (
+          <p role="status">
+            {visible.length} of {notes.length} Notes match this search.
+          </p>
+        )}
       </section>
 
       <section aria-label="Committed Notes">
@@ -423,224 +709,50 @@ export function App() {
             Undo
           </button>
         </div>
-        {notes.length === 0 ? (
-          <p>No Notes yet.</p>
-        ) : (
-          <ul className="notes">
-            {notes.map((note) => (
-              <li
-                key={note.id}
-                className={[
-                  "note",
-                  note.pinned ? "pinned" : "",
-                  focusedNoteId === note.id ? "focused" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-                tabIndex={-1}
-                aria-current={focusedNoteId === note.id ? "true" : undefined}
-                ref={(element) => {
-                  if (element) noteElements.current.set(note.id, element)
-                  else noteElements.current.delete(note.id)
-                }}
+
+        {/* A view is a way of reading the same committed Notes. Choosing one
+            commits nothing and changes no Note. */}
+        <div className="row" role="group" aria-label="Note view">
+          {NOTE_VIEWS.map((option) => (
+            <button
+              key={option}
+              aria-pressed={view === option}
+              className={view === option ? "active" : ""}
+              onClick={() => setView(option)}
+            >
+              {noteViewLabel(option)}
+            </button>
+          ))}
+        </div>
+        {visible.length === 0 ? (
+          <p>{searchResults ? "No Notes match this search." : "No Notes yet."}</p>
+        ) : view === "tiling" ? (
+          <div className="tiling">
+            {tilingPages(visible).map((page, index) => (
+              <div
+                className="tiling-page"
+                key={index}
+                role="group"
+                aria-label={`Tiled Notes, page ${index + 1}`}
               >
-                <div className="row">
-                  <span className="badge">{noteTypeLabel(note.noteType)}</span>
-                  {note.pinned && <span className="badge">Pinned</span>}
-                  {degree(relationships, note.id) > 0 && (
-                    <span className="badge">{degree(relationships, note.id)} related</span>
-                  )}
-                </div>
-
-                {noteDraft?.id === note.id ? (
-                  <form onSubmit={saveNoteText}>
-                    <label htmlFor={`note-text-${note.id}`}>Note text</label>
-                    <textarea
-                      autoFocus
-                      id={`note-text-${note.id}`}
-                      rows={5}
-                      value={noteDraft.markdown}
-                      onChange={(event) => setNoteDraft({ ...noteDraft, markdown: event.target.value })}
-                    />
-                    <div className="row">
-                      <button type="submit">Save Note text</button>
-                      <button type="button" onClick={() => setNoteDraft(null)}>
-                        Cancel
-                      </button>
-                    </div>
-                  </form>
-                ) : (
-                  // Markdown renders without raw HTML, so nothing in a Note executes.
-                  <div className="markdown">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{note.markdown}</ReactMarkdown>
-                  </div>
-                )}
-
-                {annotationDraft?.id === note.id ? (
-                  <form onSubmit={saveAnnotation}>
-                    <label htmlFor={`annotation-${note.id}`}>Annotation</label>
-                    <textarea
-                      autoFocus
-                      id={`annotation-${note.id}`}
-                      rows={3}
-                      value={annotationDraft.text}
-                      placeholder="Plain-text commentary; leave empty to clear it"
-                      onChange={(event) =>
-                        setAnnotationDraft({ ...annotationDraft, text: event.target.value })
-                      }
-                    />
-                    <p className={isAnnotationTooLong(annotationDraft.text) ? "over-limit" : ""}>
-                      {annotationLength(annotationDraft.text)} / {MAX_ANNOTATION_SCALARS} characters
-                    </p>
-                    <div className="row">
-                      <button type="submit" disabled={isAnnotationTooLong(annotationDraft.text)}>
-                        Save Annotation
-                      </button>
-                      <button type="button" onClick={() => setAnnotationDraft(null)}>
-                        Cancel
-                      </button>
-                    </div>
-                  </form>
-                ) : (
-                  note.annotation && <p className="annotation">{note.annotation}</p>
-                )}
-
-                <div className="row" aria-label="Labels">
-                  {note.labels.map((label) => (
-                    <span className="badge" key={label.id}>{label.name} <button aria-label={`Detach ${label.name}`} onClick={() => void submit(thinkingWorkspace.detachLabel(note.id, label.id))}>×</button> <button aria-label={`Rename ${label.name}`} onClick={() => setRenameLabelDraft({ id: label.id, name: label.name })}>Rename</button> <button aria-label={`Remove ${label.name}`} onClick={() => void submit(thinkingWorkspace.removeLabel(label.id))}>Remove</button></span>
-                  ))}
-                  {labelDraft?.noteId === note.id ? (
-                    <form onSubmit={saveLabel}><label htmlFor={`label-${note.id}`}>Label</label><input autoFocus id={`label-${note.id}`} value={labelDraft.name} onChange={(event) => setLabelDraft({ ...labelDraft, name: event.target.value })} /><button type="submit">Save Label</button><button type="button" onClick={() => setLabelDraft(null)}>Cancel</button></form>
-                  ) : <button onClick={() => setLabelDraft({ noteId: note.id, name: "" })}>Add Label</button>}
-                </div>
-
-                {/* Related Notes are candidates, not list items, so a Note card
-                    stays the only list item a reader can land on. */}
-                <div className="row" aria-label="Related Notes">
-                  {relatedNotes(notes, relationships, note.id).map((related) => (
-                    <span className="badge" key={related.id}>
-                      {notePreview(related)}
-                      <button
-                        aria-label={`Go to ${notePreview(related)}`}
-                        onClick={() => focusNote(related.id)}
-                      >
-                        Go to Note
-                      </button>
-                      <button
-                        aria-label={`Remove Relationship to ${notePreview(related)}`}
-                        onClick={() => void submit(thinkingWorkspace.unrelateNotes(note.id, related.id))}
-                      >
-                        Remove Relationship
-                      </button>
-                    </span>
-                  ))}
-                  {relateDraft?.noteId === note.id ? (
-                    <div className="relate">
-                      <label htmlFor={`relate-${note.id}`}>Relate to Note</label>
-                      <input
-                        autoFocus
-                        id={`relate-${note.id}`}
-                        value={relateDraft.query}
-                        placeholder="Search Notes in this Thinking Workspace"
-                        onChange={(event) =>
-                          setRelateDraft({ ...relateDraft, query: event.target.value })
-                        }
-                      />
-                      <div className="row">
-                        {relatableNotes(notes, relationships, note.id, relateDraft.query).map(
-                          (candidate) => (
-                            <button key={candidate.id} onClick={() => relate(note.id, candidate.id)}>
-                              {notePreview(candidate)}
-                            </button>
-                          ),
-                        )}
-                      </div>
-                      <button type="button" onClick={() => setRelateDraft(null)}>
-                        Cancel
-                      </button>
-                    </div>
-                  ) : (
-                    <button onClick={() => setRelateDraft({ noteId: note.id, query: "" })}>
-                      Relate Note
-                    </button>
-                  )}
-                </div>
-
-                {/* Moving and copying are the only two ways a Note reaches
-                    another Thinking Workspace, and each says what it does. */}
-                <div className="row" aria-label="Move or copy Note">
-                  {pendingTransfer?.noteId === note.id ? (
-                    <NoteTransfer
-                      note={note}
-                      workspaces={snapshot?.workspaces ?? []}
-                      pending={pendingTransfer}
-                      onChoose={(targetWorkspaceId) =>
-                        setPendingTransfer({ ...pendingTransfer, targetWorkspaceId })
-                      }
-                      onTransfer={transfer}
-                      onCancel={() => setPendingTransfer(null)}
-                    />
-                  ) : (
-                    <button
-                      disabled={transferDestinations(snapshot?.workspaces ?? [], note).length === 0}
-                      onClick={() => setPendingTransfer(requestTransfer(snapshot?.workspaces ?? [], note))}
-                    >
-                      Move or Copy Note
-                    </button>
-                  )}
-                </div>
-
-                <div className="row">
-                  <label htmlFor={`note-type-${note.id}`}>Note Type</label>
-                  <select
-                    id={`note-type-${note.id}`}
-                    value={note.noteType}
-                    onChange={(event) =>
-                      void submit(
-                        thinkingWorkspace.setNoteType(note.id, event.target.value as NoteType),
-                      )
-                    }
-                  >
-                    {NOTE_TYPES.map((noteType) => (
-                      <option key={noteType} value={noteType}>
-                        {noteTypeLabel(noteType)}
-                      </option>
-                    ))}
-                  </select>
-                  <button onClick={() => startNoteEdit(note)} disabled={noteDraft?.id === note.id}>
-                    Edit Note
-                  </button>
-                  <button
-                    onClick={() => startAnnotation(note)}
-                    disabled={annotationDraft?.id === note.id}
-                  >
-                    {note.annotation ? "Edit Annotation" : "Add Annotation"}
-                  </button>
-                  <button
-                    aria-pressed={note.pinned}
-                    onClick={() => void submit(thinkingWorkspace.setNotePinned(note.id, !note.pinned))}
-                  >
-                    {note.pinned ? "Unpin" : "Pin"}
-                  </button>
-                  <button onClick={() => setPendingNoteDelete(requestNoteDelete(note))}>
-                    Delete Note
-                  </button>
-                </div>
-
-                {pendingNoteDelete?.noteId === note.id && (
-                  <div className="confirm" role="alertdialog" aria-label="Confirm delete Note">
-                    <p>{noteDeleteConfirmationPrompt(pendingNoteDelete)}</p>
-                    <div className="row">
-                      <button onClick={() => answerNoteDeleteConfirmation("confirm")}>
-                        Delete Note
-                      </button>
-                      <button onClick={() => answerNoteDeleteConfirmation("cancel")}>Keep it</button>
-                    </div>
-                  </div>
-                )}
-              </li>
+                <TiledNotes arrangement={noteArrangement(page)!} card={noteCard} />
+              </div>
             ))}
-          </ul>
+          </div>
+        ) : (
+          <div className="kanban">
+            {kanbanColumns(visible).map((column) => (
+              <div className="kanban-column" key={column.noteType}>
+                <div className="row">
+                  <h3>{noteTypeLabel(column.noteType)}</h3>
+                  <span className="badge">{column.notes.length}</span>
+                </div>
+                <div role="group" aria-label={`${noteTypeLabel(column.noteType)} Notes`}>
+                  {column.notes.map((note) => noteCard(note))}
+                </div>
+              </div>
+            ))}
+          </div>
         )}
       </section>
       {renameLabelDraft && <section role="dialog" aria-label="Rename Label"><form onSubmit={saveRenamedLabel}><label htmlFor="rename-label">Label name</label><input autoFocus id="rename-label" value={renameLabelDraft.name} onChange={(event) => setRenameLabelDraft({ ...renameLabelDraft, name: event.target.value })} /><button type="submit">Save Label name</button><button type="button" onClick={() => setRenameLabelDraft(null)}>Cancel</button></form></section>}
