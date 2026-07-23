@@ -1,197 +1,83 @@
-import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react"
-import ReactMarkdown from "react-markdown"
-import remarkGfm from "remark-gfm"
+import { FormEvent, useCallback, useMemo, useState } from "react"
 import {
-  NOTE_TYPES,
   thinkingWorkspace,
   type Note,
-  type NoteType,
   type SearchResult,
-  type StorageOpenFailure,
   type ThinkingWorkspace,
-  type WorkspaceOutcome,
-  type WorkspaceFailure,
-  type WorkspaceSnapshot,
 } from "./workspace-client"
-import {
-  deleteConfirmationPrompt,
-  requestDelete,
-  resolveDeleteConfirmation,
-  type PendingDelete,
-} from "./workspace-lifecycle"
-import {
-  annotationLength,
-  isAnnotationTooLong,
-  isUndoShortcut,
-  MAX_ANNOTATION_SCALARS,
-  noteDeleteConfirmationPrompt,
-  notePreview,
-  noteTypeLabel,
-  requestNoteDelete,
-  resolveNoteDeleteConfirmation,
-  type PendingNoteDelete,
-} from "./note-controls"
-import { degree, relatableNotes, relatedNotes } from "./thinking-graph"
-import {
-  copyExplanation,
-  moveExplanation,
-  requestTransfer,
-  transferDestination,
-  transferDestinations,
-  type PendingTransfer,
-} from "./note-transfer"
-import {
-  arrangementWeight,
-  kanbanColumns,
-  matchingNoteIds,
-  noteArrangement,
-  noteViewLabel,
-  NOTE_VIEWS,
-  preservedSelection,
-  tilingPages,
-  visibleNotes,
-  workspaceNotes,
-  type NoteArrangement,
-  type NoteView,
-} from "./note-views"
-
-/**
- * One page of the tiling view, arranged by repeated halving. Layout decides
- * only where a Note appears; the card it places is the same card every view
- * uses, so no view can offer an action another one lacks.
- */
-function TiledNotes({
-  arrangement,
-  card,
-}: {
-  arrangement: NoteArrangement
-  card: (note: Note) => ReactNode
-}) {
-  if (arrangement.kind === "note") return <>{card(arrangement.note)}</>
-  return (
-    <div className={`split ${arrangement.direction}`}>
-      <div className="split-side" style={{ flex: arrangementWeight(arrangement.first) }}>
-        <TiledNotes arrangement={arrangement.first} card={card} />
-      </div>
-      <div className="split-side" style={{ flex: arrangementWeight(arrangement.second) }}>
-        <TiledNotes arrangement={arrangement.second} card={card} />
-      </div>
-    </div>
-  )
-}
-
-/**
- * The destination choice for one Note, with the two transfers named and
- * described separately so a move can never be mistaken for a copy.
- */
-function NoteTransfer({
-  note,
-  workspaces,
-  pending,
-  onChoose,
-  onTransfer,
-  onCancel,
-}: {
-  note: Note
-  workspaces: ThinkingWorkspace[]
-  pending: NonNullable<PendingTransfer>
-  onChoose: (targetWorkspaceId: string) => void
-  onTransfer: (kind: "move" | "copy") => void
-  onCancel: () => void
-}) {
-  const destination = transferDestination(workspaces, pending)
-  if (!destination) return null
-  return (
-    <div className="transfer">
-      <label htmlFor={`transfer-${note.id}`}>Thinking Workspace to move or copy into</label>
-      <select
-        autoFocus
-        id={`transfer-${note.id}`}
-        value={pending.targetWorkspaceId}
-        onChange={(event) => onChoose(event.target.value)}
-      >
-        {transferDestinations(workspaces, note).map((workspace) => (
-          <option key={workspace.id} value={workspace.id}>
-            {workspace.name}
-          </option>
-        ))}
-      </select>
-      <p>{moveExplanation(destination, note)}</p>
-      <p>{copyExplanation(destination, note)}</p>
-      <div className="row">
-        <button onClick={() => onTransfer("move")}>Move Note</button>
-        <button onClick={() => onTransfer("copy")}>Copy Note</button>
-        <button type="button" onClick={onCancel}>
-          Cancel
-        </button>
-      </div>
-    </div>
-  )
-}
-
-const RECOVERY_HEADLINE: Record<StorageOpenFailure["category"], string> = {
-  unreadable: "Nodepad could not read its local database.",
-  migration: "Nodepad could not prepare its local database.",
-  initialization: "Nodepad could not start its local storage.",
-}
+import { requestDelete, resolveDeleteConfirmation, type PendingDelete } from "./workspace-lifecycle"
+import { matchingNoteIds, visibleNotes, workspaceNotes, type NoteView } from "./note-views"
+import { NoteCard, type NoteCardContext } from "./note-card"
+import { buildNoteIntents } from "./note-intents"
+import { useNoteDrafts } from "./note-drafts"
+import { useNoteFocus } from "./note-focus"
+import { useWorkspaceSnapshot } from "./workspace-snapshot"
+import { useUndoShortcut } from "./undo-shortcut"
+import { WorkspaceSection } from "./workspace-section"
+import { CaptureSection } from "./capture-section"
+import { SearchSection } from "./search-section"
+import { CommittedNotesSection } from "./committed-notes-section"
+import { StorageRecovery } from "./storage-recovery"
 
 export function App() {
-  const [snapshot, setSnapshot] = useState<WorkspaceSnapshot | null>(null)
-  const [openFailure, setOpenFailure] = useState<StorageOpenFailure | null>(null)
+  const { snapshot, openFailure, failure, submit, reportFailure, dismissFailure } =
+    useWorkspaceSnapshot()
+  const drafts = useNoteDrafts()
   const [workspaceName, setWorkspaceName] = useState("")
   const [noteMarkdown, setNoteMarkdown] = useState("")
   const [renameDraft, setRenameDraft] = useState<{ id: string; name: string } | null>(null)
   const [pendingDelete, setPendingDelete] = useState<PendingDelete>(null)
-  const [pendingNoteDelete, setPendingNoteDelete] = useState<PendingNoteDelete>(null)
-  const [noteDraft, setNoteDraft] = useState<{ id: string; markdown: string } | null>(null)
-  const [annotationDraft, setAnnotationDraft] = useState<{ id: string; text: string } | null>(null)
-  const [failure, setFailure] = useState<WorkspaceFailure | null>(null)
-  const [labelDraft, setLabelDraft] = useState<{ noteId: string; name: string } | null>(null)
   const [renameLabelDraft, setRenameLabelDraft] = useState<{ id: string; name: string } | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null)
-  const [relateDraft, setRelateDraft] = useState<{ noteId: string; query: string } | null>(null)
-  const [pendingTransfer, setPendingTransfer] = useState<PendingTransfer>(null)
-  // Which Note the thinker navigated to. Focus is transient: it is never
-  // committed, and moving it can change no Relationship.
-  const [focusedNoteId, setFocusedNoteId] = useState<string | null>(null)
   // How the same committed Notes are arranged. Not committed, so a restart
   // reconstructs both views from SQLite alone.
   const [view, setView] = useState<NoteView>("tiling")
-  const noteElements = useRef(new Map<string, HTMLDivElement>())
 
   const activeWorkspace = useMemo(
     () => snapshot?.workspaces.find(({ id }) => id === snapshot.activeWorkspaceId),
     [snapshot],
   )
   const notes = workspaceNotes(snapshot?.notes ?? [], activeWorkspace?.id)
-  const relationships = snapshot?.relationships ?? []
+  const workspaces = snapshot?.workspaces ?? []
   // The one result set both views read, so they can never disagree about which
   // Notes are on screen or in what order.
   const visible = useMemo(
     () => visibleNotes(snapshot?.notes ?? [], activeWorkspace?.id, matchingNoteIds(searchResults)),
     [snapshot, activeWorkspace?.id, searchResults],
   )
+  const focus = useNoteFocus(visible)
 
-  const submit = useCallback(async (pending: Promise<WorkspaceOutcome>) => {
-    const outcome = await pending
-    if (outcome.status === "unavailable") {
-      setOpenFailure(outcome.failure)
-      return false
-    }
-    if (outcome.status === "failed") {
-      setFailure(outcome.failure)
-      return false
-    }
-    setSnapshot(outcome.snapshot)
-    setOpenFailure(null)
-    setFailure(null)
-    return true
-  }, [])
+  const cardContext: NoteCardContext = {
+    notes,
+    relationships: snapshot?.relationships ?? [],
+    workspaces,
+  }
 
-  useEffect(() => {
-    void submit(thinkingWorkspace.getSnapshot())
-  }, [submit])
+  // One set of Note intents, built once and handed to every card, so a layout
+  // decides only where a Note appears and never what may be done to one.
+  const noteIntents = buildNoteIntents({
+    drafts,
+    workspaces,
+    submit,
+    focusNote: focus.focusNote,
+    startLabelRename: (label) => setRenameLabelDraft({ id: label.id, name: label.name }),
+  })
+
+  // The one card every view places, over the one set of intents.
+  function noteCard(note: Note) {
+    return (
+      <NoteCard
+        key={note.id}
+        note={note}
+        context={cardContext}
+        drafts={drafts}
+        intents={noteIntents}
+        focused={focus.focusedNoteId === note.id}
+        registerElement={(element) => focus.registerNoteElement(note.id, element)}
+      />
+    )
+  }
 
   function createWorkspace(event: FormEvent) {
     event.preventDefault()
@@ -217,60 +103,11 @@ export function App() {
     void submit(thinkingWorkspace.deleteWorkspace(resolution.workspaceId))
   }
 
-  function startRename(workspace: ThinkingWorkspace) {
-    setRenameDraft({ id: workspace.id, name: workspace.name })
-  }
-
   function createNote(event: FormEvent) {
     event.preventDefault()
     if (!activeWorkspace) return
     void submit(thinkingWorkspace.createNote(activeWorkspace.id, noteMarkdown)).then((committed) => {
       if (committed) setNoteMarkdown("")
-    })
-  }
-
-  function startNoteEdit(note: Note) {
-    setNoteDraft({ id: note.id, markdown: note.markdown })
-  }
-
-  function saveNoteText(event: FormEvent) {
-    event.preventDefault()
-    if (!noteDraft) return
-    void submit(thinkingWorkspace.editNoteText(noteDraft.id, noteDraft.markdown)).then(
-      (committed) => {
-        if (committed) setNoteDraft(null)
-      },
-    )
-  }
-
-  function startAnnotation(note: Note) {
-    setAnnotationDraft({ id: note.id, text: note.annotation ?? "" })
-  }
-
-  function saveAnnotation(event: FormEvent) {
-    event.preventDefault()
-    if (!annotationDraft || isAnnotationTooLong(annotationDraft.text)) return
-    void submit(thinkingWorkspace.setNoteAnnotation(annotationDraft.id, annotationDraft.text)).then(
-      (committed) => {
-        if (committed) setAnnotationDraft(null)
-      },
-    )
-  }
-
-  function answerNoteDeleteConfirmation(answer: "confirm" | "cancel") {
-    const resolution = resolveNoteDeleteConfirmation(pendingNoteDelete, answer)
-    setPendingNoteDelete(null)
-    if (resolution.intent === "none") return
-    setNoteDraft(null)
-    setAnnotationDraft(null)
-    void submit(thinkingWorkspace.deleteNote(resolution.noteId))
-  }
-
-  function saveLabel(event: FormEvent) {
-    event.preventDefault()
-    if (!labelDraft) return
-    void submit(thinkingWorkspace.attachLabel(labelDraft.noteId, labelDraft.name)).then((committed) => {
-      if (committed) setLabelDraft(null)
     })
   }
 
@@ -289,325 +126,25 @@ export function App() {
       return
     }
     void thinkingWorkspace.searchNotes(activeWorkspace.id, searchQuery).then((outcome) => {
-      if (outcome.status === "failed") { setFailure(outcome.failure); return }
+      if (outcome.status === "failed") { reportFailure(outcome.failure); return }
       setSearchResults(outcome.results)
     })
   }
-
-  function relate(noteId: string, otherNoteId: string) {
-    void submit(thinkingWorkspace.relateNotes(noteId, otherNoteId)).then((committed) => {
-      if (committed) setRelateDraft(null)
-    })
-  }
-
-  // Moving and copying are separate commands with separate outcomes, so each
-  // has its own button rather than one button with a hidden mode.
-  function transfer(kind: "move" | "copy") {
-    if (!pendingTransfer) return
-    const { noteId, targetWorkspaceId } = pendingTransfer
-    const committing =
-      kind === "move"
-        ? thinkingWorkspace.moveNote(noteId, targetWorkspaceId)
-        : thinkingWorkspace.copyNote(noteId, targetWorkspaceId)
-    void submit(committing).then((committed) => {
-      if (committed) setPendingTransfer(null)
-    })
-  }
-
-  // Navigating to a related Note only moves the reader; it commits nothing.
-  function focusNote(noteId: string) {
-    setFocusedNoteId(noteId)
-  }
-
-  useEffect(() => {
-    if (!focusedNoteId) return
-    const element = noteElements.current.get(focusedNoteId)
-    element?.scrollIntoView?.({ block: "center" })
-    element?.focus()
-  }, [focusedNoteId])
-
-  // Switching view, searching, or deleting can take the focused Note off
-  // screen. Focus follows the Note while it is visible and is otherwise let go.
-  useEffect(() => {
-    setFocusedNoteId((current) => preservedSelection(current, visible))
-  }, [visible])
 
   const undoLastChange = useCallback(() => {
     if (!snapshot?.activeWorkspaceId) return
     void submit(thinkingWorkspace.undoLastChange(snapshot.activeWorkspaceId))
   }, [snapshot?.activeWorkspaceId, submit])
 
-  // Undo is a keyboard habit, so it works anywhere except inside text the
-  // thinker is still writing, where the field's own undo belongs.
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      const editing = document.activeElement
-      const editingText =
-        editing instanceof HTMLTextAreaElement ||
-        (editing instanceof HTMLInputElement && editing.type === "text")
-      const shortcut = {
-        key: event.key,
-        metaKey: event.metaKey,
-        ctrlKey: event.ctrlKey,
-        shiftKey: event.shiftKey,
-        editingText,
-      }
-      if (!isUndoShortcut(shortcut)) return
-      event.preventDefault()
-      undoLastChange()
-    }
-    window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
-  }, [undoLastChange])
-
-  /**
-   * One committed Note, with every manual control the thinker has over it.
-   * Both views place this card, so mutation policy has one home and a view
-   * can only decide where a Note appears, never what may be done to it.
-   */
-  function noteCard(note: Note): ReactNode {
-    return (
-      <div
-        key={note.id}
-        className={[
-          "note",
-          note.pinned ? "pinned" : "",
-          focusedNoteId === note.id ? "focused" : "",
-        ]
-          .filter(Boolean)
-          .join(" ")}
-        // A Note card is one self-contained piece of the thinking, whichever
-        // arrangement the surrounding layout gives it. Neither view nests a
-        // card directly under its group, so it carries no list semantics.
-        role="article"
-        aria-label={notePreview(note)}
-        tabIndex={-1}
-        aria-current={focusedNoteId === note.id ? "true" : undefined}
-        ref={(element) => {
-          if (element) noteElements.current.set(note.id, element)
-          else noteElements.current.delete(note.id)
-        }}
-      >
-        <div className="row">
-          <span className="badge">{noteTypeLabel(note.noteType)}</span>
-          {note.pinned && <span className="badge">Pinned</span>}
-          {degree(relationships, note.id) > 0 && (
-            <span className="badge">{degree(relationships, note.id)} related</span>
-          )}
-        </div>
-
-        {noteDraft?.id === note.id ? (
-          <form onSubmit={saveNoteText}>
-            <label htmlFor={`note-text-${note.id}`}>Note text</label>
-            <textarea
-              autoFocus
-              id={`note-text-${note.id}`}
-              rows={5}
-              value={noteDraft.markdown}
-              onChange={(event) => setNoteDraft({ ...noteDraft, markdown: event.target.value })}
-            />
-            <div className="row">
-              <button type="submit">Save Note text</button>
-              <button type="button" onClick={() => setNoteDraft(null)}>
-                Cancel
-              </button>
-            </div>
-          </form>
-        ) : (
-          // Markdown renders without raw HTML, so nothing in a Note executes.
-          <div className="markdown">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{note.markdown}</ReactMarkdown>
-          </div>
-        )}
-
-        {annotationDraft?.id === note.id ? (
-          <form onSubmit={saveAnnotation}>
-            <label htmlFor={`annotation-${note.id}`}>Annotation</label>
-            <textarea
-              autoFocus
-              id={`annotation-${note.id}`}
-              rows={3}
-              value={annotationDraft.text}
-              placeholder="Plain-text commentary; leave empty to clear it"
-              onChange={(event) =>
-                setAnnotationDraft({ ...annotationDraft, text: event.target.value })
-              }
-            />
-            <p className={isAnnotationTooLong(annotationDraft.text) ? "over-limit" : ""}>
-              {annotationLength(annotationDraft.text)} / {MAX_ANNOTATION_SCALARS} characters
-            </p>
-            <div className="row">
-              <button type="submit" disabled={isAnnotationTooLong(annotationDraft.text)}>
-                Save Annotation
-              </button>
-              <button type="button" onClick={() => setAnnotationDraft(null)}>
-                Cancel
-              </button>
-            </div>
-          </form>
-        ) : (
-          note.annotation && <p className="annotation">{note.annotation}</p>
-        )}
-
-        <div className="row" aria-label="Labels">
-          {note.labels.map((label) => (
-            <span className="badge" key={label.id}>{label.name} <button aria-label={`Detach ${label.name}`} onClick={() => void submit(thinkingWorkspace.detachLabel(note.id, label.id))}>×</button> <button aria-label={`Rename ${label.name}`} onClick={() => setRenameLabelDraft({ id: label.id, name: label.name })}>Rename</button> <button aria-label={`Remove ${label.name}`} onClick={() => void submit(thinkingWorkspace.removeLabel(label.id))}>Remove</button></span>
-          ))}
-          {labelDraft?.noteId === note.id ? (
-            <form onSubmit={saveLabel}><label htmlFor={`label-${note.id}`}>Label</label><input autoFocus id={`label-${note.id}`} value={labelDraft.name} onChange={(event) => setLabelDraft({ ...labelDraft, name: event.target.value })} /><button type="submit">Save Label</button><button type="button" onClick={() => setLabelDraft(null)}>Cancel</button></form>
-          ) : <button onClick={() => setLabelDraft({ noteId: note.id, name: "" })}>Add Label</button>}
-        </div>
-
-        {/* Related Notes are candidates, not list items, so a Note card
-            stays the only list item a reader can land on. */}
-        <div className="row" aria-label="Related Notes">
-          {relatedNotes(notes, relationships, note.id).map((related) => (
-            <span className="badge" key={related.id}>
-              {notePreview(related)}
-              <button
-                aria-label={`Go to ${notePreview(related)}`}
-                onClick={() => focusNote(related.id)}
-              >
-                Go to Note
-              </button>
-              <button
-                aria-label={`Remove Relationship to ${notePreview(related)}`}
-                onClick={() => void submit(thinkingWorkspace.unrelateNotes(note.id, related.id))}
-              >
-                Remove Relationship
-              </button>
-            </span>
-          ))}
-          {relateDraft?.noteId === note.id ? (
-            <div className="relate">
-              <label htmlFor={`relate-${note.id}`}>Relate to Note</label>
-              <input
-                autoFocus
-                id={`relate-${note.id}`}
-                value={relateDraft.query}
-                placeholder="Search Notes in this Thinking Workspace"
-                onChange={(event) =>
-                  setRelateDraft({ ...relateDraft, query: event.target.value })
-                }
-              />
-              <div className="row">
-                {relatableNotes(notes, relationships, note.id, relateDraft.query).map(
-                  (candidate) => (
-                    <button key={candidate.id} onClick={() => relate(note.id, candidate.id)}>
-                      {notePreview(candidate)}
-                    </button>
-                  ),
-                )}
-              </div>
-              <button type="button" onClick={() => setRelateDraft(null)}>
-                Cancel
-              </button>
-            </div>
-          ) : (
-            <button onClick={() => setRelateDraft({ noteId: note.id, query: "" })}>
-              Relate Note
-            </button>
-          )}
-        </div>
-
-        {/* Moving and copying are the only two ways a Note reaches
-            another Thinking Workspace, and each says what it does. */}
-        <div className="row" aria-label="Move or copy Note">
-          {pendingTransfer?.noteId === note.id ? (
-            <NoteTransfer
-              note={note}
-              workspaces={snapshot?.workspaces ?? []}
-              pending={pendingTransfer}
-              onChoose={(targetWorkspaceId) =>
-                setPendingTransfer({ ...pendingTransfer, targetWorkspaceId })
-              }
-              onTransfer={transfer}
-              onCancel={() => setPendingTransfer(null)}
-            />
-          ) : (
-            <button
-              disabled={transferDestinations(snapshot?.workspaces ?? [], note).length === 0}
-              onClick={() => setPendingTransfer(requestTransfer(snapshot?.workspaces ?? [], note))}
-            >
-              Move or Copy Note
-            </button>
-          )}
-        </div>
-
-        <div className="row">
-          <label htmlFor={`note-type-${note.id}`}>Note Type</label>
-          <select
-            id={`note-type-${note.id}`}
-            value={note.noteType}
-            onChange={(event) =>
-              void submit(
-                thinkingWorkspace.setNoteType(note.id, event.target.value as NoteType),
-              )
-            }
-          >
-            {NOTE_TYPES.map((noteType) => (
-              <option key={noteType} value={noteType}>
-                {noteTypeLabel(noteType)}
-              </option>
-            ))}
-          </select>
-          <button onClick={() => startNoteEdit(note)} disabled={noteDraft?.id === note.id}>
-            Edit Note
-          </button>
-          <button
-            onClick={() => startAnnotation(note)}
-            disabled={annotationDraft?.id === note.id}
-          >
-            {note.annotation ? "Edit Annotation" : "Add Annotation"}
-          </button>
-          <button
-            aria-pressed={note.pinned}
-            onClick={() => void submit(thinkingWorkspace.setNotePinned(note.id, !note.pinned))}
-          >
-            {note.pinned ? "Unpin" : "Pin"}
-          </button>
-          <button onClick={() => setPendingNoteDelete(requestNoteDelete(note))}>
-            Delete Note
-          </button>
-        </div>
-
-        {pendingNoteDelete?.noteId === note.id && (
-          <div className="confirm" role="alertdialog" aria-label="Confirm delete Note">
-            <p>{noteDeleteConfirmationPrompt(pendingNoteDelete)}</p>
-            <div className="row">
-              <button onClick={() => answerNoteDeleteConfirmation("confirm")}>
-                Delete Note
-              </button>
-              <button onClick={() => answerNoteDeleteConfirmation("cancel")}>Keep it</button>
-            </div>
-          </div>
-        )}
-      </div>
-    )
-  }
+  useUndoShortcut(undoLastChange)
 
   if (openFailure) {
     return (
-      <main>
-        <header>
-          <p className="eyebrow">Nodepad</p>
-          <h1>Your thinking is still on disk</h1>
-        </header>
-        <section role="alert" className="recovery">
-          <h2>{RECOVERY_HEADLINE[openFailure.category]}</h2>
-          <p>{openFailure.message}</p>
-          <p>
-            Nothing has been reset or overwritten. Close anything else using this database, then try
-            again.
-          </p>
-          <div className="row">
-            <button onClick={() => void submit(thinkingWorkspace.retryStorageOpen())}>
-              Try again
-            </button>
-            <button onClick={() => void thinkingWorkspace.quitApplication()}>Quit Nodepad</button>
-          </div>
-        </section>
-      </main>
+      <StorageRecovery
+        failure={openFailure}
+        onRetry={() => void submit(thinkingWorkspace.retryStorageOpen())}
+        onQuit={() => void thinkingWorkspace.quitApplication()}
+      />
     )
   }
 
@@ -619,142 +156,54 @@ export function App() {
         <p>Capture one atomic thought at a time. Every change is committed locally before it appears here.</p>
       </header>
 
-      {failure && <aside role="alert">{failure.message} <button onClick={() => setFailure(null)}>Dismiss</button></aside>}
+      {failure && <aside role="alert">{failure.message} <button onClick={dismissFailure}>Dismiss</button></aside>}
 
-      <section aria-label="Thinking Workspaces">
-        <div className="workspace-list">
-          {snapshot?.workspaces.map((workspace) => (
-            <button
-              className={workspace.id === activeWorkspace?.id ? "active" : ""}
-              key={workspace.id}
-              onClick={() => void submit(thinkingWorkspace.selectWorkspace(workspace.id))}
-            >
-              {workspace.name}
-            </button>
-          ))}
-        </div>
-        <form onSubmit={createWorkspace}>
-          <input aria-label="New Thinking Workspace name" value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} placeholder="New Thinking Workspace" />
-          <button type="submit">Create Workspace</button>
-        </form>
-      </section>
+      <WorkspaceSection
+        workspaces={workspaces}
+        activeWorkspaceId={activeWorkspace?.id}
+        name={workspaceName}
+        onSelect={(workspaceId) => void submit(thinkingWorkspace.selectWorkspace(workspaceId))}
+        onNameChange={setWorkspaceName}
+        onCreate={createWorkspace}
+      />
 
-      <section className="capture">
-        <div className="row">
-          <h2>{activeWorkspace?.name ?? "Loading…"}</h2>
-          {activeWorkspace && !renameDraft && (
-            <div className="row">
-              <button onClick={() => startRename(activeWorkspace)}>Rename</button>
-              <button onClick={() => setPendingDelete(requestDelete(activeWorkspace))}>Delete</button>
-            </div>
-          )}
-        </div>
+      <CaptureSection
+        activeWorkspace={activeWorkspace}
+        renameDraft={renameDraft}
+        pendingDelete={pendingDelete}
+        noteMarkdown={noteMarkdown}
+        onStartRename={(workspace: ThinkingWorkspace) =>
+          setRenameDraft({ id: workspace.id, name: workspace.name })
+        }
+        onRenameDraftChange={(name) => setRenameDraft((draft) => (draft ? { ...draft, name } : draft))}
+        onRename={renameWorkspace}
+        onCancelRename={() => setRenameDraft(null)}
+        onRequestDelete={(workspace) => setPendingDelete(requestDelete(workspace))}
+        onAnswerDelete={answerDeleteConfirmation}
+        onNoteMarkdownChange={setNoteMarkdown}
+        onCreateNote={createNote}
+      />
 
-        {renameDraft && (
-          <form onSubmit={renameWorkspace}>
-            <label htmlFor="workspace-name">Thinking Workspace name</label>
-            <input
-              autoFocus
-              id="workspace-name"
-              value={renameDraft.name}
-              onChange={(event) => setRenameDraft({ ...renameDraft, name: event.target.value })}
-            />
-            <div className="row">
-              <button type="submit">Save name</button>
-              <button type="button" onClick={() => setRenameDraft(null)}>Cancel</button>
-            </div>
-          </form>
-        )}
+      <SearchSection
+        query={searchQuery}
+        searching={searchResults !== null}
+        matchCount={visible.length}
+        noteCount={notes.length}
+        canSearch={Boolean(activeWorkspace)}
+        onQueryChange={setSearchQuery}
+        onSearch={search}
+        onClear={() => { setSearchQuery(""); setSearchResults(null) }}
+      />
 
-        {pendingDelete && (
-          <div className="confirm" role="alertdialog" aria-label="Confirm delete">
-            <p>{deleteConfirmationPrompt(pendingDelete)}</p>
-            <div className="row">
-              <button onClick={() => answerDeleteConfirmation("confirm")}>Delete Workspace</button>
-              <button onClick={() => answerDeleteConfirmation("cancel")}>Keep it</button>
-            </div>
-          </div>
-        )}
-
-        <form onSubmit={createNote}>
-          <label htmlFor="note">New Note</label>
-          <textarea id="note" value={noteMarkdown} onChange={(event) => setNoteMarkdown(event.target.value)} placeholder="Write an atomic Markdown Note…" rows={5} />
-          <button type="submit" disabled={!activeWorkspace}>Commit Note</button>
-        </form>
-      </section>
-
-      <section aria-label="Search Notes">
-        <form onSubmit={search}>
-          <label htmlFor="search-notes">Search this Thinking Workspace</label>
-          <input id="search-notes" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search Notes, Annotations, or Labels" />
-          <div className="row"><button type="submit" disabled={!activeWorkspace}>Search</button><button type="button" onClick={() => { setSearchQuery(""); setSearchResults(null) }}>Clear search</button></div>
-        </form>
-        {/* A search narrows the Notes both views show; it never renders a
-            second copy of them. */}
-        {searchResults && (
-          <p role="status">
-            {visible.length} of {notes.length} Notes match this search.
-          </p>
-        )}
-      </section>
-
-      <section aria-label="Committed Notes">
-        <div className="row">
-          <h2>Committed Notes</h2>
-          <button
-            onClick={undoLastChange}
-            disabled={!snapshot || snapshot.undoableCommands === 0}
-            title="Undo the last change in this Thinking Workspace (⌘Z)"
-          >
-            Undo
-          </button>
-        </div>
-
-        {/* A view is a way of reading the same committed Notes. Choosing one
-            commits nothing and changes no Note. */}
-        <div className="row" role="group" aria-label="Note view">
-          {NOTE_VIEWS.map((option) => (
-            <button
-              key={option}
-              aria-pressed={view === option}
-              className={view === option ? "active" : ""}
-              onClick={() => setView(option)}
-            >
-              {noteViewLabel(option)}
-            </button>
-          ))}
-        </div>
-        {visible.length === 0 ? (
-          <p>{searchResults ? "No Notes match this search." : "No Notes yet."}</p>
-        ) : view === "tiling" ? (
-          <div className="tiling">
-            {tilingPages(visible).map((page, index) => (
-              <div
-                className="tiling-page"
-                key={index}
-                role="group"
-                aria-label={`Tiled Notes, page ${index + 1}`}
-              >
-                <TiledNotes arrangement={noteArrangement(page)!} card={noteCard} />
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="kanban">
-            {kanbanColumns(visible).map((column) => (
-              <div className="kanban-column" key={column.noteType}>
-                <div className="row">
-                  <h3>{noteTypeLabel(column.noteType)}</h3>
-                  <span className="badge">{column.notes.length}</span>
-                </div>
-                <div role="group" aria-label={`${noteTypeLabel(column.noteType)} Notes`}>
-                  {column.notes.map((note) => noteCard(note))}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
+      <CommittedNotesSection
+        notes={visible}
+        searching={searchResults !== null}
+        view={view}
+        canUndo={Boolean(snapshot) && snapshot!.undoableCommands > 0}
+        onChooseView={setView}
+        onUndo={undoLastChange}
+        card={noteCard}
+      />
       {renameLabelDraft && <section role="dialog" aria-label="Rename Label"><form onSubmit={saveRenamedLabel}><label htmlFor="rename-label">Label name</label><input autoFocus id="rename-label" value={renameLabelDraft.name} onChange={(event) => setRenameLabelDraft({ ...renameLabelDraft, name: event.target.value })} /><button type="submit">Save Label name</button><button type="button" onClick={() => setRenameLabelDraft(null)}>Cancel</button></form></section>}
     </main>
   )
