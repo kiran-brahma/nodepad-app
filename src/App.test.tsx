@@ -24,6 +24,10 @@ let history: WorkspaceSnapshot[]
 let created = 0
 let createdLabels = 0
 let createdRelationships = 0
+let discoveryOutcome: import("./workspace-client").DiscoveryOutcome = {
+  status: "committed",
+  models: ["llama3.1:latest", "phi3:latest"],
+}
 
 /** The canonical pair the durable interface stores; order is not direction. */
 function canonicalPair(left: string, right: string): [string, string] {
@@ -204,6 +208,34 @@ vi.mock("@tauri-apps/api/core", () => ({
         snapshot = previous
         return Promise.resolve(committed())
       }
+      case "set_assistance_policy": {
+        const policy = String(args.policy) as import("./workspace-client").AssistancePolicy
+        history.push(snapshot)
+        snapshot = {
+          ...snapshot,
+          workspaces: snapshot.workspaces.map((workspace) =>
+            workspace.id === args.workspaceId
+              ? { ...workspace, assistancePolicy: policy }
+              : workspace,
+          ),
+        }
+        return Promise.resolve(committed())
+      }
+      case "select_model": {
+        const modelId = args.modelId as string | null
+        history.push(snapshot)
+        snapshot = {
+          ...snapshot,
+          workspaces: snapshot.workspaces.map((workspace) =>
+            workspace.id === args.workspaceId
+              ? { ...workspace, selectedModel: modelId }
+              : workspace,
+          ),
+        }
+        return Promise.resolve(committed())
+      }
+      case "discover_local_models":
+        return Promise.resolve(discoveryOutcome)
       default:
         return Promise.resolve(committed())
     }
@@ -214,18 +246,26 @@ beforeEach(() => {
   created = 0
   createdLabels = 0
   createdRelationships = 0
+  discoveryOutcome = {
+    status: "committed",
+    models: ["llama3.1:latest", "phi3:latest"],
+  }
   history = []
   snapshot = {
     workspaces: [
       {
         id: workspaceId,
         name: "Research",
+        assistancePolicy: "manual",
+        selectedModel: null,
         createdAt: "2026-07-22T09:00:00+00:00",
         updatedAt: "2026-07-22T09:00:00+00:00",
       },
       {
         id: otherWorkspaceId,
         name: "Reading",
+        assistancePolicy: "manual",
+        selectedModel: null,
         createdAt: "2026-07-22T09:01:00+00:00",
         updatedAt: "2026-07-22T09:01:00+00:00",
       },
@@ -946,5 +986,88 @@ describe("the graph view and Relationship focus", () => {
 
     await switchTo(user, "Graph")
     expect(graph().innerHTML).toBe(drawn)
+  })
+})
+
+describe("Assistance Policy and local Ollama discovery", () => {
+  async function switchToLocalAi(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(await screen.findByText("Local AI"))
+    await waitFor(() =>
+      expect(
+        screen.getByText("Local AI").closest("button")?.getAttribute("aria-pressed"),
+      ).toBe("true"),
+    )
+  }
+
+  it("starts with Manual assistance policy", async () => {
+    render(<App />)
+    expect(await screen.findByText(/Manual assistance/)).toBeDefined()
+  })
+
+  it("switches to Local AI and discovers models", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await switchToLocalAi(user)
+
+    expect(await screen.findByText("llama3.1:latest")).toBeDefined()
+    expect(screen.getByText("phi3:latest")).toBeDefined()
+  })
+
+  it("selects a model and returns to Manual", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await switchToLocalAi(user)
+
+    const model = await screen.findByText("llama3.1:latest")
+    await user.click(within(model.closest("li")!).getByRole("button", { name: "Select" }))
+
+    await waitFor(() => expect(screen.getByText(/Local AI assistance/)).toBeDefined())
+    expect(screen.getByText("llama3.1:latest").closest("li")?.textContent).toContain("Selected")
+
+    await user.click(screen.getByRole("button", { name: "Manual" }))
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Manual" }).getAttribute("aria-pressed"),
+      ).toBe("true"),
+    )
+  })
+
+  it("searches the discovered model list", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await switchToLocalAi(user)
+    await screen.findByText("phi3:latest")
+
+    await user.type(screen.getByLabelText("Search models"), "llama")
+    await waitFor(() => expect(screen.queryByText("phi3:latest")).toBeNull())
+    expect(screen.getByText("llama3.1:latest")).toBeDefined()
+  })
+
+  it("reports a typed discovery failure", async () => {
+    discoveryOutcome = {
+      status: "failed",
+      failure: { code: "unavailable", message: "Ollama is not running." },
+    }
+    const user = userEvent.setup()
+    render(<App />)
+    await switchToLocalAi(user)
+
+    expect((await screen.findByRole("alert")).textContent).toContain("Ollama is not running.")
+  })
+
+  it("reports a missing selected model", async () => {
+    snapshot = {
+      ...snapshot,
+      workspaces: snapshot.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? { ...workspace, assistancePolicy: "local_ai" as const, selectedModel: "retired-model:latest" }
+          : workspace,
+      ),
+    }
+    render(<App />)
+
+    expect(
+      await screen.findByText(/The selected model “retired-model:latest” is no longer available/),
+    ).toBeDefined()
   })
 })

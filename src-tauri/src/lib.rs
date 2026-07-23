@@ -1,8 +1,10 @@
+mod ollama;
 mod thinking_graph;
 mod workspace;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, State};
+use ollama::{DiscoveryOutcome, HttpTagsClient, OllamaProvider};
 use workspace::{
     unavailable_search_outcome, StorageOpenFailure, StorageOpenFailureCategory, ThinkingWorkspaceInterface,
     WorkspaceCommandResult, WorkspaceSearchOutcome, WorkspaceStore,
@@ -12,6 +14,7 @@ use workspace::{
 /// can retry or quit without the database ever being reset.
 struct AppState {
     storage: Mutex<Result<WorkspaceStore, StorageOpenFailure>>,
+    provider: OllamaProvider,
 }
 
 impl AppState {
@@ -191,6 +194,37 @@ fn undo_last_change(workspace_id: String, state: State<'_, AppState>) -> Workspa
     state.dispatch(|store| store.undo_outcome(&workspace_id))
 }
 
+/// Changes the Assistance Policy of the active Thinking Workspace. Switching
+/// to Manual stops future provider calls and invalidates any discovery result
+/// that arrives afterwards.
+#[tauri::command]
+fn set_assistance_policy(
+    workspace_id: String,
+    policy: String,
+    state: State<'_, AppState>,
+) -> WorkspaceCommandResult {
+    state.dispatch(|store| store.set_assistance_policy_outcome(&workspace_id, &policy))
+}
+
+/// Records the opaque model identifier chosen for the active Thinking Workspace.
+/// Passing `null` clears the selection.
+#[tauri::command]
+fn select_model(
+    workspace_id: String,
+    model_id: Option<String>,
+    state: State<'_, AppState>,
+) -> WorkspaceCommandResult {
+    state.dispatch(|store| store.set_selected_model_outcome(&workspace_id, model_id.as_deref()))
+}
+
+/// Discovers models from the fixed local Ollama host. The result is not stored:
+/// the UI compares it against the Workspace's selected model and decides what
+/// to display.
+#[tauri::command]
+async fn discover_local_models(state: State<'_, AppState>) -> Result<DiscoveryOutcome, String> {
+    Ok(state.provider.discover_models().await)
+}
+
 /// Retries the failed open against the same path, so a folder or permission
 /// problem the thinker has since fixed can recover without a restart.
 #[tauri::command]
@@ -235,8 +269,14 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let storage = open_storage(app.handle());
+            let http_client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap_or_default();
+            let provider = OllamaProvider::new(Arc::new(HttpTagsClient::new(http_client)));
             app.manage(AppState {
                 storage: Mutex::new(storage),
+                provider,
             });
             Ok(())
         })
@@ -262,6 +302,9 @@ pub fn run() {
             unrelate_notes,
             search_notes,
             undo_last_change,
+            set_assistance_policy,
+            select_model,
+            discover_local_models,
             retry_storage_open,
             quit_application
         ])

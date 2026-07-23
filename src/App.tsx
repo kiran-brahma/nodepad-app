@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useMemo, useState } from "react"
 import {
   thinkingWorkspace,
+  type AssistancePolicy,
   type Note,
   type SearchResult,
   type ThinkingWorkspace,
@@ -19,6 +20,8 @@ import { CaptureSection } from "./capture-section"
 import { SearchSection } from "./search-section"
 import { CommittedNotesSection } from "./committed-notes-section"
 import { StorageRecovery } from "./storage-recovery"
+import { AssistanceSection } from "./assistance-section"
+import { useLocalDiscovery } from "./use-local-discovery"
 
 export function App() {
   const { snapshot, openFailure, failure, submit, reportFailure, dismissFailure } =
@@ -58,6 +61,7 @@ export function App() {
     [notes, snapshot?.relationships],
   )
   const focus = useNoteFocus(visible, graph)
+  const localDiscovery = useLocalDiscovery(activeWorkspace)
 
   const cardContext: NoteCardContext = { graph, workspaces }
 
@@ -144,6 +148,16 @@ export function App() {
     void submit(thinkingWorkspace.undoLastChange(snapshot.activeWorkspaceId))
   }, [snapshot?.activeWorkspaceId, submit])
 
+  function setAssistancePolicy(policy: AssistancePolicy) {
+    if (!activeWorkspace) return
+    void submit(thinkingWorkspace.setAssistancePolicy(activeWorkspace.id, policy))
+  }
+
+  function selectModel(modelId: string) {
+    if (!activeWorkspace) return
+    void submit(thinkingWorkspace.selectModel(activeWorkspace.id, modelId))
+  }
+
   useUndoShortcut(undoLastChange)
 
   if (openFailure) {
@@ -190,6 +204,18 @@ export function App() {
         onAnswerDelete={answerDeleteConfirmation}
         onNoteMarkdownChange={setNoteMarkdown}
         onCreateNote={createNote}
+      />
+
+      <AssistanceSection
+        activeWorkspace={activeWorkspace}
+        state={localDiscovery.state}
+        query={localDiscovery.query}
+        filteredModels={localDiscovery.filteredModels}
+        selectedMissing={localDiscovery.selectedMissing}
+        onPolicyChange={setAssistancePolicy}
+        onQueryChange={localDiscovery.setQuery}
+        onRefresh={localDiscovery.refresh}
+        onSelectModel={selectModel}
       />
 
       <SearchSection

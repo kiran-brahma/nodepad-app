@@ -68,9 +68,15 @@ export interface Relationship {
   createdAt: string
 }
 
+/** The per-Workspace choice that governs AI assistance. */
+export type AssistancePolicy = "manual" | "local_ai" | "cloud_ai"
+
 export interface ThinkingWorkspace {
   id: string
   name: string
+  assistancePolicy: AssistancePolicy
+  /** The opaque model identifier last chosen for this Workspace, if any. */
+  selectedModel: string | null
   createdAt: string
   updatedAt: string
 }
@@ -105,6 +111,12 @@ export type WorkspaceOutcome =
 export type SearchOutcome =
   | { status: "committed"; results: SearchResult[] }
   | { status: "failed"; failure: WorkspaceFailure }
+
+export type DiscoveryFailureCode = "unavailable" | "timeout" | "malformed_response" | "empty_list"
+
+export type DiscoveryOutcome =
+  | { status: "committed"; models: string[] }
+  | { status: "failed"; failure: { code: DiscoveryFailureCode; message: string } }
 
 /** The UI's only durable-state interface; it never accesses SQLite directly. */
 export const thinkingWorkspace = {
@@ -154,6 +166,17 @@ export const thinkingWorkspace = {
     invoke<SearchOutcome>("search_notes", { workspaceId, query }),
   undoLastChange: (workspaceId: string) =>
     invoke<WorkspaceOutcome>("undo_last_change", { workspaceId }),
+  /** Changes the Assistance Policy of the active Thinking Workspace. */
+  setAssistancePolicy: (workspaceId: string, policy: AssistancePolicy) =>
+    invoke<WorkspaceOutcome>("set_assistance_policy", { workspaceId, policy }),
+  /**
+   * Records the opaque model identifier chosen for the active Thinking
+   * Workspace. Passing `null` clears the selection.
+   */
+  selectModel: (workspaceId: string, modelId: string | null) =>
+    invoke<WorkspaceOutcome>("select_model", { workspaceId, modelId }),
+  /** Discovers models from the fixed local Ollama host. */
+  discoverLocalModels: () => invoke<DiscoveryOutcome>("discover_local_models"),
   retryStorageOpen: () => invoke<WorkspaceOutcome>("retry_storage_open"),
   quitApplication: () => invoke<void>("quit_application"),
 }
