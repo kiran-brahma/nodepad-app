@@ -128,6 +128,16 @@ export const thinkingWorkspace = {
   setNotePinned: (noteId: string, pinned: boolean) =>
     invoke<WorkspaceOutcome>("set_note_pinned", { noteId, pinned }),
   deleteNote: (noteId: string) => invoke<WorkspaceOutcome>("delete_note", { noteId }),
+  /**
+   * Moves a Note into another Thinking Workspace: same identity and authored
+   * fields, Labels remapped by display meaning, and no Relationship, because a
+   * Relationship never crosses a Workspace.
+   */
+  moveNote: (noteId: string, targetWorkspaceId: string) =>
+    invoke<WorkspaceOutcome>("move_note", { noteId, targetWorkspaceId }),
+  /** Copies a Note into another Thinking Workspace under a fresh identity. */
+  copyNote: (noteId: string, targetWorkspaceId: string) =>
+    invoke<WorkspaceOutcome>("copy_note", { noteId, targetWorkspaceId }),
   attachLabel: (noteId: string, name: string) =>
     invoke<WorkspaceOutcome>("attach_label", { noteId, name }),
   detachLabel: (noteId: string, labelId: string) =>
