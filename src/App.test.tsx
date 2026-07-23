@@ -14,6 +14,7 @@ const workspaceId = "workspace-1"
 let snapshot: WorkspaceSnapshot
 let history: WorkspaceSnapshot[]
 let created = 0
+let createdLabels = 0
 
 function committed(): WorkspaceOutcome {
   const notes = [...snapshot.notes].sort(
@@ -55,6 +56,7 @@ vi.mock("@tauri-apps/api/core", () => ({
           createdAt: `2026-07-22T10:0${created}:00+00:00`,
           updatedAt: `2026-07-22T10:0${created}:00+00:00`,
           pinned: false,
+          labels: [],
         }
         return Promise.resolve(mutate((notes) => [...notes, note]))
       }
@@ -80,6 +82,22 @@ vi.mock("@tauri-apps/api/core", () => ({
         return Promise.resolve(replace(String(args.noteId), { pinned: Boolean(args.pinned) }))
       case "delete_note":
         return Promise.resolve(mutate((notes) => notes.filter((note) => note.id !== args.noteId)))
+      case "attach_label": {
+        const name = String(args.name).trim()
+        const existing = snapshot.notes.flatMap((note) => note.labels).find((label) => label.name.toLowerCase() === name.toLowerCase())
+        const label = existing ?? { id: `label-${++createdLabels}`, workspaceId, name }
+        return Promise.resolve(replace(String(args.noteId), { labels: [...snapshot.notes.find((note) => note.id === args.noteId)!.labels, label] }))
+      }
+      case "detach_label":
+        return Promise.resolve(replace(String(args.noteId), { labels: snapshot.notes.find((note) => note.id === args.noteId)!.labels.filter((label) => label.id !== args.labelId) }))
+      case "rename_label":
+        return Promise.resolve(mutate((notes) => notes.map((note) => ({ ...note, labels: note.labels.map((label) => label.id === args.labelId ? { ...label, name: String(args.name).trim() } : label) }))))
+      case "remove_label":
+        return Promise.resolve(mutate((notes) => notes.map((note) => ({ ...note, labels: note.labels.filter((label) => label.id !== args.labelId) }))))
+      case "search_notes": {
+        const query = String(args.query).toLowerCase()
+        return Promise.resolve({ status: "committed", results: snapshot.notes.filter((note) => `${note.markdown} ${note.annotation ?? ""} ${note.labels.map((label) => label.name).join(" ")}`.toLowerCase().includes(query)).map((note) => ({ noteId: note.id, snippet: note.markdown, noteType: note.noteType, labels: note.labels, rank: 0 })) })
+      }
       case "undo_last_change": {
         const previous = history.pop()
         if (!previous) {
@@ -99,6 +117,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 beforeEach(() => {
   created = 0
+  createdLabels = 0
   history = []
   snapshot = {
     workspaces: [
@@ -240,5 +259,18 @@ describe("manual Note controls", () => {
     render(<App />)
     const undo = await screen.findByRole("button", { name: "Undo" })
     expect(undo.getAttribute("disabled")).not.toBeNull()
+  })
+
+  it("adds a Label and searches only the committed Workspace projection", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await captureNote(user, "A thought to recover")
+    await user.click(screen.getByRole("button", { name: "Add Label" }))
+    await user.type(screen.getByLabelText("Label"), "Rêverie")
+    await user.click(screen.getByRole("button", { name: "Save Label" }))
+    expect(await screen.findByText("Rêverie")).toBeDefined()
+    await user.type(screen.getByLabelText("Search this Thinking Workspace"), "Rêverie")
+    await user.click(screen.getByRole("button", { name: "Search" }))
+    expect(within(screen.getByLabelText("Search Notes")).getByText("A thought to recover")).toBeDefined()
   })
 })

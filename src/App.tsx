@@ -6,6 +6,7 @@ import {
   thinkingWorkspace,
   type Note,
   type NoteType,
+  type SearchResult,
   type StorageOpenFailure,
   type ThinkingWorkspace,
   type WorkspaceOutcome,
@@ -47,6 +48,10 @@ export function App() {
   const [noteDraft, setNoteDraft] = useState<{ id: string; markdown: string } | null>(null)
   const [annotationDraft, setAnnotationDraft] = useState<{ id: string; text: string } | null>(null)
   const [failure, setFailure] = useState<WorkspaceFailure | null>(null)
+  const [labelDraft, setLabelDraft] = useState<{ noteId: string; name: string } | null>(null)
+  const [renameLabelDraft, setRenameLabelDraft] = useState<{ id: string; name: string } | null>(null)
+  const [searchQuery, setSearchQuery] = useState("")
+  const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null)
 
   const activeWorkspace = useMemo(
     () => snapshot?.workspaces.find(({ id }) => id === snapshot.activeWorkspaceId),
@@ -145,6 +150,34 @@ export function App() {
     setNoteDraft(null)
     setAnnotationDraft(null)
     void submit(thinkingWorkspace.deleteNote(resolution.noteId))
+  }
+
+  function saveLabel(event: FormEvent) {
+    event.preventDefault()
+    if (!labelDraft) return
+    void submit(thinkingWorkspace.attachLabel(labelDraft.noteId, labelDraft.name)).then((committed) => {
+      if (committed) setLabelDraft(null)
+    })
+  }
+
+  function saveRenamedLabel(event: FormEvent) {
+    event.preventDefault()
+    if (!renameLabelDraft) return
+    void submit(thinkingWorkspace.renameLabel(renameLabelDraft.id, renameLabelDraft.name)).then((committed) => {
+      if (committed) setRenameLabelDraft(null)
+    })
+  }
+
+  function search(event: FormEvent) {
+    event.preventDefault()
+    if (!activeWorkspace || searchQuery.trim() === "") {
+      setSearchResults(null)
+      return
+    }
+    void thinkingWorkspace.searchNotes(activeWorkspace.id, searchQuery).then((outcome) => {
+      if (outcome.status === "failed") { setFailure(outcome.failure); return }
+      setSearchResults(outcome.results)
+    })
   }
 
   const undoLastChange = useCallback(() => {
@@ -272,6 +305,15 @@ export function App() {
         </form>
       </section>
 
+      <section aria-label="Search Notes">
+        <form onSubmit={search}>
+          <label htmlFor="search-notes">Search this Thinking Workspace</label>
+          <input id="search-notes" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search Notes, Annotations, or Labels" />
+          <div className="row"><button type="submit" disabled={!activeWorkspace}>Search</button><button type="button" onClick={() => { setSearchQuery(""); setSearchResults(null) }}>Clear search</button></div>
+        </form>
+        {searchResults && <ul className="search-results">{searchResults.map((result) => <li key={result.noteId}><span className="badge">{noteTypeLabel(result.noteType)}</span> {result.snippet} {result.labels.map((label) => <span className="badge" key={label.id}>{label.name}</span>)}</li>)}</ul>}
+      </section>
+
       <section aria-label="Committed Notes">
         <div className="row">
           <h2>Committed Notes</h2>
@@ -347,6 +389,15 @@ export function App() {
                   note.annotation && <p className="annotation">{note.annotation}</p>
                 )}
 
+                <div className="row" aria-label="Labels">
+                  {note.labels.map((label) => (
+                    <span className="badge" key={label.id}>{label.name} <button aria-label={`Detach ${label.name}`} onClick={() => void submit(thinkingWorkspace.detachLabel(note.id, label.id))}>×</button> <button aria-label={`Rename ${label.name}`} onClick={() => setRenameLabelDraft({ id: label.id, name: label.name })}>Rename</button> <button aria-label={`Remove ${label.name}`} onClick={() => void submit(thinkingWorkspace.removeLabel(label.id))}>Remove</button></span>
+                  ))}
+                  {labelDraft?.noteId === note.id ? (
+                    <form onSubmit={saveLabel}><label htmlFor={`label-${note.id}`}>Label</label><input autoFocus id={`label-${note.id}`} value={labelDraft.name} onChange={(event) => setLabelDraft({ ...labelDraft, name: event.target.value })} /><button type="submit">Save Label</button><button type="button" onClick={() => setLabelDraft(null)}>Cancel</button></form>
+                  ) : <button onClick={() => setLabelDraft({ noteId: note.id, name: "" })}>Add Label</button>}
+                </div>
+
                 <div className="row">
                   <label htmlFor={`note-type-${note.id}`}>Note Type</label>
                   <select
@@ -400,6 +451,7 @@ export function App() {
           </ul>
         )}
       </section>
+      {renameLabelDraft && <section role="dialog" aria-label="Rename Label"><form onSubmit={saveRenamedLabel}><label htmlFor="rename-label">Label name</label><input autoFocus id="rename-label" value={renameLabelDraft.name} onChange={(event) => setRenameLabelDraft({ ...renameLabelDraft, name: event.target.value })} /><button type="submit">Save Label name</button><button type="button" onClick={() => setRenameLabelDraft(null)}>Cancel</button></form></section>}
     </main>
   )
 }

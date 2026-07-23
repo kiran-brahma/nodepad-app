@@ -22,6 +22,7 @@ const note: Note = {
   createdAt: "2026-07-22T10:00:00+00:00",
   updatedAt: "2026-07-22T10:00:00+00:00",
   pinned: false,
+  labels: [],
 }
 
 describe("Note delete confirmation", () => {

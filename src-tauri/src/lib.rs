@@ -3,8 +3,8 @@ mod workspace;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
 use workspace::{
-    StorageOpenFailure, StorageOpenFailureCategory, ThinkingWorkspaceInterface,
-    WorkspaceCommandResult, WorkspaceStore,
+    unavailable_search_outcome, StorageOpenFailure, StorageOpenFailureCategory, ThinkingWorkspaceInterface,
+    WorkspaceCommandResult, WorkspaceSearchOutcome, WorkspaceStore,
 };
 
 /// Storage may be unavailable at startup; the app stays running so the thinker
@@ -23,6 +23,16 @@ impl AppState {
             Err(failure) => WorkspaceCommandResult::Unavailable {
                 failure: failure.clone(),
             },
+        }
+    }
+
+    fn dispatch_search(
+        &self,
+        intent: impl FnOnce(&WorkspaceStore) -> WorkspaceSearchOutcome,
+    ) -> WorkspaceSearchOutcome {
+        match self.storage.lock().expect("workspace lock poisoned").as_ref() {
+            Ok(store) => intent(store),
+            Err(failure) => unavailable_search_outcome(failure),
         }
     }
 }
@@ -106,6 +116,31 @@ fn delete_note(note_id: String, state: State<'_, AppState>) -> WorkspaceCommandR
     state.dispatch(|store| store.delete_note_outcome(&note_id))
 }
 
+#[tauri::command]
+fn attach_label(note_id: String, name: String, state: State<'_, AppState>) -> WorkspaceCommandResult {
+    state.dispatch(|store| store.attach_label_outcome(&note_id, &name))
+}
+
+#[tauri::command]
+fn detach_label(note_id: String, label_id: String, state: State<'_, AppState>) -> WorkspaceCommandResult {
+    state.dispatch(|store| store.detach_label_outcome(&note_id, &label_id))
+}
+
+#[tauri::command]
+fn rename_label(label_id: String, name: String, state: State<'_, AppState>) -> WorkspaceCommandResult {
+    state.dispatch(|store| store.rename_label_outcome(&label_id, &name))
+}
+
+#[tauri::command]
+fn remove_label(label_id: String, state: State<'_, AppState>) -> WorkspaceCommandResult {
+    state.dispatch(|store| store.remove_label_outcome(&label_id))
+}
+
+#[tauri::command]
+fn search_notes(workspace_id: String, query: String, state: State<'_, AppState>) -> WorkspaceSearchOutcome {
+    state.dispatch_search(|store| store.search_outcome(&workspace_id, &query))
+}
+
 /// Undoes the most recent reversible change in this Workspace by committing a
 /// compensating transaction. History lives only in this process.
 #[tauri::command]
@@ -174,6 +209,11 @@ pub fn run() {
             set_note_annotation,
             set_note_pinned,
             delete_note,
+            attach_label,
+            detach_label,
+            rename_label,
+            remove_label,
+            search_notes,
             undo_last_change,
             retry_storage_open,
             quit_application
