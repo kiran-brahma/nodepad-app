@@ -5,6 +5,7 @@ import {
   type Note,
   type SearchResult,
   type ThinkingWorkspace,
+  type WorkspaceOutcome,
 } from "./workspace-client"
 import { requestDelete, resolveDeleteConfirmation, type PendingDelete } from "./workspace-lifecycle"
 import { matchingNoteIds, visibleNotes, workspaceNotes, type NoteView } from "./note-views"
@@ -20,8 +21,9 @@ import { CaptureSection } from "./capture-section"
 import { SearchSection } from "./search-section"
 import { CommittedNotesSection } from "./committed-notes-section"
 import { StorageRecovery } from "./storage-recovery"
-import { AssistanceSection } from "./assistance-section"
+import { AssistanceSection, CloudConsentDialog } from "./assistance-section"
 import { useLocalDiscovery } from "./use-local-discovery"
+import { useCloudDiscovery } from "./use-cloud-discovery"
 
 export function App() {
   const { snapshot, openFailure, failure, submit, reportFailure, dismissFailure } =
@@ -37,6 +39,10 @@ export function App() {
   // How the same committed Notes are arranged. Not committed, so a restart
   // reconstructs both views from SQLite alone.
   const [view, setView] = useState<NoteView>("tiling")
+  // The Cloud AI disclosure. Visible only while the active Workspace has not
+  // given consent and the thinker has asked to use Cloud AI. Recording
+  // consent is what flips the policy to cloud_ai; nothing else does.
+  const [consentDialog, setConsentDialog] = useState<{ workspaceId: string; workspaceName: string } | null>(null)
 
   const activeWorkspace = useMemo(
     () => snapshot?.workspaces.find(({ id }) => id === snapshot.activeWorkspaceId),
@@ -62,6 +68,7 @@ export function App() {
   )
   const focus = useNoteFocus(visible, graph)
   const localDiscovery = useLocalDiscovery(activeWorkspace)
+  const cloudDiscovery = useCloudDiscovery(activeWorkspace)
 
   const cardContext: NoteCardContext = { graph, workspaces }
 
@@ -148,14 +155,45 @@ export function App() {
     void submit(thinkingWorkspace.undoLastChange(snapshot.activeWorkspaceId))
   }, [snapshot?.activeWorkspaceId, submit])
 
+  /**
+   * Switching the Assistance Policy. Selecting Cloud AI without consent
+   * opens the disclosure instead of writing the policy; the disclosure
+   * commit is the only path that lands the policy on cloud_ai.
+   */
   function setAssistancePolicy(policy: AssistancePolicy) {
     if (!activeWorkspace) return
+    if (policy === "cloud_ai" && activeWorkspace.cloudConsentAt === null) {
+      setConsentDialog({ workspaceId: activeWorkspace.id, workspaceName: activeWorkspace.name })
+      return
+    }
     void submit(thinkingWorkspace.setAssistancePolicy(activeWorkspace.id, policy))
   }
 
   function selectModel(modelId: string) {
     if (!activeWorkspace) return
     void submit(thinkingWorkspace.selectModel(activeWorkspace.id, modelId))
+  }
+
+  function handleConsentAccepted(outcome: WorkspaceOutcome) {
+    if (outcome.status !== "committed") {
+      setConsentDialog(null)
+      return
+    }
+    const workspaceId = consentDialog?.workspaceId
+    setConsentDialog(null)
+    if (!workspaceId) return
+    // The disclosure records consent; this second call moves the policy
+    // onto Cloud AI. The two commits are intentionally separate, so a
+    // failure on one leaves the other durable.
+    void submit(thinkingWorkspace.setAssistancePolicy(workspaceId, "cloud_ai"))
+  }
+
+  function revokeCloudConsent() {
+    if (!activeWorkspace) return
+    // Revoking consent returns the Workspace to Manual so the durable
+    // policy can never read "cloud_ai" while the Workspace is not consented.
+    void submit(thinkingWorkspace.setCloudConsent(activeWorkspace.id, false))
+    void submit(thinkingWorkspace.setAssistancePolicy(activeWorkspace.id, "manual"))
   }
 
   useUndoShortcut(undoLastChange)
@@ -208,13 +246,27 @@ export function App() {
 
       <AssistanceSection
         activeWorkspace={activeWorkspace}
-        state={localDiscovery.state}
-        query={localDiscovery.query}
-        filteredModels={localDiscovery.filteredModels}
-        selectedMissing={localDiscovery.selectedMissing}
+        localState={localDiscovery.state}
+        localQuery={localDiscovery.query}
+        localFilteredModels={localDiscovery.filteredModels}
+        cloudState={cloudDiscovery.state}
+        cloudQuery={cloudDiscovery.query}
+        cloudFilteredModels={cloudDiscovery.filteredModels}
+        cloudKeyPresent={cloudDiscovery.keyPresent}
+        selectedMissing={
+          localDiscovery.selectedMissing || cloudDiscovery.selectedMissing
+        }
         onPolicyChange={setAssistancePolicy}
-        onQueryChange={localDiscovery.setQuery}
-        onRefresh={localDiscovery.refresh}
+        onLocalQueryChange={localDiscovery.setQuery}
+        onLocalRefresh={localDiscovery.refresh}
+        onCloudQueryChange={cloudDiscovery.setQuery}
+        onCloudRefresh={cloudDiscovery.refresh}
+        onCloudKeyChange={cloudDiscovery.refreshKeyPresence}
+        onRequestCloudConsent={() =>
+          activeWorkspace &&
+          setConsentDialog({ workspaceId: activeWorkspace.id, workspaceName: activeWorkspace.name })
+        }
+        onRevokeCloudConsent={revokeCloudConsent}
         onSelectModel={selectModel}
       />
 
@@ -241,6 +293,15 @@ export function App() {
         card={noteCard}
       />
       {renameLabelDraft && <section role="dialog" aria-label="Rename Label"><form onSubmit={saveRenamedLabel}><label htmlFor="rename-label">Label name</label><input autoFocus id="rename-label" value={renameLabelDraft.name} onChange={(event) => setRenameLabelDraft({ ...renameLabelDraft, name: event.target.value })} /><button type="submit">Save Label name</button><button type="button" onClick={() => setRenameLabelDraft(null)}>Cancel</button></form></section>}
+
+      {consentDialog && (
+        <CloudConsentDialog
+          workspaceId={consentDialog.workspaceId}
+          workspaceName={consentDialog.workspaceName}
+          onAccepted={handleConsentAccepted}
+          onClose={() => setConsentDialog(null)}
+        />
+      )}
     </main>
   )
 }

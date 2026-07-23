@@ -11,6 +11,7 @@ const workspace: ThinkingWorkspace = {
   name: "Rêverie 🧠",
   assistancePolicy: "manual",
   selectedModel: null,
+  cloudConsentAt: null,
   createdAt: "2026-07-22T10:00:00+00:00",
   updatedAt: "2026-07-22T10:00:00+00:00",
 }

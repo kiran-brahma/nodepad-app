@@ -1,11 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { thinkingWorkspace, type ThinkingWorkspace } from "./workspace-client"
-
-export type DiscoveryState =
-  | { kind: "idle" }
-  | { kind: "loading" }
-  | { kind: "ready"; models: string[] }
-  | { kind: "error"; failure: { code: string; message: string } }
+import { thinkingWorkspace, type DiscoveryState, type ThinkingWorkspace } from "./workspace-client"
 
 /**
  * Keeps the transient state of local model discovery. The hook only fetches

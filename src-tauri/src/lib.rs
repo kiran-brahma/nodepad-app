@@ -1,10 +1,17 @@
+mod cloud;
 mod ollama;
+mod secrets;
 mod thinking_graph;
 mod workspace;
 
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, State};
+use cloud::{CloudOllamaProvider, CloudTagsClient, HttpCloudTagsClient};
 use ollama::{DiscoveryOutcome, HttpTagsClient, OllamaProvider};
+use secrets::{
+    KeychainAdapter, KeychainFailure, KeychainOutcome, OLLAMA_CLOUD_KEYCHAIN_ACCOUNT,
+    OLLAMA_CLOUD_KEYCHAIN_SERVICE, SecurityCliKeychain,
+};
 use workspace::{
     unavailable_search_outcome, StorageOpenFailure, StorageOpenFailureCategory, ThinkingWorkspaceInterface,
     WorkspaceCommandResult, WorkspaceSearchOutcome, WorkspaceStore,
@@ -15,6 +22,8 @@ use workspace::{
 struct AppState {
     storage: Mutex<Result<WorkspaceStore, StorageOpenFailure>>,
     provider: OllamaProvider,
+    cloud: CloudOllamaProvider,
+    keychain: Arc<dyn KeychainAdapter>,
 }
 
 impl AppState {
@@ -225,6 +234,103 @@ async fn discover_local_models(state: State<'_, AppState>) -> Result<DiscoveryOu
     Ok(state.provider.discover_models().await)
 }
 
+/// Records or revokes the Workspace's affirmative consent to use Ollama Cloud.
+/// The bearer key is never stored in the database; this row only names the
+/// moment consent was given.
+#[tauri::command]
+fn set_cloud_consent(
+    workspace_id: String,
+    accept: bool,
+    state: State<'_, AppState>,
+) -> WorkspaceCommandResult {
+    state.dispatch(|store| store.set_cloud_consent_outcome(&workspace_id, accept))
+}
+
+/// Saves the bearer key to the macOS keychain. The key never leaves the
+/// keychain after this call; only its presence is read back.
+#[tauri::command]
+fn set_cloud_api_key(
+    api_key: String,
+    state: State<'_, AppState>,
+) -> Result<CloudSecretOutcome, String> {
+    Ok(secret_outcome(state.keychain.write(
+        OLLAMA_CLOUD_KEYCHAIN_SERVICE,
+        OLLAMA_CLOUD_KEYCHAIN_ACCOUNT,
+        &api_key,
+    )))
+}
+
+/// Removes the bearer key from the macOS keychain. Affected Workspaces
+/// surface the absence through the typed discovery failure the next time
+/// they try to discover cloud models.
+#[tauri::command]
+fn delete_cloud_api_key(state: State<'_, AppState>) -> Result<CloudSecretOutcome, String> {
+    Ok(secret_outcome(
+        state
+            .keychain
+            .delete(OLLAMA_CLOUD_KEYCHAIN_SERVICE, OLLAMA_CLOUD_KEYCHAIN_ACCOUNT),
+    ))
+}
+
+/// Whether a key is currently in the keychain. The key itself is never
+/// returned over this seam; only a presence flag.
+#[tauri::command]
+fn cloud_api_key_present(state: State<'_, AppState>) -> bool {
+    state.cloud.has_key()
+}
+
+/// Discovers models from the fixed Ollama Cloud host. The call requires both
+/// a key in the keychain and consent on the Workspace; the absence of either
+/// becomes a typed failure rather than a request the host sees.
+#[tauri::command]
+async fn discover_cloud_models(
+    workspace_id: String,
+    state: State<'_, AppState>,
+) -> Result<DiscoveryOutcome, String> {
+    let consented = state.dispatch(|store| store.snapshot_outcome());
+    let workspace = match &consented {
+        WorkspaceCommandResult::Committed { snapshot } => snapshot
+            .workspaces()
+            .iter()
+            .find(|workspace| workspace.id() == workspace_id)
+            .cloned(),
+        _ => None,
+    };
+    if let Some(workspace) = workspace {
+        if workspace.cloud_consent_at().is_none() {
+            return Ok(DiscoveryOutcome::Failed {
+                failure: ollama::DiscoveryFailure {
+                    code: ollama::DiscoveryFailureCode::Unauthenticated,
+                    message: "Accept the Cloud AI disclosure to use Ollama Cloud.".into(),
+                },
+            });
+        }
+    } else {
+        return Ok(DiscoveryOutcome::Failed {
+            failure: ollama::DiscoveryFailure {
+                code: ollama::DiscoveryFailureCode::Unavailable,
+                message: "The active Thinking Workspace could not be found.".into(),
+            },
+        });
+    }
+    let outcome = state.cloud.discover_models().await;
+    Ok(DiscoveryOutcome::from(outcome))
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum CloudSecretOutcome {
+    Ok,
+    Failed { failure: KeychainFailure },
+}
+
+fn secret_outcome(outcome: KeychainOutcome<()>) -> CloudSecretOutcome {
+    match outcome {
+        KeychainOutcome::Ok(()) => CloudSecretOutcome::Ok,
+        KeychainOutcome::Failed { failure } => CloudSecretOutcome::Failed { failure },
+    }
+}
+
 /// Retries the failed open against the same path, so a folder or permission
 /// problem the thinker has since fixed can recover without a restart.
 #[tauri::command]
@@ -273,10 +379,21 @@ pub fn run() {
                 .timeout(std::time::Duration::from_secs(10))
                 .build()
                 .unwrap_or_default();
-            let provider = OllamaProvider::new(Arc::new(HttpTagsClient::new(http_client)));
+            let provider = OllamaProvider::new(Arc::new(HttpTagsClient::new(http_client.clone())));
+            let cloud_client: Arc<dyn CloudTagsClient> =
+                Arc::new(HttpCloudTagsClient::new(http_client));
+            let keychain: Arc<dyn KeychainAdapter> = Arc::new(SecurityCliKeychain::new());
+            let cloud = CloudOllamaProvider::new(
+                cloud_client,
+                keychain.clone(),
+                OLLAMA_CLOUD_KEYCHAIN_SERVICE,
+                OLLAMA_CLOUD_KEYCHAIN_ACCOUNT,
+            );
             app.manage(AppState {
                 storage: Mutex::new(storage),
                 provider,
+                cloud,
+                keychain,
             });
             Ok(())
         })
@@ -303,8 +420,13 @@ pub fn run() {
             search_notes,
             undo_last_change,
             set_assistance_policy,
+            set_cloud_consent,
             select_model,
             discover_local_models,
+            discover_cloud_models,
+            cloud_api_key_present,
+            set_cloud_api_key,
+            delete_cloud_api_key,
             retry_storage_open,
             quit_application
         ])

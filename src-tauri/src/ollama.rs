@@ -13,7 +13,10 @@ use serde::Deserialize;
 const OLLAMA_LOCAL_BASE_URL: &str = "http://localhost:11434";
 
 /// One failure mode the UI can act on. Distinct states let the thinker know
-/// whether Ollama is missing, slow, confused, or simply empty.
+/// whether Ollama is missing, slow, confused, or simply empty, or whether
+/// the cloud host rejected, throttled, or could not find the saved key.
+/// Local discovery only ever produces the first four; the rest are reserved
+/// for cloud discovery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiscoveryFailureCode {
@@ -21,6 +24,12 @@ pub enum DiscoveryFailureCode {
     Timeout,
     MalformedResponse,
     EmptyList,
+    /// The bearer key was not in the keychain at the moment of the call.
+    Unauthenticated,
+    /// The cloud host rejected the key.
+    AuthenticationFailed,
+    /// The cloud host asked the thinker to slow down.
+    RateLimited,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -148,6 +157,15 @@ fn failure_from_code(code: DiscoveryFailureCode) -> DiscoveryFailure {
         }
         DiscoveryFailureCode::EmptyList => {
             "Ollama reported no models. Pull one with `ollama pull <model>`."
+        }
+        DiscoveryFailureCode::Unauthenticated => {
+            "Add your Ollama Cloud key to enable Cloud AI."
+        }
+        DiscoveryFailureCode::AuthenticationFailed => {
+            "Ollama Cloud rejected the key. Update it in Settings."
+        }
+        DiscoveryFailureCode::RateLimited => {
+            "Ollama Cloud is throttling requests. Try again in a moment."
         }
     }
     .to_owned();
