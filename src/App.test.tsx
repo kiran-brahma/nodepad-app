@@ -28,6 +28,14 @@ let discoveryOutcome: import("./workspace-client").DiscoveryOutcome = {
   status: "committed",
   models: ["llama3.1:latest", "phi3:latest"],
 }
+let cloudDiscoveryOutcome: import("./workspace-client").DiscoveryOutcome = {
+  status: "committed",
+  models: ["qwen3:cloud", "gpt-oss:cloud"],
+}
+let cloudKeyPresent = false
+let keychainWriteCount = 0
+let lastSavedKey: string | null = null
+let keychainDeleteCount = 0
 
 /** The canonical pair the durable interface stores; order is not direction. */
 function canonicalPair(left: string, right: string): [string, string] {
@@ -236,6 +244,40 @@ vi.mock("@tauri-apps/api/core", () => ({
       }
       case "discover_local_models":
         return Promise.resolve(discoveryOutcome)
+      case "discover_cloud_models":
+        return Promise.resolve(cloudDiscoveryOutcome)
+      case "cloud_api_key_present":
+        return Promise.resolve(cloudKeyPresent)
+      case "set_cloud_api_key": {
+        keychainWriteCount += 1
+        lastSavedKey = String(args.apiKey)
+        cloudKeyPresent = true
+        return Promise.resolve({ status: "ok" } as const)
+      }
+      case "delete_cloud_api_key": {
+        keychainDeleteCount += 1
+        lastSavedKey = null
+        cloudKeyPresent = false
+        return Promise.resolve({ status: "ok" } as const)
+      }
+      case "set_cloud_consent": {
+        const accept = Boolean(args.accept)
+        history.push(snapshot)
+        snapshot = {
+          ...snapshot,
+          workspaces: snapshot.workspaces.map((workspace) =>
+            workspace.id === args.workspaceId
+              ? {
+                  ...workspace,
+                  cloudConsentAt: accept
+                    ? "2026-07-23T12:00:00+00:00"
+                    : null,
+                }
+              : workspace,
+          ),
+        }
+        return Promise.resolve(committed())
+      }
       default:
         return Promise.resolve(committed())
     }
@@ -250,6 +292,14 @@ beforeEach(() => {
     status: "committed",
     models: ["llama3.1:latest", "phi3:latest"],
   }
+  cloudDiscoveryOutcome = {
+    status: "committed",
+    models: ["qwen3:cloud", "gpt-oss:cloud"],
+  }
+  cloudKeyPresent = false
+  keychainWriteCount = 0
+  lastSavedKey = null
+  keychainDeleteCount = 0
   history = []
   snapshot = {
     workspaces: [
@@ -258,6 +308,7 @@ beforeEach(() => {
         name: "Research",
         assistancePolicy: "manual",
         selectedModel: null,
+        cloudConsentAt: null,
         createdAt: "2026-07-22T09:00:00+00:00",
         updatedAt: "2026-07-22T09:00:00+00:00",
       },
@@ -266,6 +317,7 @@ beforeEach(() => {
         name: "Reading",
         assistancePolicy: "manual",
         selectedModel: null,
+        cloudConsentAt: null,
         createdAt: "2026-07-22T09:01:00+00:00",
         updatedAt: "2026-07-22T09:01:00+00:00",
       },
@@ -1069,5 +1121,243 @@ describe("Assistance Policy and local Ollama discovery", () => {
     expect(
       await screen.findByText(/The selected model “retired-model:latest” is no longer available/),
     ).toBeDefined()
+  })
+})
+
+describe("Ollama Cloud consent, keychain, and discovery", () => {
+  /** A bearer key sentinel that the tests must never see in the snapshot. */
+  const SENTINEL_KEY = "SENTINEL-BEARER-KEY-DO-NOT-LEAK"
+
+  it("requires a disclosure before Cloud AI can be selected", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    // Clicking Cloud AI on a non-consented Workspace opens the disclosure,
+    // and the policy does not move to cloud_ai until the thinker accepts.
+    await user.click(await screen.findByRole("button", { name: "Cloud AI" }))
+    expect(
+      screen.getByText(/When this Thinking Workspace uses Cloud AI/),
+    ).toBeDefined()
+    expect(
+      screen.getByRole("button", { name: "Cloud AI" }).getAttribute("aria-pressed"),
+    ).not.toBe("true")
+  })
+
+  it("records consent and sets the policy only after the disclosure is accepted", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(await screen.findByRole("button", { name: "Cloud AI" }))
+    await user.click(
+      screen.getByRole("button", { name: "I understand, enable Cloud AI" }),
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Cloud AI" }).getAttribute("aria-pressed"),
+      ).toBe("true"),
+    )
+    expect(snapshot.workspaces[0].cloudConsentAt).not.toBeNull()
+  })
+
+  it("leaves the policy on its previous value when the disclosure is cancelled", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(await screen.findByRole("button", { name: "Cloud AI" }))
+    await user.click(screen.getByRole("button", { name: "Cancel" }))
+
+    expect(snapshot.workspaces[0].assistancePolicy).toBe("manual")
+    expect(snapshot.workspaces[0].cloudConsentAt).toBeNull()
+  })
+
+  it("saves a bearer key through the keychain and clears it on delete", async () => {
+    cloudKeyPresent = true
+    const user = userEvent.setup()
+    render(<App />)
+
+    // Bring the Workspace onto Cloud AI through the disclosure path so the
+    // key section is on screen.
+    await user.click(await screen.findByRole("button", { name: "Cloud AI" }))
+    await user.click(
+      screen.getByRole("button", { name: "I understand, enable Cloud AI" }),
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Cloud AI" }).getAttribute("aria-pressed"),
+      ).toBe("true"),
+    )
+
+    // The key input is shown; type a key and save.
+    const input = (await screen.findByLabelText("Ollama Cloud key")) as HTMLInputElement
+    await user.type(input, SENTINEL_KEY)
+    await user.click(screen.getByRole("button", { name: "Save key" }))
+
+    await waitFor(() => expect(keychainWriteCount).toBe(1))
+    expect(lastSavedKey).toBe(SENTINEL_KEY)
+
+    // The key value is gone from React state: the input is unmounted after save.
+    expect(screen.queryByLabelText("Ollama Cloud key")).toBeNull()
+    expect(screen.getByText("A key is saved in the macOS keychain.")).toBeDefined()
+
+    // The snapshot never carries the bearer key.
+    const serialized = JSON.stringify(snapshot)
+    expect(serialized).not.toContain(SENTINEL_KEY)
+
+    // Removing the key moves the Workspace back to the empty form.
+    await user.click(screen.getByRole("button", { name: "Remove key" }))
+    await waitFor(() => expect(keychainDeleteCount).toBe(1))
+    expect(cloudKeyPresent).toBe(false)
+  })
+
+  it("discovers cloud models only when the Workspace is consented and a key is present", async () => {
+    cloudKeyPresent = true
+    snapshot = {
+      ...snapshot,
+      workspaces: snapshot.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              assistancePolicy: "cloud_ai" as const,
+              cloudConsentAt: "2026-07-23T12:00:00+00:00",
+            }
+          : workspace,
+      ),
+    }
+    render(<App />)
+
+    expect(await screen.findByText("qwen3:cloud")).toBeDefined()
+    expect(screen.getByText("gpt-oss:cloud")).toBeDefined()
+  })
+
+  it("does not discover cloud models when the Workspace has no key", async () => {
+    cloudKeyPresent = false
+    snapshot = {
+      ...snapshot,
+      workspaces: snapshot.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              assistancePolicy: "cloud_ai" as const,
+              cloudConsentAt: "2026-07-23T12:00:00+00:00",
+            }
+          : workspace,
+      ),
+    }
+    render(<App />)
+
+    expect(await screen.findByText("Add your Ollama Cloud key to discover cloud-hosted models.")).toBeDefined()
+    expect(screen.queryByText("qwen3:cloud")).toBeNull()
+  })
+
+  it("reports a missing selected cloud model", async () => {
+    cloudKeyPresent = true
+    snapshot = {
+      ...snapshot,
+      workspaces: snapshot.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              assistancePolicy: "cloud_ai" as const,
+              cloudConsentAt: "2026-07-23T12:00:00+00:00",
+              selectedModel: "retired-cloud-model:tag",
+            }
+          : workspace,
+      ),
+    }
+    render(<App />)
+
+    expect(
+      await screen.findByText(/The selected model “retired-cloud-model:tag” is no longer available/),
+    ).toBeDefined()
+  })
+
+  it("reports a typed cloud discovery failure", async () => {
+    cloudKeyPresent = true
+    cloudDiscoveryOutcome = {
+      status: "failed",
+      failure: { code: "authentication_failed", message: "Ollama Cloud rejected the key." },
+    }
+    snapshot = {
+      ...snapshot,
+      workspaces: snapshot.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              assistancePolicy: "cloud_ai" as const,
+              cloudConsentAt: "2026-07-23T12:00:00+00:00",
+            }
+          : workspace,
+      ),
+    }
+    render(<App />)
+
+    expect((await screen.findByRole("alert")).textContent).toContain("Ollama Cloud rejected the key.")
+  })
+
+  it("isolates cloud consent between two Thinking Workspaces", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    // Consent the active Workspace through the disclosure path.
+    await user.click(await screen.findByRole("button", { name: "Cloud AI" }))
+    await user.click(
+      screen.getByRole("button", { name: "I understand, enable Cloud AI" }),
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Cloud AI" }).getAttribute("aria-pressed"),
+      ).toBe("true"),
+    )
+
+    // Switch to the second Workspace: it is not consented.
+    await user.click(screen.getByRole("button", { name: "Reading" }))
+    const reading = snapshot.workspaces.find((workspace) => workspace.name === "Reading")!
+    expect(reading.cloudConsentAt).toBeNull()
+    expect(reading.assistancePolicy).toBe("manual")
+  })
+
+  it("revoking cloud consent returns the Workspace to Manual", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(await screen.findByRole("button", { name: "Cloud AI" }))
+    await user.click(
+      screen.getByRole("button", { name: "I understand, enable Cloud AI" }),
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Cloud AI" }).getAttribute("aria-pressed"),
+      ).toBe("true"),
+    )
+
+    await user.click(
+      screen.getByRole("button", { name: "Revoke Cloud consent for this Workspace" }),
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Manual" }).getAttribute("aria-pressed"),
+      ).toBe("true"),
+    )
+    const active = snapshot.workspaces.find((workspace) => workspace.id === snapshot.activeWorkspaceId)!
+    expect(active.cloudConsentAt).toBeNull()
+  })
+
+  it("rejects a blank bearer key before it ever leaves the form", async () => {
+    cloudKeyPresent = true
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(await screen.findByRole("button", { name: "Cloud AI" }))
+    await user.click(
+      screen.getByRole("button", { name: "I understand, enable Cloud AI" }),
+    )
+
+    // The save button is disabled while the input is empty or whitespace.
+    const saveButton = (await screen.findByRole("button", { name: "Save key" })) as HTMLButtonElement
+    expect(saveButton.getAttribute("disabled")).not.toBeNull()
+    await user.type(screen.getByLabelText("Ollama Cloud key"), "   ")
+    expect(saveButton.getAttribute("disabled")).not.toBeNull()
+    expect(keychainWriteCount).toBe(0)
   })
 })

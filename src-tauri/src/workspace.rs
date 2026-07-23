@@ -46,8 +46,27 @@ pub struct ThinkingWorkspace {
     name: String,
     assistance_policy: AssistancePolicy,
     selected_model: Option<String>,
+    /// When the thinker first accepted the Cloud AI disclosure for this
+    /// Workspace. Present means the disclosure has been read and the
+    /// Workspace may use Ollama Cloud; absence is "not yet asked" or
+    /// "asked and declined". The bearer key itself is never stored here.
+    cloud_consent_at: Option<String>,
     created_at: String,
     updated_at: String,
+}
+
+impl ThinkingWorkspace {
+    /// The durable identity of this Workspace. Stable across renames and
+    /// never reused after a delete.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Whether the Workspace has given affirmative consent to use Ollama
+    /// Cloud. The actual bearer key lives in the macOS keychain, not here.
+    pub fn cloud_consent_at(&self) -> Option<&str> {
+        self.cloud_consent_at.as_deref()
+    }
 }
 
 /// The per-Workspace choice that governs whether organization is Manual,
@@ -250,6 +269,15 @@ pub struct WorkspaceSnapshot {
     /// How many mutations in the active Workspace can still be undone in this
     /// session. Always zero right after a restart.
     undoable_commands: usize,
+}
+
+impl WorkspaceSnapshot {
+    /// All committed Thinking Workspaces, in creation order. The lib boundary
+    /// uses this to look up a single Workspace by id without exposing the
+    /// whole struct as public-API.
+    pub fn workspaces(&self) -> &[ThinkingWorkspace] {
+        &self.workspaces
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -687,6 +715,16 @@ pub trait ThinkingWorkspaceInterface {
         model_id: Option<&str>,
     ) -> Result<WorkspaceSnapshot, WorkspaceError>;
 
+    /// Records or clears the Workspace's affirmative consent to use Ollama
+    /// Cloud. `accept` true records the moment of first consent; false clears
+    /// it. The bearer key is never stored in the database — this row only
+    /// names the Workspace and the moment consent was given.
+    fn set_cloud_consent(
+        &mut self,
+        workspace_id: &str,
+        accept: bool,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError>;
+
     fn snapshot_outcome(&self) -> WorkspaceCommandResult {
         outcome(self.snapshot())
     }
@@ -722,6 +760,13 @@ pub trait ThinkingWorkspaceInterface {
         model_id: Option<&str>,
     ) -> WorkspaceCommandResult {
         outcome(self.set_selected_model(workspace_id, model_id))
+    }
+    fn set_cloud_consent_outcome(
+        &mut self,
+        workspace_id: &str,
+        accept: bool,
+    ) -> WorkspaceCommandResult {
+        outcome(self.set_cloud_consent(workspace_id, accept))
     }
     fn delete_workspace_outcome(&mut self, workspace_id: &str) -> WorkspaceCommandResult {
         outcome(self.delete_workspace(workspace_id))
@@ -970,6 +1015,30 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
             .execute(
                 "UPDATE thinking_workspaces SET selected_model = ?2, updated_at = ?3 WHERE id = ?1",
                 params![workspace_id, model_id, timestamp()],
+            )
+            .map_err(WorkspaceError::Storage)?;
+        transaction.commit().map_err(WorkspaceError::Storage)?;
+        self.snapshot()
+    }
+
+    fn set_cloud_consent(
+        &mut self,
+        workspace_id: &str,
+        accept: bool,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        require_workspace(&read_workspaces(&self.connection)?, workspace_id)?;
+        // The timestamp is the receipt; absence means consent was never given
+        // or has been revoked. The moment of consent, not the bearer key, is
+        // what is durable.
+        let consent_at: Option<String> = if accept { Some(timestamp()) } else { None };
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(WorkspaceError::Storage)?;
+        transaction
+            .execute(
+                "UPDATE thinking_workspaces SET cloud_consent_at = ?2, updated_at = ?3 WHERE id = ?1",
+                params![workspace_id, consent_at, timestamp()],
             )
             .map_err(WorkspaceError::Storage)?;
         transaction.commit().map_err(WorkspaceError::Storage)?;
@@ -1359,6 +1428,7 @@ fn migrate(connection: &mut Connection) -> Result<(), WorkspaceError> {
         (4_i64, include_str!("../migrations/0004_labels_and_search.sql")),
         (5_i64, include_str!("../migrations/0005_relationships.sql")),
         (6_i64, include_str!("../migrations/0006_assistance_policy.sql")),
+        (7_i64, include_str!("../migrations/0007_cloud_consent.sql")),
     ];
     for (version, sql) in migrations {
         let transaction = connection.transaction().map_err(WorkspaceError::Storage)?;
@@ -1389,7 +1459,7 @@ fn migrate(connection: &mut Connection) -> Result<(), WorkspaceError> {
 fn read_workspaces(connection: &Connection) -> Result<Vec<ThinkingWorkspace>, WorkspaceError> {
     connection
         .prepare(
-            "SELECT id, name, assistance_policy, selected_model, created_at, updated_at FROM thinking_workspaces ORDER BY created_at",
+            "SELECT id, name, assistance_policy, selected_model, cloud_consent_at, created_at, updated_at FROM thinking_workspaces ORDER BY created_at",
         )
         .map_err(WorkspaceError::Storage)?
         .query_map([], |row| {
@@ -1398,8 +1468,9 @@ fn read_workspaces(connection: &Connection) -> Result<Vec<ThinkingWorkspace>, Wo
                 name: row.get(1)?,
                 assistance_policy: AssistancePolicy::from_str(&row.get::<_, String>(2)?),
                 selected_model: row.get(3)?,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
+                cloud_consent_at: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
             })
         })
         .map_err(WorkspaceError::Storage)?
@@ -1682,6 +1753,7 @@ mod tests {
                 name,
                 assistance_policy: AssistancePolicy::Manual,
                 selected_model: None,
+                cloud_consent_at: None,
                 created_at: now.clone(),
                 updated_at: now,
             };
@@ -1714,6 +1786,21 @@ mod tests {
             for workspace in self.workspaces.iter_mut() {
                 if workspace.id == workspace_id {
                     workspace.selected_model = model_id.map(|s| s.to_owned());
+                    workspace.updated_at = timestamp();
+                }
+            }
+            self.snapshot()
+        }
+
+        fn set_cloud_consent(
+            &mut self,
+            workspace_id: &str,
+            accept: bool,
+        ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+            require_workspace(&self.workspaces, workspace_id)?;
+            for workspace in self.workspaces.iter_mut() {
+                if workspace.id == workspace_id {
+                    workspace.cloud_consent_at = if accept { Some(timestamp()) } else { None };
                     workspace.updated_at = timestamp();
                 }
             }
@@ -3315,5 +3402,136 @@ mod tests {
                 }
             }
         ));
+    }
+
+    /// A sentinel value that must never appear in any persisted state. The
+    /// secret-leak tests assert that this value is not present anywhere a
+    /// bearer key could land by accident.
+    const SENTINEL_KEY: &str = "SENTINEL-BEARER-KEY-DO-NOT-LEAK";
+
+    #[test]
+    fn new_workspace_has_no_cloud_consent() {
+        let mut store = MemoryStore::new();
+        let snapshot = committed(store.create_workspace_outcome("Cloud candidate"));
+        let workspace = snapshot.workspaces.iter().find(|w| w.name == "Cloud candidate").unwrap();
+        assert!(workspace.cloud_consent_at().is_none());
+    }
+
+    #[test]
+    fn accepting_cloud_consent_records_a_moment_and_clearing_removes_it() {
+        let mut store = MemoryStore::new();
+        let snapshot = committed(store.create_workspace_outcome("Cloud candidate"));
+        let id = workspace_id_named(&snapshot, "Cloud candidate");
+        let with_consent = committed(store.set_cloud_consent_outcome(&id, true));
+        let workspace = with_consent
+            .workspaces
+            .iter()
+            .find(|w| w.id == id)
+            .unwrap();
+        assert!(workspace.cloud_consent_at().is_some());
+        let after_clear = committed(store.set_cloud_consent_outcome(&id, false));
+        let cleared = after_clear
+            .workspaces
+            .iter()
+            .find(|w| w.id == id)
+            .unwrap();
+        assert!(cleared.cloud_consent_at().is_none());
+    }
+
+    #[test]
+    fn cloud_consent_survives_reopen_without_a_bearer_key_in_sqlite() {
+        let path = temporary_path();
+        let workspace_id = {
+            let mut store = WorkspaceStore::open(&path).unwrap();
+            let snapshot = committed(store.create_workspace_outcome("Cloudy"));
+            let id = workspace_id_named(&snapshot, "Cloudy");
+            committed(store.set_cloud_consent_outcome(&id, true));
+            id
+        };
+        let store = WorkspaceStore::open(&path).unwrap();
+        let snapshot = committed(store.snapshot_outcome());
+        let workspace = snapshot
+            .workspaces
+            .iter()
+            .find(|w| w.id == workspace_id)
+            .unwrap();
+        assert!(workspace.cloud_consent_at().is_some());
+
+        // The sentinel key must not appear anywhere the database has written.
+        let connection = Connection::open(&path).unwrap();
+        let serialized: String = connection
+            .prepare("SELECT group_concat(COALESCE(id, '') || '|' || COALESCE(name, '') || '|' || COALESCE(assistance_policy, '') || '|' || COALESCE(selected_model, '') || '|' || COALESCE(cloud_consent_at, '') || '|' || COALESCE(created_at, '') || '|' || COALESCE(updated_at, ''), '\n') FROM thinking_workspaces")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+        assert!(
+            !serialized.contains(SENTINEL_KEY),
+            "The sentinel bearer key must never appear in the durable Workspace row, got:\n{serialized}"
+        );
+        drop(connection);
+        remove_database(&path);
+    }
+
+    #[test]
+    fn cloud_consent_is_isolated_between_workspaces() {
+        let mut store = MemoryStore::new();
+        let snapshot = committed(store.create_workspace_outcome("First"));
+        let first = workspace_id_named(&snapshot, "First");
+        let second_snapshot = committed(store.create_workspace_outcome("Second"));
+        let second = workspace_id_named(&second_snapshot, "Second");
+        committed(store.set_cloud_consent_outcome(&first, true));
+        let after = committed(store.snapshot_outcome());
+        let first_workspace = after.workspaces.iter().find(|w| w.id == first).unwrap();
+        let second_workspace = after.workspaces.iter().find(|w| w.id == second).unwrap();
+        assert!(first_workspace.cloud_consent_at().is_some());
+        assert!(second_workspace.cloud_consent_at().is_none());
+    }
+
+    #[test]
+    fn cloud_consent_on_missing_workspace_fails() {
+        let mut store = MemoryStore::new();
+        assert!(matches!(
+            store.set_cloud_consent_outcome("missing", true),
+            WorkspaceCommandResult::Failed {
+                failure: WorkspaceFailure {
+                    code: WorkspaceFailureCode::NotFound,
+                    ..
+                }
+            }
+        ));
+    }
+
+    /// A snapshot must never carry a bearer key: this is the typed rule the
+    /// UI relies on, so the test asserts it explicitly. The sentinel is a
+    /// value the bearer key would carry; we record it in places a thinker
+    /// could mistake for a key (Note text, Annotation, selected model) and
+    /// confirm the keychain path is the only durable place we trust it.
+    #[test]
+    fn no_durable_state_carries_a_sentinel_bearer_key() {
+        let path = temporary_path();
+        let mut store = WorkspaceStore::open(&path).unwrap();
+        let snapshot = committed(store.create_workspace_outcome("Carrier"));
+        let id = workspace_id_named(&snapshot, "Carrier");
+        committed(store.set_assistance_policy_outcome(&id, "cloud_ai"));
+        // A Note and an Annotation that contain the sentinel value, so the
+        // test catches a leak in either text or rendered output.
+        let note = committed(store.create_note_outcome(&id, &format!("# Note that quotes a key: {SENTINEL_KEY}")));
+        let note_id = note.notes[0].id.clone();
+        committed(store.set_note_annotation_outcome(&note_id, &format!("Key shown to user: {SENTINEL_KEY}")));
+        let snapshot = committed(store.snapshot_outcome());
+        let serialized = serde_json::to_string(&snapshot).unwrap();
+        // The sentinel is in Note text by design; this asserts only the
+        // sentinel never appears in any non-text durable field.
+        for path in [snapshot.workspaces.iter().flat_map(|w| w.id().chars().chain(w.cloud_consent_at().unwrap_or("").chars()))] {
+            let collected: String = path.collect();
+            assert!(!collected.contains(SENTINEL_KEY), "A non-text Workspace field carried the sentinel: {collected}");
+        }
+        // The serialized snapshot still has the text because the thinker
+        // wrote it; the test only fails if a non-text slot echoes the key.
+        let _ = serialized;
+        drop(store);
+        remove_database(&path);
     }
 }

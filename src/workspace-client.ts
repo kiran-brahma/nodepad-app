@@ -77,6 +77,13 @@ export interface ThinkingWorkspace {
   assistancePolicy: AssistancePolicy
   /** The opaque model identifier last chosen for this Workspace, if any. */
   selectedModel: string | null
+  /**
+   * When the thinker first accepted the Cloud AI disclosure for this Workspace.
+   * A string when consent was given (the moment is the receipt); null when
+   * the Workspace is not yet consented, or when consent was revoked. The
+   * bearer key itself is never in this record.
+   */
+  cloudConsentAt: string | null
   createdAt: string
   updatedAt: string
 }
@@ -112,11 +119,32 @@ export type SearchOutcome =
   | { status: "committed"; results: SearchResult[] }
   | { status: "failed"; failure: WorkspaceFailure }
 
-export type DiscoveryFailureCode = "unavailable" | "timeout" | "malformed_response" | "empty_list"
+export type DiscoveryFailureCode =
+  | "unavailable"
+  | "timeout"
+  | "malformed_response"
+  | "empty_list"
+  /** Cloud only: there is no key in the macOS keychain right now. */
+  | "unauthenticated"
+  /** Cloud only: the cloud host rejected the saved key. */
+  | "authentication_failed"
+  /** Cloud only: the cloud host is throttling requests. */
+  | "rate_limited"
+
+export type DiscoveryState =
+  | { kind: "idle" }
+  | { kind: "loading" }
+  | { kind: "ready"; models: string[] }
+  | { kind: "error"; failure: { code: DiscoveryFailureCode; message: string } }
 
 export type DiscoveryOutcome =
   | { status: "committed"; models: string[] }
   | { status: "failed"; failure: { code: DiscoveryFailureCode; message: string } }
+
+/** The result of writing or deleting the bearer key in the keychain. */
+export type CloudSecretOutcome =
+  | { status: "ok" }
+  | { status: "failed"; failure: { code: "unavailable" | "refused"; message: string } }
 
 /** The UI's only durable-state interface; it never accesses SQLite directly. */
 export const thinkingWorkspace = {
@@ -177,6 +205,26 @@ export const thinkingWorkspace = {
     invoke<WorkspaceOutcome>("select_model", { workspaceId, modelId }),
   /** Discovers models from the fixed local Ollama host. */
   discoverLocalModels: () => invoke<DiscoveryOutcome>("discover_local_models"),
+  /**
+   * Records or revokes the Workspace's affirmative consent to use Ollama
+   * Cloud. `accept` true records the moment of first consent; false clears
+   * it. The bearer key is never stored in the database.
+   */
+  setCloudConsent: (workspaceId: string, accept: boolean) =>
+    invoke<WorkspaceOutcome>("set_cloud_consent", { workspaceId, accept }),
+  /**
+   * Saves the bearer key to the macOS keychain. The key is read on demand
+   * for cloud discovery; this command does not echo it back.
+   */
+  setCloudApiKey: (apiKey: string) =>
+    invoke<CloudSecretOutcome>("set_cloud_api_key", { apiKey }),
+  /** Removes the bearer key from the macOS keychain. */
+  deleteCloudApiKey: () => invoke<CloudSecretOutcome>("delete_cloud_api_key"),
+  /** Whether a key is currently in the keychain. */
+  cloudApiKeyPresent: () => invoke<boolean>("cloud_api_key_present"),
+  /** Discovers models from the fixed Ollama Cloud host. */
+  discoverCloudModels: (workspaceId: string) =>
+    invoke<DiscoveryOutcome>("discover_cloud_models", { workspaceId }),
   retryStorageOpen: () => invoke<WorkspaceOutcome>("retry_storage_open"),
   quitApplication: () => invoke<void>("quit_application"),
 }

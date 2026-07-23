@@ -11,6 +11,8 @@ form { display: grid; gap: .6rem; width: 100%; }
 input, textarea { border: 1px solid #bcae9d; border-radius: 6px; font: inherit; padding: .65rem; width: 100%; }
 button { background: #f1e8dc; border: 1px solid #bcae9d; border-radius: 6px; color: inherit; cursor: pointer; font: inherit; padding: .55rem .8rem; }
 button.active, button[type="submit"] { background: #8f3d27; border-color: #8f3d27; color: white; }
+.cloud-key { background: #f7efe2; border: 1px solid #d9c9b3; border-radius: 8px; padding: .8rem; }
+.cloud-key .hint { color: #5b4a3c; font-size: .9em; margin: 0; }
 .row { align-items: center; display: flex; flex-wrap: wrap; gap: .5rem; justify-content: space-between; }
 .row h2 { margin: 0; }
 .confirm { background: #fdf2ee; border: 1px solid #b0412f; border-radius: 8px; color: #7b2f22; margin: 1rem 0; padding: .8rem; }
