@@ -79,6 +79,30 @@ export interface Relationship {
   createdAt: string
 }
 
+/**
+ * A provisional insight connecting several Notes, waiting for the thinker to
+ * accept or dismiss it. It is not a Note: it has no place in the Thinking
+ * Graph, no Relationship is written for it, and it changes nothing it names.
+ */
+export interface PendingSynthesis {
+  id: string
+  workspaceId: string
+  text: string
+  /** The exact source Notes the model named, in the order it named them. */
+  sourceNoteIds: string[]
+  labels: string[]
+  /** AI provenance: which model proposed this, under which policy. */
+  model: string
+  policy: AssistancePolicy
+  createdAt: string
+  /**
+   * True when a source Note was edited, deleted, or moved to another Thinking
+   * Workspace since the Synthesis was proposed. A stale Synthesis is still
+   * shown and can still be dismissed, but it can no longer be accepted.
+   */
+  stale: boolean
+}
+
 /** The per-Workspace choice that governs AI assistance. */
 export type AssistancePolicy = "manual" | "local_ai" | "cloud_ai"
 
@@ -99,11 +123,23 @@ export interface ThinkingWorkspace {
   updatedAt: string
 }
 
+/**
+ * Whether a Thinking Workspace's Assistance Policy permits an AI call at
+ * all. One predicate, so Note Organization, Synthesis, and the panels can
+ * never disagree about whether a Workspace is Manual.
+ */
+export function assistanceEnabled(workspace: ThinkingWorkspace | undefined): boolean {
+  if (!workspace) return false
+  return workspace.assistancePolicy !== "manual"
+}
+
 export interface WorkspaceSnapshot {
   workspaces: ThinkingWorkspace[]
   notes: Note[]
   /** Every committed Relationship; each endpoint always names a Note above. */
   relationships: Relationship[]
+  /** Every undecided Synthesis, in proposal order. Provisional, never Notes. */
+  pendingSyntheses: PendingSynthesis[]
   /** Always names a Workspace in `workspaces`; it is a preference, not content. */
   activeWorkspaceId: string
   /** Reversible changes left in this session for the active Workspace. */

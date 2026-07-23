@@ -326,6 +326,7 @@ beforeEach(() => {
     ],
     notes: [],
     relationships: [],
+    pendingSyntheses: [],
     activeWorkspaceId: workspaceId,
     undoableCommands: 0,
   }
