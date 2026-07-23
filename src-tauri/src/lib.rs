@@ -65,6 +65,54 @@ fn create_note(
     state.dispatch(|store| store.create_note_outcome(&workspace_id, &markdown))
 }
 
+#[tauri::command]
+fn edit_note_text(
+    note_id: String,
+    markdown: String,
+    state: State<'_, AppState>,
+) -> WorkspaceCommandResult {
+    state.dispatch(|store| store.edit_note_text_outcome(&note_id, &markdown))
+}
+
+#[tauri::command]
+fn set_note_type(
+    note_id: String,
+    note_type: String,
+    state: State<'_, AppState>,
+) -> WorkspaceCommandResult {
+    state.dispatch(|store| store.set_note_type_outcome(&note_id, &note_type))
+}
+
+#[tauri::command]
+fn set_note_annotation(
+    note_id: String,
+    annotation: String,
+    state: State<'_, AppState>,
+) -> WorkspaceCommandResult {
+    state.dispatch(|store| store.set_note_annotation_outcome(&note_id, &annotation))
+}
+
+#[tauri::command]
+fn set_note_pinned(
+    note_id: String,
+    pinned: bool,
+    state: State<'_, AppState>,
+) -> WorkspaceCommandResult {
+    state.dispatch(|store| store.set_note_pinned_outcome(&note_id, pinned))
+}
+
+#[tauri::command]
+fn delete_note(note_id: String, state: State<'_, AppState>) -> WorkspaceCommandResult {
+    state.dispatch(|store| store.delete_note_outcome(&note_id))
+}
+
+/// Undoes the most recent reversible change in this Workspace by committing a
+/// compensating transaction. History lives only in this process.
+#[tauri::command]
+fn undo_last_change(workspace_id: String, state: State<'_, AppState>) -> WorkspaceCommandResult {
+    state.dispatch(|store| store.undo_outcome(&workspace_id))
+}
+
 /// Retries the failed open against the same path, so a folder or permission
 /// problem the thinker has since fixed can recover without a restart.
 #[tauri::command]
@@ -121,6 +169,12 @@ pub fn run() {
             rename_workspace,
             delete_workspace,
             create_note,
+            edit_note_text,
+            set_note_type,
+            set_note_annotation,
+            set_note_pinned,
+            delete_note,
+            undo_last_change,
             retry_storage_open,
             quit_application
         ])
