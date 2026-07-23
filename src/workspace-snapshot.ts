@@ -24,6 +24,9 @@ export interface WorkspaceState {
    * the envelope differs.
    */
   adoptSnapshot: (snapshot: WorkspaceSnapshot) => void
+  /** Adopts a snapshot that arrived from outside the usual command shape and
+   *  leaves the storage-recovery screen, used when a restore succeeds. */
+  recoverWithSnapshot: (snapshot: WorkspaceSnapshot) => void
   reportFailure: (failure: WorkspaceFailure) => void
   dismissFailure: () => void
 }
@@ -59,6 +62,11 @@ export function useWorkspaceSnapshot(): WorkspaceState {
     failure,
     submit,
     adoptSnapshot: setSnapshot,
+    recoverWithSnapshot: (snapshot: WorkspaceSnapshot) => {
+      setSnapshot(snapshot)
+      setOpenFailure(null)
+      setFailure(null)
+    },
     reportFailure: setFailure,
     dismissFailure: () => setFailure(null),
   }
