@@ -243,6 +243,14 @@ export type DiscoveryOutcome =
   | { status: "committed"; models: string[] }
   | { status: "failed"; failure: { code: DiscoveryFailureCode; message: string } }
 
+/** The result of opening one external link through the macOS shell opener.
+ *  The webview never navigates: the frontend prevents the anchor click and
+ *  asks this command to hand a validated `http`/`https` URL to `open`. */
+export type OpenLinkOutcome =
+  | { status: "opened" }
+  | { status: "rejected" }
+  | { status: "failed"; message: string }
+
 /** The result of writing or deleting the bearer key in the keychain. */
 export type CloudSecretOutcome =
   | { status: "ok" }
@@ -348,4 +356,9 @@ export const thinkingWorkspace = {
   restoreBackup: (backupId: string) =>
     invoke<RestoreOutcome>("restore_backup", { backupId }),
   quitApplication: () => invoke<void>("quit_application"),
+  /** Opens one `http`/`https` URL in the thinker's default browser. The
+   *  command validates the scheme in Rust before invoking the macOS shell
+   *  opener, so a Note can never navigate the webview or open another app. */
+  openExternalLink: (url: string) =>
+    invoke<OpenLinkOutcome>("open_external_link", { url }),
 }

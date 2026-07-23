@@ -41,7 +41,7 @@ export function SynthesisSection({
   return (
     <section aria-label="Syntheses">
       <h2>Syntheses</h2>
-      <p>{statusMessage(status, pending.length)}</p>
+      <p role="status" aria-live="polite">{statusMessage(status, pending.length)}</p>
 
       {pending.length > 0 && (
         <ul aria-label="Pending Syntheses">

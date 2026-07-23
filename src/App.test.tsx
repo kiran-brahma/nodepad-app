@@ -1,6 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+
+// cmdk depends on ResizeObserver and Element.scrollIntoView, neither of
+// which jsdom implements.
+if (typeof globalThis.ResizeObserver === "undefined") {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver
+}
+if (typeof Element.prototype.scrollIntoView !== "function") {
+  Element.prototype.scrollIntoView = function scrollIntoView() {}
+}
 // `vi.mock` is hoisted above this import, so App sees the fake interface.
 import { App } from "./App"
 import type {
@@ -42,6 +55,9 @@ let archiveExportRequests = 0
 let archiveExportOutcome: import("./workspace-client").ArchiveExportOutcome = { status: "cancelled" }
 let archiveImportRequests = 0
 let archiveImportOutcome: import("./workspace-client").ArchiveImportOutcome = { status: "cancelled" }
+let openExternalLinkCalls = 0
+let lastOpenedExternalUrl: string | null = null
+let openLinkOutcome: import("./workspace-client").OpenLinkOutcome = { status: "opened" }
 
 /** The canonical pair the durable interface stores; order is not direction. */
 function canonicalPair(left: string, right: string): [string, string] {
@@ -295,6 +311,10 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "import_workspace_archive":
         archiveImportRequests += 1
         return Promise.resolve(archiveImportOutcome)
+      case "open_external_link":
+        openExternalLinkCalls += 1
+        lastOpenedExternalUrl = String(args.url)
+        return Promise.resolve(openLinkOutcome)
       default:
         return Promise.resolve(committed())
     }
@@ -323,6 +343,9 @@ beforeEach(() => {
   archiveExportOutcome = { status: "cancelled" }
   archiveImportRequests = 0
   archiveImportOutcome = { status: "cancelled" }
+  openExternalLinkCalls = 0
+  lastOpenedExternalUrl = null
+  openLinkOutcome = { status: "opened" }
   history = []
   snapshot = {
     workspaces: [
@@ -1445,5 +1468,197 @@ describe("Ollama Cloud consent, keychain, and discovery", () => {
     await user.type(screen.getByLabelText("Ollama Cloud key"), "   ")
     expect(saveButton.getAttribute("disabled")).not.toBeNull()
     expect(keychainWriteCount).toBe(0)
+  })
+})
+
+describe("V0-17 macOS keyboard, accessibility, and external links", () => {
+  it("opens the command palette with Command-K and runs an action", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByRole("button", { name: "Research" })
+
+    await user.keyboard("{Meta>}k{/Meta}")
+    const palette = await screen.findByRole("dialog", { name: "Command palette" })
+    expect(palette).toBeDefined()
+
+    // Selecting the Graph view action switches the arrangement; an empty
+    // Workspace renders the graph's own empty state.
+    await user.click(within(palette).getByRole("option", { name: "Graph view" }))
+    await screen.findByText("No Notes yet.")
+  })
+
+  it("closes the command palette with Escape and restores focus to the invoker", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    const exportButton = await screen.findByRole("button", { name: "Export Markdown" })
+    exportButton.focus()
+    expect(document.activeElement).toBe(exportButton)
+
+    await user.keyboard("{Meta>}k{/Meta}")
+    await screen.findByRole("dialog", { name: "Command palette" })
+    await user.keyboard("{Escape}")
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Command palette" })).toBeNull(),
+    )
+    expect(document.activeElement).toBe(exportButton)
+  })
+
+  it("traps focus in the Cloud consent modal, dismisses it with Escape, and restores focus", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    const cloudButton = await screen.findByRole("button", { name: "Cloud AI" })
+    cloudButton.focus()
+
+    await user.click(cloudButton)
+    const modal = await screen.findByRole("dialog", { name: "Cloud AI disclosure" })
+    // Focus moved into the modal, not left behind on the opener or the body.
+    expect(modal.contains(document.activeElement)).toBe(true)
+    // Tab cycles within the modal and never escapes it.
+    await user.keyboard("{Tab}")
+    expect(modal.contains(document.activeElement)).toBe(true)
+    await user.keyboard("{Tab}")
+    expect(modal.contains(document.activeElement)).toBe(true)
+
+    await user.keyboard("{Escape}")
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Cloud AI disclosure" })).toBeNull(),
+    )
+    // Focus is restored to the control that opened the disclosure.
+    expect(document.activeElement).toBe(cloudButton)
+  })
+
+  it("Escape cancels an inline Workspace rename, not the note-focus lock", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByRole("button", { name: "Research" })
+
+    await user.click(screen.getByRole("button", { name: "Rename" }))
+    const input = screen.getByLabelText("Thinking Workspace name")
+    await user.type(input, "Renamed")
+    await user.keyboard("{Escape}")
+
+    expect(screen.queryByLabelText("Thinking Workspace name")).toBeNull()
+    // The Workspace was not renamed: the inline form cancelled without a commit.
+    expect(screen.getByRole("button", { name: "Research" })).toBeDefined()
+  })
+
+  it("opens an explicit http(s) link in a Note through the macOS shell opener and never navigates the webview", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await captureNote(
+      user,
+      "Read [site](https://example.com/page) and [mail](mailto:hi@example.com) and [bad](javascript:alert(1))",
+    )
+
+    const link = screen.getByRole("link", { name: "site" })
+    expect(link.getAttribute("href")).toBe("https://example.com/page")
+    await user.click(link)
+    await waitFor(() => {
+      expect(openExternalLinkCalls).toBe(1)
+      expect(lastOpenedExternalUrl).toBe("https://example.com/page")
+    })
+
+    // Non-HTTP(S) schemes are not links: they render as inert text so they
+    // can neither navigate the webview nor open another app.
+    expect(screen.queryByRole("link", { name: "mail" })).toBeNull()
+    expect(screen.queryByRole("link", { name: "bad" })).toBeNull()
+    expect(screen.getByText("mail")).toBeDefined()
+    expect(screen.getByText("bad")).toBeDefined()
+  })
+
+  it("Command-Z inside a text field edits the field, not the Workspace", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await captureNote(user, "Original thought")
+    // One committed change is undoable, so the Undo control is enabled.
+    const undo = screen.getByRole("button", { name: "Undo" })
+    expect(undo.getAttribute("disabled")).toBeNull()
+
+    await user.click(screen.getByRole("button", { name: "Edit Note" }))
+    const textarea = screen.getByLabelText("Note text") as HTMLTextAreaElement
+    await user.type(textarea, " typed more")
+    await user.keyboard("{Meta>}z{/Meta}")
+
+    // The textarea's own undo ran; the Workspace undo did not, so the one
+    // committed change is still undoable afterwards.
+    expect(undo.getAttribute("disabled")).toBeNull()
+    // Cancel the edit; the committed Note is unchanged.
+    await user.click(screen.getByRole("button", { name: "Cancel" }))
+    expect(screen.getByText("Original thought")).toBeDefined()
+  })
+
+  it("Return submits the single-line search field and inserts a newline in the Note textarea", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    // A single-line capture input submits its form on Return: the search runs.
+    const search = screen.getByLabelText("Search this Thinking Workspace")
+    await user.type(search, "x")
+    await user.keyboard("{Enter}")
+    await screen.findByText(/0 of 0 Notes match this search/)
+
+    // A multi-line Note textarea treats Return as a newline, not a submit.
+    const noteTextarea = screen.getByLabelText("New Note") as HTMLTextAreaElement
+    await user.type(noteTextarea, "first")
+    await user.keyboard("{Enter}")
+    await user.type(noteTextarea, "second")
+    expect(noteTextarea.value).toBe("first\nsecond")
+    expect(screen.queryAllByRole("article")).toHaveLength(0)
+  })
+
+  it("announces an over-limit Annotation in text, not by color alone", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await captureNote(user, "Annotated thought")
+    await user.click(screen.getByRole("button", { name: "Add Annotation" }))
+    const textarea = screen.getByLabelText("Annotation") as HTMLTextAreaElement
+    await user.click(textarea)
+    await user.paste("x".repeat(2001))
+
+    expect(screen.getByText(/Over the limit/)).toBeDefined()
+    const save = screen.getByRole("button", { name: "Save Annotation" })
+    expect(save.getAttribute("disabled")).not.toBeNull()
+  })
+
+  it("Escape cancels an inline Note edit on the Note detail surface", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await captureNote(user, "Editable thought")
+    await user.click(screen.getByRole("button", { name: "Edit Note" }))
+    const textarea = screen.getByLabelText("Note text")
+    await user.type(textarea, " changed")
+    await user.keyboard("{Escape}")
+    // The edit form is gone and the committed Note is unchanged.
+    expect(screen.queryByLabelText("Note text")).toBeNull()
+    expect(screen.getByText("Editable thought")).toBeDefined()
+  })
+
+  it("keeps every state legible under prefers-reduced-motion", async () => {
+    // jsdom has no media query engine; install one that reports reduced motion
+    // so the contract is documented even though V0 has no essential animation.
+    const originalMatchMedia = window.matchMedia
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("prefers-reduced-motion"),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia
+
+    try {
+      const user = userEvent.setup()
+      render(<App />)
+      await captureNote(user, "Visible under reduced motion")
+      // State is not hidden by reduced motion: the Note, the Undo control, and
+      // the assistance policy all remain on screen.
+      expect(screen.getAllByRole("article")).toHaveLength(1)
+      expect(screen.getByRole("button", { name: "Undo" })).toBeDefined()
+      expect(screen.getByRole("button", { name: "Manual" })).toBeDefined()
+    } finally {
+      window.matchMedia = originalMatchMedia
+    }
   })
 })

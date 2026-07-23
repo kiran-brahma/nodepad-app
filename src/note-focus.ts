@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import type { Note } from "./workspace-client"
 import { litNoteIds, type ThinkingGraph } from "./thinking-graph"
 import { preservedSelection } from "./note-views"
+import { useEscape, ESCAPE_PRIORITY } from "./escape-stack"
 
 export interface NoteFocus {
   /** The Note the thinker locked focus on, by clicking it or navigating to it. */
@@ -46,16 +47,13 @@ export function useNoteFocus(visible: Note[], graph: ThinkingGraph): NoteFocus {
     setHoveredNoteId((current) => preservedSelection(current, visible))
   }, [visible])
 
-  // Escape lets go of the lock wherever the thinker is reading.
-  useEffect(() => {
-    function clearOnEscape(event: KeyboardEvent) {
-      if (event.key !== "Escape") return
-      setFocusedNoteId(null)
-      setHoveredNoteId(null)
-    }
-    window.addEventListener("keydown", clearOnEscape)
-    return () => window.removeEventListener("keydown", clearOnEscape)
-  }, [])
+  // Escape lets go of the lock wherever the thinker is reading. It is the
+  // lowest-priority dismissible surface, so an open modal or inline draft
+  // wins the key first; the coordinator in `escape-stack` owns the order.
+  useEscape(() => {
+    setFocusedNoteId(null)
+    setHoveredNoteId(null)
+  }, ESCAPE_PRIORITY.focus)
 
   // A hover previews over whatever is locked, so there is no mode to be in.
   const focalNoteId = hoveredNoteId ?? focusedNoteId

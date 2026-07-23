@@ -2,6 +2,7 @@ mod archive;
 mod backup;
 mod cloud;
 mod enrichment;
+mod external_link;
 mod markdown_export;
 mod ollama;
 mod secrets;
@@ -9,6 +10,8 @@ mod synthesis;
 mod thinking_graph;
 mod url_metadata;
 mod workspace;
+
+use external_link::open_external_link;
 
 use cloud::{CloudOllamaProvider, CloudTagsClient, HttpCloudTagsClient, OLLAMA_CLOUD_BASE_URL};
 use std::path::PathBuf;
@@ -1592,7 +1595,8 @@ pub fn run() {
             enrich_note,
             propose_synthesis,
             accept_synthesis,
-            dismiss_synthesis
+            dismiss_synthesis,
+            open_external_link
         ])
         .plugin(tauri_plugin_dialog::init())
         .run(tauri::generate_context!())

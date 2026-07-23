@@ -1,6 +1,33 @@
 :root { color: #29201d; background: #f7f3eb; font-family: Georgia, serif; }
 * { box-sizing: border-box; }
 body { margin: 0; }
+
+/* Every interactive control is keyboard reachable and shows a visible focus
+   ring it earned, not the one a mouse hover borrows. Visible focus is never
+   color alone: the ring is a high-contrast outline independent of the fill. */
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible {
+  outline: 2px solid #8f3d27;
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Reduced motion is respected without hiding transitions or state. V0 has
+   no essential animation; this neutralises any future transition and keeps
+   every state legible. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 main { max-width: 760px; margin: 0 auto; padding: 4rem 1.5rem; }
 header { border-bottom: 1px solid #cdbfb0; margin-bottom: 1.5rem; }
 h1, h2 { font-weight: 500; }
@@ -69,3 +96,43 @@ select { border: 1px solid #bcae9d; border-radius: 6px; font: inherit; padding: 
 .markdown > :last-child { margin-bottom: 0; }
 .annotation { border-left: 3px solid #cdbfb0; color: #5d4f47; margin: .6rem 0; padding-left: .7rem; }
 .over-limit { color: #b0412f; }
+
+/* Modals and the command palette sit above the workspace on a scrim. They
+   are true focus-trapping surfaces; the rest of the UI keeps its inline
+   style. */
+.modal-overlay,
+.palette-overlay {
+  align-items: flex-start;
+  background: rgba(41, 32, 29, 0.45);
+  display: flex;
+  justify-content: center;
+  inset: 0;
+  padding: 4rem 1.5rem;
+  position: fixed;
+  z-index: 50;
+}
+.modal, .palette {
+  background: #fffdf8;
+  border: 1px solid #bcae9d;
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(41, 32, 29, 0.25);
+  max-width: 32rem;
+  padding: 1.2rem;
+  width: 100%;
+}
+.palette { max-width: 28rem; }
+.palette [cmdk-root] { display: grid; gap: .6rem; }
+.palette [cmdk-input] {
+  border: 1px solid #bcae9d;
+  border-radius: 6px;
+  font: inherit;
+  padding: .6rem;
+}
+.palette [cmdk-list] { max-height: 18rem; overflow-y: auto; }
+.palette [cmdk-group-heading] { color: #5d4f47; font: 600 .7rem/1 system-ui, sans-serif; letter-spacing: .08em; padding: .4rem 0 .2rem; text-transform: uppercase; }
+.palette [cmdk-item] { border-radius: 6px; cursor: pointer; padding: .45rem .6rem; }
+.palette [cmdk-item][data-selected="true"] { background: #f1e8dc; }
+.palette [cmdk-item][aria-disabled="true"] { color: #9a8f84; cursor: default; }
+.palette [cmdk-empty] { color: #5d4f47; padding: .6rem 0; }
+/* A link Nodepad will not open reads as text, never as a disabled control. */
+.external-link-rejected { color: #5d4f47; }
