@@ -669,8 +669,10 @@ pub fn truncate_scalars(text: &str, max: usize) -> String {
 }
 
 /// Extracts a JSON object candidate from a model response, preferring
-/// fenced code blocks and falling back to outermost `{...}`.
-fn extract_json_candidate(body: &str) -> Option<String> {
+/// fenced code blocks and falling back to outermost `{...}`. Shared with
+/// the Synthesis parser: both face the same small-model habit of wrapping
+/// structured output in prose or a fence.
+pub(crate) fn extract_json_candidate(body: &str) -> Option<String> {
     if let Some(fenced) = body
         .split("```")
         .nth(1)

@@ -4,7 +4,7 @@
 -- the thinker accepts it as a thesis Note or dismisses it. Nothing here
 -- mutates a source Note, and no Relationship row is ever written for a
 -- pending Synthesis, so the Thinking Graph can render one distinctly
--- without a fake edge outliving it.
+-- without a Relationship outliving a result that may still be dismissed.
 --
 -- `pending_synthesis_sources` keeps the Note identity *and* the enrichment
 -- revision the Note carried when the Synthesis was proposed. A source that

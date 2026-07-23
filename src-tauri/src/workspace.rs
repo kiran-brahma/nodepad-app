@@ -38,6 +38,11 @@ const NOTE_TYPES: [&str; 14] = [
 ];
 /// Undo is a bounded in-memory convenience, never a durable log.
 const MAX_REVERSIBLE_COMMANDS: usize = 20;
+/// How many Synthesis texts one Workspace keeps for novelty checking. The
+/// request carries the most recent ten; the rest are kept only so a
+/// long-lived Workspace does not repeat an insight it proposed a while ago,
+/// and the history is pruned to this bound on every proposal.
+const MAX_SYNTHESIS_HISTORY: usize = 50;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,7 +90,7 @@ impl ThinkingWorkspace {
 /// uses a local Ollama host, or may use Ollama Cloud after explicit consent.
 /// Cloud AI is admitted as a durable value now so the next slice can add
 /// behavior without changing what an existing row means.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AssistancePolicy {
     Manual,
@@ -102,7 +107,7 @@ impl AssistancePolicy {
         }
     }
 
-    fn from_str(value: &str) -> Self {
+    pub(crate) fn from_str(value: &str) -> Self {
         match value {
             "local_ai" => Self::LocalAi,
             "cloud_ai" => Self::CloudAi,
@@ -335,7 +340,7 @@ pub struct PendingSynthesis {
     pub(crate) labels: Vec<String>,
     /// AI provenance: which model produced this, under which policy.
     pub(crate) model: String,
-    pub(crate) policy: String,
+    pub(crate) policy: AssistancePolicy,
     pub(crate) created_at: String,
     /// True when a source Note was edited, deleted, or moved to another
     /// Thinking Workspace since the Synthesis was proposed. A stale
@@ -1212,8 +1217,7 @@ impl WorkspaceStore {
     ) -> Result<crate::synthesis::EligibilityInput, WorkspaceError> {
         let snapshot = self.snapshot()?;
         require_workspace(&snapshot.workspaces, workspace_id)?;
-        let (organized_notes, represented_groups) =
-            organized_profile(&snapshot.notes, workspace_id);
+        let material = organized_material(&snapshot.notes, workspace_id);
         let attempt: Option<(String, i64)> = self
             .connection
             .query_row(
@@ -1225,8 +1229,9 @@ impl WorkspaceStore {
             .map_err(WorkspaceError::Storage)?;
         Ok(crate::synthesis::EligibilityInput {
             assistance_enabled,
-            organized_notes,
-            represented_groups,
+            organized_notes: material.notes,
+            represented_note_types: material.note_types,
+            represented_labels: material.labels,
             checkpoint: attempt.as_ref().map(|(_, count)| *count as usize),
             last_attempt_at: attempt.map(|(at, _)| at),
             now: now.to_owned(),
@@ -1241,7 +1246,7 @@ impl WorkspaceStore {
     /// How many Notes of this Workspace count as organized. The Enrichment
     /// Workflow records this as the checkpoint at each attempt.
     pub fn organized_note_count(&self, workspace_id: &str) -> Result<usize, WorkspaceError> {
-        Ok(organized_profile(&self.snapshot()?.notes, workspace_id).0)
+        Ok(organized_material(&self.snapshot()?.notes, workspace_id).notes)
     }
 
     /// The most recent Synthesis texts of one Workspace, newest first, for
@@ -1267,20 +1272,23 @@ impl WorkspaceStore {
             .map_err(WorkspaceError::Storage)
     }
 
-    /// Records that an attempt ran. Called for every completed attempt,
-    /// including a `found: false` one: a no-op is a successful result, and
-    /// it must move the cooldown clock and the checkpoint exactly as a
-    /// proposal does, or an unproductive Workspace would ask forever.
+    /// Records that an attempt completed. Called for every attempt that
+    /// reached a decision, including a `found: false` one: a no-op is a
+    /// successful result, and it must move the cooldown clock and the
+    /// checkpoint exactly as a proposal does, or an unproductive Workspace
+    /// would ask forever.
     pub fn record_synthesis_attempt(&mut self, workspace_id: &str) -> Result<(), WorkspaceError> {
-        let checkpoint = self.organized_note_count(workspace_id)? as i64;
-        self.connection
-            .execute(
-                "INSERT INTO synthesis_attempts (workspace_id, last_attempt_at, organized_note_checkpoint) VALUES (?1, ?2, ?3) \
-                 ON CONFLICT(workspace_id) DO UPDATE SET last_attempt_at = ?2, organized_note_checkpoint = ?3",
-                params![workspace_id, timestamp(), checkpoint],
-            )
-            .map_err(WorkspaceError::Storage)?;
-        Ok(())
+        let checkpoint = self.organized_note_count(workspace_id)?;
+        write_synthesis_attempt(&self.connection, workspace_id, &timestamp(), Some(checkpoint))
+    }
+
+    /// Records that an attempt failed before it could decide anything — a
+    /// malformed body, an unreachable provider, a stale source. Only the
+    /// cooldown clock moves: a failure must not be retried on the next
+    /// keystroke, but it must not consume the thinker's next five organized
+    /// Notes either, so the checkpoint stays where it was.
+    pub fn record_synthesis_cooldown(&mut self, workspace_id: &str) -> Result<(), WorkspaceError> {
+        write_synthesis_attempt(&self.connection, workspace_id, &timestamp(), None)
     }
 
     /// Stores one valid result as a pending Synthesis, records the attempt,
@@ -1293,28 +1301,27 @@ impl WorkspaceStore {
     pub fn store_pending_synthesis(
         &mut self,
         workspace_id: &str,
-        text: &str,
-        sources: &[(String, u64)],
-        labels: &[String],
+        result: &crate::synthesis::ParsedSynthesis,
+        sources: &[crate::synthesis::SourceRevision],
         model: &str,
-        policy: &str,
+        policy: AssistancePolicy,
     ) -> Result<WorkspaceSnapshot, WorkspaceError> {
         let snapshot = self.snapshot()?;
         require_workspace(&snapshot.workspaces, workspace_id)?;
         // Every source must still be a Note of this Workspace at the
         // revision the request captured, or the result describes material
         // the thinker has already moved on from.
-        for (note_id, revision) in sources {
+        for source in sources {
             let matches = snapshot.notes.iter().any(|note| {
-                &note.id == note_id
+                note.id == source.note_id
                     && note.workspace_id == workspace_id
-                    && note.enrichment_revision == *revision
+                    && note.enrichment_revision == source.revision
             });
             if !matches {
                 return Err(WorkspaceError::StaleSynthesis);
             }
         }
-        let checkpoint = organized_profile(&snapshot.notes, workspace_id).0 as i64;
+        let checkpoint = organized_material(&snapshot.notes, workspace_id).notes;
         let synthesis_id = id();
         let now = timestamp();
         let transaction = self
@@ -1324,18 +1331,18 @@ impl WorkspaceStore {
         transaction
             .execute(
                 "INSERT INTO pending_syntheses (id, workspace_id, text, model, policy, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![synthesis_id, workspace_id, text, model, policy, now],
+                params![synthesis_id, workspace_id, result.text, model, policy.as_str(), now],
             )
             .map_err(WorkspaceError::Storage)?;
-        for (position, (note_id, revision)) in sources.iter().enumerate() {
+        for (position, source) in sources.iter().enumerate() {
             transaction
                 .execute(
                     "INSERT INTO pending_synthesis_sources (synthesis_id, note_id, note_revision, position) VALUES (?1, ?2, ?3, ?4)",
-                    params![synthesis_id, note_id, *revision as i64, position as i64],
+                    params![synthesis_id, source.note_id, source.revision as i64, position as i64],
                 )
                 .map_err(WorkspaceError::Storage)?;
         }
-        for (position, label) in labels.iter().enumerate() {
+        for (position, label) in result.labels.iter().enumerate() {
             transaction
                 .execute(
                     "INSERT INTO pending_synthesis_labels (synthesis_id, name, position) VALUES (?1, ?2, ?3)",
@@ -1346,16 +1353,11 @@ impl WorkspaceStore {
         transaction
             .execute(
                 "INSERT INTO synthesis_history (id, workspace_id, text, created_at) VALUES (?1, ?2, ?3, ?4)",
-                params![id(), workspace_id, text, now],
+                params![id(), workspace_id, result.text, now],
             )
             .map_err(WorkspaceError::Storage)?;
-        transaction
-            .execute(
-                "INSERT INTO synthesis_attempts (workspace_id, last_attempt_at, organized_note_checkpoint) VALUES (?1, ?2, ?3) \
-                 ON CONFLICT(workspace_id) DO UPDATE SET last_attempt_at = ?2, organized_note_checkpoint = ?3",
-                params![workspace_id, now, checkpoint],
-            )
-            .map_err(WorkspaceError::Storage)?;
+        prune_synthesis_history(&transaction, workspace_id)?;
+        write_synthesis_attempt(&transaction, workspace_id, &now, Some(checkpoint))?;
         transaction.commit().map_err(WorkspaceError::Storage)?;
         self.snapshot()
     }
@@ -2094,27 +2096,83 @@ fn sort_notes(notes: &mut [Note]) {
     });
 }
 
-/// How much organized material one Workspace holds: how many Notes carry a
-/// non-default Note Type or at least one Label, and how many distinct Note
-/// Types and Label meanings those Notes represent between them.
+/// How much organized material one Thinking Workspace holds. A Note counts
+/// as organized when it carries a non-default Note Type or at least one
+/// Label, whoever assigned it: a thinker who classifies by hand reaches the
+/// Synthesis threshold exactly as one who lets Note Organization do it.
 ///
-/// Organization is counted whoever performed it. A thinker who classifies
-/// by hand in a Local AI Workspace reaches the Synthesis threshold exactly
-/// as one who lets Note Organization do it.
-fn organized_profile(notes: &[Note], workspace_id: &str) -> (usize, usize) {
+/// The two diversity counts stay separate, because the rule is "at least two
+/// represented Note Types **or** Labels" and neither axis may borrow the
+/// other's count to reach the threshold.
+struct OrganizedMaterial {
+    notes: usize,
+    note_types: usize,
+    labels: usize,
+}
+
+fn organized_material(notes: &[Note], workspace_id: &str) -> OrganizedMaterial {
     let organized: Vec<&Note> = notes
         .iter()
         .filter(|note| note.workspace_id == workspace_id)
         .filter(|note| note.note_type != DEFAULT_NOTE_TYPE || !note.labels.is_empty())
         .collect();
-    let mut groups: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut note_types: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut labels: std::collections::HashSet<String> = std::collections::HashSet::new();
     for note in &organized {
-        groups.insert(format!("type:{}", note.note_type));
+        note_types.insert(note.note_type.as_str());
         for label in &note.labels {
-            groups.insert(format!("label:{}", label.name.to_lowercase()));
+            labels.insert(label.name.to_lowercase());
         }
     }
-    (organized.len(), groups.len())
+    OrganizedMaterial {
+        notes: organized.len(),
+        note_types: note_types.len(),
+        labels: labels.len(),
+    }
+}
+
+/// Moves the per-Workspace attempt row. `checkpoint` present advances the
+/// five-new-Notes checkpoint as well as the cooldown clock; `None` moves
+/// only the clock, which is what a failed attempt earns: it must not be
+/// retried immediately, but it must not consume the thinker's next five
+/// organized Notes either.
+fn write_synthesis_attempt(
+    connection: &Connection,
+    workspace_id: &str,
+    at: &str,
+    checkpoint: Option<usize>,
+) -> Result<(), WorkspaceError> {
+    match checkpoint {
+        Some(checkpoint) => connection.execute(
+            "INSERT INTO synthesis_attempts (workspace_id, last_attempt_at, organized_note_checkpoint) VALUES (?1, ?2, ?3) \
+             ON CONFLICT(workspace_id) DO UPDATE SET last_attempt_at = ?2, organized_note_checkpoint = ?3",
+            params![workspace_id, at, checkpoint as i64],
+        ),
+        None => connection.execute(
+            "INSERT INTO synthesis_attempts (workspace_id, last_attempt_at, organized_note_checkpoint) VALUES (?1, ?2, 0) \
+             ON CONFLICT(workspace_id) DO UPDATE SET last_attempt_at = ?2",
+            params![workspace_id, at],
+        ),
+    }
+    .map(|_| ())
+    .map_err(WorkspaceError::Storage)
+}
+
+/// Keeps the novelty history bounded in storage, not only on read: a
+/// Workspace that has proposed Syntheses for years still keeps a handful of
+/// rows, and the request only ever carries the most recent ones anyway.
+fn prune_synthesis_history(
+    connection: &Connection,
+    workspace_id: &str,
+) -> Result<(), WorkspaceError> {
+    connection
+        .execute(
+            "DELETE FROM synthesis_history WHERE workspace_id = ?1 AND id NOT IN \
+             (SELECT id FROM synthesis_history WHERE workspace_id = ?1 ORDER BY created_at DESC, id DESC LIMIT ?2)",
+            params![workspace_id, MAX_SYNTHESIS_HISTORY as i64],
+        )
+        .map(|_| ())
+        .map_err(WorkspaceError::Storage)
 }
 
 fn require_workspace(
@@ -2443,7 +2501,7 @@ fn read_pending_syntheses(
             source_note_ids: sources.into_iter().map(|(note_id, _)| note_id).collect(),
             labels,
             model,
-            policy,
+            policy: AssistancePolicy::from_str(&policy),
             created_at,
             stale,
         });
@@ -4751,7 +4809,10 @@ mod tests {
         (workspace_id, note_ids)
     }
 
-    fn sources_of(store: &WorkspaceStore, note_ids: &[&String]) -> Vec<(String, u64)> {
+    fn sources_of(
+        store: &WorkspaceStore,
+        note_ids: &[&String],
+    ) -> Vec<crate::synthesis::SourceRevision> {
         let snapshot = store.snapshot().unwrap();
         note_ids
             .iter()
@@ -4761,9 +4822,20 @@ mod tests {
                     .iter()
                     .find(|note| &&note.id == note_id)
                     .expect("the source Note is committed");
-                (note.id.clone(), note.enrichment_revision)
+                crate::synthesis::SourceRevision {
+                    note_id: note.id.clone(),
+                    revision: note.enrichment_revision,
+                }
             })
             .collect()
+    }
+
+    fn parsed(text: &str, labels: &[&str]) -> crate::synthesis::ParsedSynthesis {
+        crate::synthesis::ParsedSynthesis {
+            text: text.to_owned(),
+            source_note_ids: vec![],
+            labels: labels.iter().map(|label| (*label).to_owned()).collect(),
+        }
     }
 
     const SYNTHESIS_TEXT: &str = "Reliability and speed pull the same team in different directions, so every deadline quietly spends a maintenance budget nobody agreed to reduce.";
@@ -4778,11 +4850,10 @@ mod tests {
             store
                 .store_pending_synthesis(
                     &workspace_id,
-                    SYNTHESIS_TEXT,
+                    &parsed(SYNTHESIS_TEXT, &["delivery tradeoffs"]),
                     &sources,
-                    &["delivery tradeoffs".to_owned()],
                     "phi3:latest",
-                    "local_ai",
+                    AssistancePolicy::LocalAi,
                 )
                 .unwrap();
             (workspace_id, note_ids[0].clone(), note_ids[1].clone())
@@ -4818,7 +4889,13 @@ mod tests {
         let (workspace_id, note_ids) = organized_workspace(&mut store);
         let sources = sources_of(&store, &[&note_ids[0], &note_ids[1]]);
         let snapshot = store
-            .store_pending_synthesis(&workspace_id, SYNTHESIS_TEXT, &sources, &[], "phi3", "local_ai")
+            .store_pending_synthesis(
+                &workspace_id,
+                &parsed(SYNTHESIS_TEXT, &[]),
+                &sources,
+                "phi3",
+                AssistancePolicy::LocalAi,
+            )
             .unwrap();
         let synthesis_id = snapshot.pending_syntheses[0].id.clone();
 
@@ -4852,7 +4929,13 @@ mod tests {
         let (workspace_id, note_ids) = organized_workspace(&mut store);
         let sources = sources_of(&store, &[&note_ids[0], &note_ids[1]]);
         store
-            .store_pending_synthesis(&workspace_id, SYNTHESIS_TEXT, &sources, &[], "phi3", "local_ai")
+            .store_pending_synthesis(
+                &workspace_id,
+                &parsed(SYNTHESIS_TEXT, &[]),
+                &sources,
+                "phi3",
+                AssistancePolicy::LocalAi,
+            )
             .unwrap();
         store.delete_note(&note_ids[0]).unwrap();
         let snapshot = store.snapshot().unwrap();
@@ -4863,7 +4946,16 @@ mod tests {
         let other = store.create_workspace("Elsewhere").unwrap().active_workspace_id;
         let fresh = sources_of(&store, &[&note_ids[1], &note_ids[2]]);
         let snapshot = store
-            .store_pending_synthesis(&workspace_id, "Another provisional insight entirely, long enough to be admissible under the word bound that the parser enforces upstream.", &fresh, &[], "phi3", "local_ai")
+            .store_pending_synthesis(
+                &workspace_id,
+                &parsed(
+                    "Another provisional insight entirely, long enough to be admissible under the word bound that the parser enforces upstream.",
+                    &[],
+                ),
+                &fresh,
+                "phi3",
+                AssistancePolicy::LocalAi,
+            )
             .unwrap();
         let moved_case = snapshot.pending_syntheses[1].id.clone();
         store.move_note(&note_ids[1], &other).unwrap();
@@ -4886,11 +4978,10 @@ mod tests {
         let snapshot = store
             .store_pending_synthesis(
                 &workspace_id,
-                SYNTHESIS_TEXT,
+                &parsed(SYNTHESIS_TEXT, &["delivery tradeoffs"]),
                 &sources,
-                &["delivery tradeoffs".to_owned()],
                 "phi3",
-                "local_ai",
+                AssistancePolicy::LocalAi,
             )
             .unwrap();
         let synthesis_id = snapshot.pending_syntheses[0].id.clone();
@@ -4940,7 +5031,13 @@ mod tests {
         let (workspace_id, note_ids) = organized_workspace(&mut store);
         let sources = sources_of(&store, &[&note_ids[0], &note_ids[1]]);
         let snapshot = store
-            .store_pending_synthesis(&workspace_id, SYNTHESIS_TEXT, &sources, &[], "phi3", "local_ai")
+            .store_pending_synthesis(
+                &workspace_id,
+                &parsed(SYNTHESIS_TEXT, &[]),
+                &sources,
+                "phi3",
+                AssistancePolicy::LocalAi,
+            )
             .unwrap();
         let synthesis_id = snapshot.pending_syntheses[0].id.clone();
 
@@ -4969,7 +5066,10 @@ mod tests {
             .synthesis_eligibility_input(&workspace_id, true, now)
             .unwrap();
         assert_eq!(input.organized_notes, 6);
-        assert!(input.represented_groups >= 2, "claim, question, idea, reflection");
+        assert!(
+            input.represented_note_types >= 2,
+            "claim, question, idea, and reflection are all represented"
+        );
         assert_eq!(input.checkpoint, None);
         assert_eq!(input.pending_syntheses, 0);
         assert_eq!(
@@ -5014,11 +5114,10 @@ mod tests {
         assert!(matches!(
             store.store_pending_synthesis(
                 &workspace_id,
-                SYNTHESIS_TEXT,
+                &parsed(SYNTHESIS_TEXT, &[]),
                 &sources,
-                &[],
                 "phi3",
-                "local_ai"
+                AssistancePolicy::LocalAi,
             ),
             Err(WorkspaceError::StaleSynthesis)
         ));
@@ -5032,13 +5131,120 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_attempt_moves_the_cooldown_but_never_the_checkpoint() {
+        let path = temporary_path();
+        let mut store = WorkspaceStore::open(&path).unwrap();
+        let (workspace_id, _) = organized_workspace(&mut store);
+        let now = "2026-07-23T10:00:00.000000Z";
+
+        // A malformed body or an unreachable provider earns the quiet
+        // period, so the next keystroke does not ask again...
+        store.record_synthesis_cooldown(&workspace_id).unwrap();
+        let input = store
+            .synthesis_eligibility_input(&workspace_id, true, now)
+            .unwrap();
+        assert!(input.last_attempt_at.is_some());
+        // ...but it does not consume the next five organized Notes.
+        assert_eq!(input.checkpoint, Some(0));
+
+        // A completed attempt afterwards still sets the real checkpoint,
+        // and a later failure leaves that checkpoint alone.
+        store.record_synthesis_attempt(&workspace_id).unwrap();
+        store.record_synthesis_cooldown(&workspace_id).unwrap();
+        assert_eq!(
+            store
+                .synthesis_eligibility_input(&workspace_id, true, now)
+                .unwrap()
+                .checkpoint,
+            Some(6)
+        );
+        remove_database(&path);
+    }
+
+    #[test]
+    fn one_note_type_and_one_label_is_not_diversity() {
+        let path = temporary_path();
+        let mut store = WorkspaceStore::open(&path).unwrap();
+        let workspace_id = store.snapshot().unwrap().active_workspace_id;
+        for index in 0..6 {
+            let markdown = format!("An undifferentiated thought {index}");
+            let snapshot = store.create_note(&workspace_id, &markdown).unwrap();
+            let note_id = snapshot
+                .notes
+                .iter()
+                .find(|note| note.markdown == markdown)
+                .expect("the Note is committed")
+                .id
+                .clone();
+            // Every Note keeps the default Note Type and shares one Label.
+            store.attach_label(&note_id, "everything").unwrap();
+        }
+        let input = store
+            .synthesis_eligibility_input(&workspace_id, true, "2026-07-23T10:00:00.000000Z")
+            .unwrap();
+        assert_eq!(input.organized_notes, 6);
+        assert_eq!(input.represented_note_types, 1);
+        assert_eq!(input.represented_labels, 1);
+        assert_eq!(
+            crate::synthesis::evaluate_eligibility(&input),
+            crate::synthesis::Eligibility::Ineligible {
+                reason: crate::synthesis::IneligibleReason::TooLittleDiversity
+            }
+        );
+        remove_database(&path);
+    }
+
+    #[test]
+    fn the_novelty_history_stays_bounded_in_storage() {
+        let path = temporary_path();
+        let mut store = WorkspaceStore::open(&path).unwrap();
+        let (workspace_id, note_ids) = organized_workspace(&mut store);
+        for index in 0..(MAX_SYNTHESIS_HISTORY + 5) {
+            let sources = sources_of(&store, &[&note_ids[0], &note_ids[1]]);
+            let snapshot = store
+                .store_pending_synthesis(
+                    &workspace_id,
+                    &parsed(&format!("A provisional insight numbered {index}"), &[]),
+                    &sources,
+                    "phi3",
+                    AssistancePolicy::LocalAi,
+                )
+                .unwrap();
+            // Keep the pending list from growing; dismissing leaves the text.
+            let pending_id = snapshot.pending_syntheses[0].id.clone();
+            store.dismiss_synthesis(&pending_id).unwrap();
+        }
+        let rows: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM synthesis_history WHERE workspace_id = ?1",
+                [&workspace_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows as usize, MAX_SYNTHESIS_HISTORY);
+        // And the request only ever carries the most recent ten.
+        assert_eq!(
+            store.previous_synthesis_texts(&workspace_id).unwrap().len(),
+            crate::synthesis::MAX_PREVIOUS_SYNTHESES
+        );
+        remove_database(&path);
+    }
+
+    #[test]
     fn deleting_a_workspace_takes_its_pending_syntheses_with_it() {
         let path = temporary_path();
         let mut store = WorkspaceStore::open(&path).unwrap();
         let (workspace_id, note_ids) = organized_workspace(&mut store);
         let sources = sources_of(&store, &[&note_ids[0], &note_ids[1]]);
         store
-            .store_pending_synthesis(&workspace_id, SYNTHESIS_TEXT, &sources, &[], "phi3", "local_ai")
+            .store_pending_synthesis(
+                &workspace_id,
+                &parsed(SYNTHESIS_TEXT, &[]),
+                &sources,
+                "phi3",
+                AssistancePolicy::LocalAi,
+            )
             .unwrap();
         store.create_workspace("Somewhere else").unwrap();
         let snapshot = store.delete_workspace(&workspace_id).unwrap();

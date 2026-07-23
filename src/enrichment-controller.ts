@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import type { WorkspaceSnapshot } from "./workspace-client"
+import { failureMessage, useRequestGeneration } from "./request-generation"
+import { assistanceEnabled, type WorkspaceSnapshot } from "./workspace-client"
 import {
   enrichNote,
   type EnrichmentCommandOutcome,
@@ -74,7 +75,7 @@ export function useEnrichmentController(options: ScheduleOptions): EnrichmentCon
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const activeNoteIdRef = useRef<string | null>(null)
-  const generationRef = useRef(0)
+  const attempts = useRequestGeneration()
 
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -114,25 +115,20 @@ export function useEnrichmentController(options: ScheduleOptions): EnrichmentCon
         setStatus({ kind: "idle" })
         return
       }
-      generationRef.current += 1
-      const generation = generationRef.current
+      const generation = attempts.begin()
       setStatus({ kind: "in_flight", token })
       let outcome: EnrichmentCommandOutcome
       try {
         outcome = await enrichNote(workspaceId, noteId, force)
       } catch (error) {
-        if (generationRef.current !== generation) return
-        setStatus({
-          kind: "failed",
-          reason: "unavailable",
-          message: error instanceof Error ? error.message : String(error),
-        })
+        if (!attempts.isCurrent(generation)) return
+        setStatus({ kind: "failed", reason: "unavailable", message: failureMessage(error) })
         return
       }
-      if (generationRef.current !== generation) return
+      if (!attempts.isCurrent(generation)) return
       applyOutcome(outcome, setStatus)
     },
-    [buildToken, workspaceId],
+    [attempts, buildToken, workspaceId],
   )
 
   const schedule = useCallback(
@@ -193,15 +189,15 @@ export function useEnrichmentController(options: ScheduleOptions): EnrichmentCon
 
   const cancel = useCallback(() => {
     clearTimer()
-    generationRef.current += 1
+    attempts.supersede()
     setStatus({ kind: "cancelled" })
-  }, [clearTimer])
+  }, [attempts, clearTimer])
 
   const clear = useCallback(() => {
     clearTimer()
-    generationRef.current += 1
+    attempts.supersede()
     setStatus({ kind: "idle" })
-  }, [clearTimer])
+  }, [attempts, clearTimer])
 
   useEffect(
     () => () => {
@@ -224,9 +220,7 @@ export function useEnrichmentController(options: ScheduleOptions): EnrichmentCon
 }
 
 function hasEligiblePolicy(snapshot: WorkspaceSnapshot, workspaceId: string): boolean {
-  const workspace = snapshot.workspaces.find((candidate) => candidate.id === workspaceId)
-  if (!workspace) return false
-  return workspace.assistancePolicy === "local_ai" || workspace.assistancePolicy === "cloud_ai"
+  return assistanceEnabled(snapshot.workspaces.find((candidate) => candidate.id === workspaceId))
 }
 
 function applyOutcome(

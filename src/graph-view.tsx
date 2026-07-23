@@ -63,8 +63,8 @@ function GraphNodeMark({
   )
 }
 
-/** A provisional mark is drawn smaller than any Note node, so it never
- *  reads as a thought the Workspace already holds. */
+/** A provisional mark is drawn smaller than any Note, so it never reads as
+ *  a thought the Thinking Workspace already holds. */
 const SYNTHESIS_RADIUS = 8
 
 interface ProvisionalMark {
@@ -79,7 +79,7 @@ interface ProvisionalMark {
  * Places each pending Synthesis at the centre of the Notes it names. The
  * arrangement is derived on every render from the same layout the Notes
  * use; nothing is stored, so dismissing a Synthesis simply stops drawing it.
- * A Synthesis whose sources are no longer on the canvas is not drawn at all.
+ * A Synthesis whose sources are no longer drawn is not drawn either.
  */
 function provisionalMarks(
   pending: PendingSynthesis[],
@@ -117,7 +117,7 @@ export function GraphView({
   graph,
   focus,
   card,
-  pendingSyntheses = [],
+  pendingSyntheses,
 }: {
   graph: ThinkingGraph
   focus: NoteFocus
@@ -125,11 +125,11 @@ export function GraphView({
   /**
    * The undecided Syntheses of this Workspace. Each is drawn as a
    * provisional mark sitting among the Notes it claims to rest on, with
-   * dashed leaders to them. Nothing about it is durable: no node exists in
+   * dashed leaders to them. Nothing about it is durable: it is not a Note in
    * the Thinking Graph, and no Relationship is committed for a Synthesis
    * that may still be dismissed.
    */
-  pendingSyntheses?: PendingSynthesis[]
+  pendingSyntheses: PendingSynthesis[]
 }) {
   const layout = useMemo(() => graphLayout(graph), [graph])
   const provisional = useMemo(

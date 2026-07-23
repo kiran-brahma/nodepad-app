@@ -65,19 +65,19 @@ afterEach(cleanup)
 describe("a pending Synthesis in the graph", () => {
   it("is drawn distinctly, without a Relationship or a Note node", () => {
     draw([pending])
-    const canvas = screen.getByRole("group", { name: "Thinking Graph" })
+    const drawn = screen.getByRole("group", { name: "Thinking Graph" })
     // One Note node per Note, and no more: a Synthesis is not a Note.
     expect(screen.getAllByRole("button")).toHaveLength(notes.length)
     const mark = screen.getByRole("img", { name: /Pending Synthesis/ })
     expect(mark.getAttribute("class")).toContain("graph-synthesis-mark")
     // Its leaders are dashed, so they never read as committed Relationships.
-    const leaders = canvas.querySelectorAll("line.graph-synthesis-leader")
+    const leaders = drawn.querySelectorAll("line.graph-synthesis-leader")
     expect(leaders).toHaveLength(pending.sourceNoteIds.length)
     for (const leader of leaders) {
       expect(leader.getAttribute("stroke-dasharray")).toBeTruthy()
     }
     // And the committed Thinking Graph is still empty.
-    expect(canvas.querySelectorAll("line.graph-link")).toHaveLength(0)
+    expect(drawn.querySelectorAll("line.graph-link")).toHaveLength(0)
   })
 
   it("disappears the moment it is no longer pending", () => {
@@ -90,7 +90,7 @@ describe("a pending Synthesis in the graph", () => {
     ).toHaveLength(0)
   })
 
-  it("is not drawn when the Notes it names have left the canvas", () => {
+  it("is not drawn when the Notes it names are no longer drawn", () => {
     draw([{ ...pending, sourceNoteIds: ["gone", "also-gone"] }])
     expect(screen.queryByRole("img", { name: /Pending Synthesis/ })).toBeNull()
   })

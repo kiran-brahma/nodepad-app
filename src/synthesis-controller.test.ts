@@ -12,6 +12,10 @@ const proposeSynthesis = vi.fn()
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) => {
     if (command === "propose_synthesis") return proposeSynthesis(args)
+    if (command === "accept_synthesis" || command === "dismiss_synthesis") {
+      commands.push({ command, args })
+      return Promise.resolve({ status: "committed", snapshot })
+    }
     return Promise.reject(new Error(`unknown command ${command}`))
   },
 }))
@@ -48,13 +52,17 @@ const pending: PendingSynthesis = {
 }
 
 let received: WorkspaceSnapshot[] = []
+let submitted: unknown[] = []
+let commands: { command: string; args?: Record<string, unknown> }[] = []
 
 function controller(enabled = true, workspaceId = "w") {
   return renderHook(() =>
     useSynthesisController({
       workspaceId,
+      snapshot,
       enabled,
       onSnapshot: (next) => received.push(next),
+      submit: (outcome) => void outcome.then((value) => submitted.push(value)),
     }),
   )
 }
@@ -72,6 +80,8 @@ beforeEach(() => {
   vi.useFakeTimers()
   proposeSynthesis.mockReset()
   received = []
+  submitted = []
+  commands = []
 })
 
 afterEach(() => {
@@ -99,6 +109,20 @@ describe("the Synthesis controller", () => {
     await settle()
     expect(proposeSynthesis).toHaveBeenCalledTimes(1)
     expect(proposeSynthesis).toHaveBeenCalledWith({ workspaceId: "w" })
+  })
+
+  it("reads the pending Syntheses of its own Workspace and no other", () => {
+    const elsewhere: PendingSynthesis = { ...pending, id: "s2", workspaceId: "other" }
+    const { result } = renderHook(() =>
+      useSynthesisController({
+        workspaceId: "w",
+        snapshot: { ...snapshot, pendingSyntheses: [pending, elsewhere] },
+        enabled: true,
+        onSnapshot: (next) => received.push(next),
+        submit: (outcome) => void outcome.then((value) => submitted.push(value)),
+      }),
+    )
+    expect(result.current.pending).toEqual([pending])
   })
 
   it("reports a proposed Synthesis and forwards the committed snapshot", async () => {
@@ -186,14 +210,34 @@ describe("the Synthesis controller", () => {
     expect(received).toEqual([snapshot])
   })
 
+  it("accepts and dismisses through the one command path, and never on its own", async () => {
+    const { result } = controller()
+    expect(commands).toEqual([])
+    await act(async () => {
+      result.current.accept("s1")
+      await Promise.resolve()
+    })
+    await act(async () => {
+      result.current.dismiss("s2")
+      await Promise.resolve()
+    })
+    expect(commands).toEqual([
+      { command: "accept_synthesis", args: { synthesisId: "s1" } },
+      { command: "dismiss_synthesis", args: { synthesisId: "s2" } },
+    ])
+    expect(submitted).toHaveLength(2)
+  })
+
   it("abandons a scheduled attempt when the Workspace changes", async () => {
     proposeSynthesis.mockResolvedValue({ status: "no_insight", snapshot })
     const { result, rerender } = renderHook(
       ({ workspaceId }: { workspaceId: string }) =>
         useSynthesisController({
           workspaceId,
+          snapshot,
           enabled: true,
           onSnapshot: (next) => received.push(next),
+          submit: (outcome) => void outcome.then((value) => submitted.push(value)),
         }),
       { initialProps: { workspaceId: "w" } },
     )
@@ -202,15 +246,5 @@ describe("the Synthesis controller", () => {
     await settle()
     expect(proposeSynthesis).not.toHaveBeenCalled()
     expect(result.current.status).toEqual<SynthesisStatus>({ kind: "idle" })
-  })
-
-  it("runs immediately when asked to skip the local quiet period", async () => {
-    proposeSynthesis.mockResolvedValue({ status: "no_insight", snapshot })
-    const { result } = controller()
-    await act(async () => {
-      result.current.attemptNow()
-      await Promise.resolve()
-    })
-    expect(proposeSynthesis).toHaveBeenCalledTimes(1)
   })
 })

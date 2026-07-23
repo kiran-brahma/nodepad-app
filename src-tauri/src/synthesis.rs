@@ -23,13 +23,18 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::enrichment::{truncate_scalars, CandidateView, EnrichmentFailureCode, MAX_CANDIDATE_SCALARS, MAX_REQUEST_SCALARS};
-use crate::workspace::Note;
+use crate::enrichment::{
+    extract_json_candidate, truncate_scalars, CandidateView, EnrichmentFailureCode,
+    MAX_CANDIDATE_SCALARS, MAX_REQUEST_SCALARS,
+};
+use crate::workspace::{AssistancePolicy, Note};
 
 /// Eligibility bounds from the V0 spec. Nothing else picks a number.
 pub const MIN_ORGANIZED_NOTES: usize = 5;
-/// At least two distinct Note Types or Labels must be represented among the
-/// organized Notes, so a Workspace of one undifferentiated pile never asks.
+/// At least this many distinct Note Types, or this many distinct Labels,
+/// must be represented among the organized Notes, so a Workspace holding one
+/// undifferentiated pile never asks. The two are counted separately: five
+/// Notes sharing one Note Type and one Label represent no diversity at all.
 pub const MIN_REPRESENTED_GROUPS: usize = 2;
 /// How many further organized Notes must appear before the next attempt.
 pub const MIN_NEW_NOTES_SINCE_ATTEMPT: usize = 5;
@@ -136,8 +141,10 @@ pub struct EligibilityInput {
     /// Notes that carry a non-default Note Type or at least one Label,
     /// whoever assigned it. An unorganized pile is not yet material.
     pub organized_notes: usize,
-    /// Distinct Note Types plus distinct Labels represented among them.
-    pub represented_groups: usize,
+    /// Distinct Note Types represented among the organized Notes.
+    pub represented_note_types: usize,
+    /// Distinct Label meanings represented among the organized Notes.
+    pub represented_labels: usize,
     /// The organized-Note count recorded at the previous attempt, if any.
     pub checkpoint: Option<usize>,
     /// When the previous attempt ran, if any. RFC 3339.
@@ -170,7 +177,12 @@ pub fn evaluate_eligibility(input: &EligibilityInput) -> Eligibility {
     if input.organized_notes < MIN_ORGANIZED_NOTES {
         return ineligible(IneligibleReason::TooFewOrganizedNotes);
     }
-    if input.represented_groups < MIN_REPRESENTED_GROUPS {
+    // "At least two represented Note Types **or** Labels": either axis on
+    // its own satisfies the rule, and neither is allowed to borrow the
+    // other's count to reach the threshold.
+    if input.represented_note_types < MIN_REPRESENTED_GROUPS
+        && input.represented_labels < MIN_REPRESENTED_GROUPS
+    {
         return ineligible(IneligibleReason::TooLittleDiversity);
     }
     if let Some(checkpoint) = input.checkpoint {
@@ -223,7 +235,7 @@ pub struct SourceRevision {
 #[serde(rename_all = "camelCase")]
 pub struct SynthesisRequestToken {
     pub workspace_id: String,
-    pub policy: String,
+    pub policy: AssistancePolicy,
     pub endpoint: String,
     pub model: String,
     /// Every candidate Note and the revision it carried. The durable layer
@@ -595,26 +607,6 @@ fn string_array(value: Option<&Value>) -> Result<Vec<String>, String> {
         .collect()
 }
 
-/// Extracts a JSON object candidate from a model response, preferring
-/// fenced code blocks and falling back to the outermost `{...}`.
-fn extract_json_candidate(body: &str) -> Option<String> {
-    if let Some(fenced) = body
-        .split("```")
-        .nth(1)
-        .map(|block| block.trim_start_matches("json").trim().to_owned())
-    {
-        if fenced.starts_with('{') {
-            return Some(fenced);
-        }
-    }
-    let start = body.find('{')?;
-    let end = body.rfind('}')?;
-    if end <= start {
-        return None;
-    }
-    Some(body[start..=end].to_owned())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -631,7 +623,7 @@ mod tests {
     fn token() -> SynthesisRequestToken {
         SynthesisRequestToken {
             workspace_id: "w".to_owned(),
-            policy: "local_ai".to_owned(),
+            policy: AssistancePolicy::LocalAi,
             endpoint: "http://localhost:11434".to_owned(),
             model: "phi3:latest".to_owned(),
             sources: vec![],
@@ -642,7 +634,8 @@ mod tests {
         EligibilityInput {
             assistance_enabled: true,
             organized_notes: 5,
-            represented_groups: 2,
+            represented_note_types: 2,
+            represented_labels: 0,
             checkpoint: None,
             last_attempt_at: None,
             now: "2026-07-23T10:00:00Z".to_owned(),
@@ -753,16 +746,37 @@ Before returning, verify the insight is absent from every individual source, two
     }
 
     #[test]
-    fn eligibility_refuses_a_single_represented_group() {
-        let input = EligibilityInput {
-            represented_groups: 1,
+    fn eligibility_refuses_one_note_type_and_one_label() {
+        // The failing shape the rule exists for: five organized Notes that
+        // all share one Note Type and one Label. Counting the two axes
+        // together would let this through on a total of two.
+        let undifferentiated = EligibilityInput {
+            represented_note_types: 1,
+            represented_labels: 1,
             ..eligible_input()
         };
         assert_eq!(
-            evaluate_eligibility(&input),
+            evaluate_eligibility(&undifferentiated),
             Eligibility::Ineligible {
                 reason: IneligibleReason::TooLittleDiversity
             }
+        );
+        // Either axis satisfies the rule on its own.
+        assert_eq!(
+            evaluate_eligibility(&EligibilityInput {
+                represented_note_types: 2,
+                represented_labels: 0,
+                ..eligible_input()
+            }),
+            Eligibility::Eligible
+        );
+        assert_eq!(
+            evaluate_eligibility(&EligibilityInput {
+                represented_note_types: 1,
+                represented_labels: 2,
+                ..eligible_input()
+            }),
+            Eligibility::Eligible
         );
     }
 

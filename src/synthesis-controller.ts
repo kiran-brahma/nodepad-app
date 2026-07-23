@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { failureMessage, useRequestGeneration } from "./request-generation"
 import type { PendingSynthesis, WorkspaceSnapshot } from "./workspace-client"
 import type { EnrichmentFailureCode } from "./enrichment-contracts"
+import type { WorkspaceOutcome } from "./workspace-client"
 import {
+  acceptSynthesis,
+  dismissSynthesis,
   proposeSynthesis,
   type IneligibleReason,
   type SynthesisCommandOutcome,
@@ -32,17 +36,25 @@ export type SynthesisStatus =
 
 export interface SynthesisController {
   status: SynthesisStatus
+  /** The undecided Syntheses of this Workspace, read from committed state.
+   *  One place answers "what is waiting on the thinker here", so the panel
+   *  and the graph can never disagree about it. */
+  pending: PendingSynthesis[]
   /** Schedules an attempt for the active Workspace. Repeated calls collapse
    *  into one; a Manual Workspace never schedules anything. */
   schedule: () => void
-  /** Runs an attempt now, skipping the local quiet period. The durable
-   *  eligibility rules still apply and may refuse it. */
-  attemptNow: () => void
-  clear: () => void
+  /** Accepts one pending Synthesis as a fresh thesis Note. Only the thinker
+   *  ever calls this; nothing accepts a Synthesis on their behalf. */
+  accept: (synthesisId: string) => void
+  /** Dismisses one pending Synthesis, keeping only its text for novelty. */
+  dismiss: (synthesisId: string) => void
 }
 
 interface SynthesisOptions {
   workspaceId: string
+  /** The most recent committed snapshot, which is where pending Syntheses
+   *  are read from. */
+  snapshot: WorkspaceSnapshot | null
   /** Whether the Workspace's Assistance Policy permits an AI call. False
    *  suppresses the controller entirely, so a Manual Workspace never
    *  requests a Synthesis. */
@@ -50,15 +62,20 @@ interface SynthesisOptions {
   /** Receives the durable snapshot every attempt returns, so the rest of
    *  the app renders committed state rather than the controller's copy. */
   onSnapshot: (snapshot: WorkspaceSnapshot) => void
+  /** The one path a command takes into the view. Accept and dismiss are
+   *  ordinary Workspace commits and travel it like any other. */
+  submit: (pending: Promise<WorkspaceOutcome>) => unknown
 }
 
 export function useSynthesisController(options: SynthesisOptions): SynthesisController {
-  const { workspaceId, enabled, onSnapshot } = options
+  const { workspaceId, snapshot, enabled, onSnapshot, submit } = options
   const [status, setStatus] = useState<SynthesisStatus>({ kind: "idle" })
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const generationRef = useRef(0)
+  const attempts = useRequestGeneration()
   const snapshotRef = useRef(onSnapshot)
   snapshotRef.current = onSnapshot
+  const submitRef = useRef(submit)
+  submitRef.current = submit
 
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -72,26 +89,21 @@ export function useSynthesisController(options: SynthesisOptions): SynthesisCont
       setStatus({ kind: "idle" })
       return
     }
-    generationRef.current += 1
-    const generation = generationRef.current
+    const generation = attempts.begin()
     setStatus({ kind: "in_flight" })
     let outcome: SynthesisCommandOutcome
     try {
       outcome = await proposeSynthesis(workspaceId)
     } catch (error) {
-      if (generationRef.current !== generation) return
-      setStatus({
-        kind: "failed",
-        reason: "unavailable",
-        message: error instanceof Error ? error.message : String(error),
-      })
+      if (!attempts.isCurrent(generation)) return
+      setStatus({ kind: "failed", reason: "unavailable", message: failureMessage(error) })
       return
     }
     // A Workspace switch or a newer attempt supersedes this response.
-    if (generationRef.current !== generation) return
+    if (!attempts.isCurrent(generation)) return
     snapshotRef.current(outcome.snapshot)
     setStatus(statusFor(outcome))
-  }, [enabled, workspaceId])
+  }, [attempts, enabled, workspaceId])
 
   const schedule = useCallback(() => {
     if (!enabled || workspaceId === "") {
@@ -106,24 +118,13 @@ export function useSynthesisController(options: SynthesisOptions): SynthesisCont
     }, SYNTHESIS_DEBOUNCE_MILLIS)
   }, [clearTimer, enabled, run, workspaceId])
 
-  const attemptNow = useCallback(() => {
-    clearTimer()
-    void run()
-  }, [clearTimer, run])
-
-  const clear = useCallback(() => {
-    clearTimer()
-    generationRef.current += 1
-    setStatus({ kind: "idle" })
-  }, [clearTimer])
-
   // A Workspace switch abandons any pending or in-flight attempt: the
   // request was assembled from the other Workspace's Notes.
   useEffect(() => {
     clearTimer()
-    generationRef.current += 1
+    attempts.supersede()
     setStatus({ kind: "idle" })
-  }, [clearTimer, workspaceId])
+  }, [attempts, clearTimer, workspaceId])
 
   useEffect(
     () => () => {
@@ -132,7 +133,23 @@ export function useSynthesisController(options: SynthesisOptions): SynthesisCont
     [clearTimer],
   )
 
-  return { status, schedule, attemptNow, clear }
+  const accept = useCallback((synthesisId: string) => {
+    submitRef.current(acceptSynthesis(synthesisId))
+  }, [])
+
+  const dismiss = useCallback((synthesisId: string) => {
+    submitRef.current(dismissSynthesis(synthesisId))
+  }, [])
+
+  const pending = useMemo(
+    () =>
+      (snapshot?.pendingSyntheses ?? []).filter(
+        (candidate) => candidate.workspaceId === workspaceId,
+      ),
+    [snapshot, workspaceId],
+  )
+
+  return { status, pending, schedule, accept, dismiss }
 }
 
 function statusFor(outcome: SynthesisCommandOutcome): SynthesisStatus {

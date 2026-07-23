@@ -123,6 +123,16 @@ export interface ThinkingWorkspace {
   updatedAt: string
 }
 
+/**
+ * Whether a Thinking Workspace's Assistance Policy permits an AI call at
+ * all. One predicate, so Note Organization, Synthesis, and the panels can
+ * never disagree about whether a Workspace is Manual.
+ */
+export function assistanceEnabled(workspace: ThinkingWorkspace | undefined): boolean {
+  if (!workspace) return false
+  return workspace.assistancePolicy !== "manual"
+}
+
 export interface WorkspaceSnapshot {
   workspaces: ThinkingWorkspace[]
   notes: Note[]

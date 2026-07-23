@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useMemo, useState } from "react"
 import {
+  assistanceEnabled,
   thinkingWorkspace,
   type AssistancePolicy,
   type Note,
@@ -26,11 +27,10 @@ import { useLocalDiscovery } from "./use-local-discovery"
 import { useEnrichmentController } from "./enrichment-controller"
 import { useSynthesisController } from "./synthesis-controller"
 import { SynthesisSection } from "./synthesis-section"
-import { acceptSynthesis, dismissSynthesis } from "./synthesis-contracts"
 import { useCloudDiscovery } from "./use-cloud-discovery"
 
 export function App() {
-  const { snapshot, openFailure, failure, submit, reportFailure, dismissFailure } =
+  const { snapshot, openFailure, failure, submit, adoptSnapshot, reportFailure, dismissFailure } =
     useWorkspaceSnapshot()
   const drafts = useNoteDrafts()
   const [workspaceName, setWorkspaceName] = useState("")
@@ -73,34 +73,25 @@ export function App() {
   const focus = useNoteFocus(visible, graph)
   const localDiscovery = useLocalDiscovery(activeWorkspace)
   const cloudDiscovery = useCloudDiscovery(activeWorkspace)
+  // Whether this Workspace may make an AI call at all. Manual Workspaces
+  // never enrich a Note and never request a Synthesis.
+  const aiEnabled = assistanceEnabled(activeWorkspace)
   const enrichment = useEnrichmentController({
     workspaceId: activeWorkspace?.id ?? "",
     snapshot: snapshot ?? null,
-    enabled:
-      activeWorkspace?.assistancePolicy === "local_ai" ||
-      activeWorkspace?.assistancePolicy === "cloud_ai",
+    enabled: aiEnabled,
   })
 
-  // Whether this Workspace may make an AI call at all. Manual Workspaces
-  // never enrich a Note and never request a Synthesis.
-  const aiEnabled =
-    activeWorkspace?.assistancePolicy === "local_ai" ||
-    activeWorkspace?.assistancePolicy === "cloud_ai"
   // Synthesis eligibility, the cooldown, and the pending cap are decided in
   // Rust against durable state; the controller only schedules the attempt
   // and reports what came back.
   const synthesis = useSynthesisController({
     workspaceId: activeWorkspace?.id ?? "",
-    enabled: Boolean(aiEnabled),
-    onSnapshot: (next) => void submit(Promise.resolve({ status: "committed", snapshot: next })),
+    snapshot: snapshot ?? null,
+    enabled: aiEnabled,
+    onSnapshot: adoptSnapshot,
+    submit,
   })
-  const pendingSyntheses = useMemo(
-    () =>
-      (snapshot?.pendingSyntheses ?? []).filter(
-        (pending) => pending.workspaceId === activeWorkspace?.id,
-      ),
-    [snapshot, activeWorkspace?.id],
-  )
 
   const cardContext: NoteCardContext = { graph, workspaces }
 
@@ -345,16 +336,16 @@ export function App() {
         onChooseView={setView}
         onUndo={undoLastChange}
         card={noteCard}
-        pendingSyntheses={pendingSyntheses}
+        pendingSyntheses={synthesis.pending}
       />
 
       <SynthesisSection
-        pending={pendingSyntheses}
+        pending={synthesis.pending}
         notes={notes}
         status={synthesis.status}
-        aiEnabled={Boolean(aiEnabled)}
-        onAccept={(synthesisId) => void submit(acceptSynthesis(synthesisId))}
-        onDismiss={(synthesisId) => void submit(dismissSynthesis(synthesisId))}
+        aiEnabled={aiEnabled}
+        onAccept={synthesis.accept}
+        onDismiss={synthesis.dismiss}
       />
       {renameLabelDraft && <section role="dialog" aria-label="Rename Label"><form onSubmit={saveRenamedLabel}><label htmlFor="rename-label">Label name</label><input autoFocus id="rename-label" value={renameLabelDraft.name} onChange={(event) => setRenameLabelDraft({ ...renameLabelDraft, name: event.target.value })} /><button type="submit">Save Label name</button><button type="button" onClick={() => setRenameLabelDraft(null)}>Cancel</button></form></section>}
 

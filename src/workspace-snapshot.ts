@@ -17,6 +17,13 @@ export interface WorkspaceState {
    * Thinking Workspace has not already committed.
    */
   submit: (pending: Promise<WorkspaceOutcome>) => Promise<{ committed: boolean; snapshot: WorkspaceSnapshot | null }>
+  /**
+   * Adopts a snapshot that came back from a command outside the
+   * `WorkspaceOutcome` shape — the Enrichment Workflow's own outcomes carry
+   * one on every branch. Committed state still arrives from one place; only
+   * the envelope differs.
+   */
+  adoptSnapshot: (snapshot: WorkspaceSnapshot) => void
   reportFailure: (failure: WorkspaceFailure) => void
   dismissFailure: () => void
 }
@@ -51,6 +58,7 @@ export function useWorkspaceSnapshot(): WorkspaceState {
     openFailure,
     failure,
     submit,
+    adoptSnapshot: setSnapshot,
     reportFailure: setFailure,
     dismissFailure: () => setFailure(null),
   }

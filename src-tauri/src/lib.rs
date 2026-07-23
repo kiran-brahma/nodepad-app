@@ -748,7 +748,7 @@ async fn propose_synthesis(
         let request = synthesis::SynthesisRequest {
             token: synthesis::SynthesisRequestToken {
                 workspace_id: workspace_id.clone(),
-                policy: workspace.assistance_policy().as_str().to_owned(),
+                policy: workspace.assistance_policy(),
                 endpoint,
                 model,
                 sources,
@@ -860,16 +860,18 @@ fn commit_synthesis_outcome(
                     snapshot: store.snapshot().unwrap_or(snapshot),
                 };
             }
-            let sources: Vec<(String, u64)> = result
+            let sources: Vec<synthesis::SourceRevision> = result
                 .source_note_ids
                 .iter()
                 .filter_map(|note_id| {
-                    token
-                        .revision_of(note_id)
-                        .map(|revision| (note_id.clone(), revision))
+                    token.revision_of(note_id).map(|revision| synthesis::SourceRevision {
+                        note_id: note_id.clone(),
+                        revision,
+                    })
                 })
                 .collect();
             if sources.len() != result.source_note_ids.len() {
+                let _ = store.record_synthesis_cooldown(&token.workspace_id);
                 return SynthesisCommandOutcome::InvalidSchema {
                     reason: "The result named a Note that was not supplied.".to_owned(),
                     snapshot,
@@ -877,11 +879,10 @@ fn commit_synthesis_outcome(
             }
             match store.store_pending_synthesis(
                 &token.workspace_id,
-                &result.text,
+                &result,
                 &sources,
-                &result.labels,
                 &token.model,
-                &token.policy,
+                token.policy,
             ) {
                 Ok(committed) => {
                     let proposed = committed
@@ -900,7 +901,9 @@ fn commit_synthesis_outcome(
                 }
                 Err(error) => {
                     // A source moved during inference. Nothing is stored and
-                    // no Note is touched; the attempt simply did not land.
+                    // no Note is touched; the attempt simply did not land,
+                    // and only the cooldown clock moves.
+                    let _ = store.record_synthesis_cooldown(&token.workspace_id);
                     let current = store.snapshot().unwrap_or(snapshot);
                     SynthesisCommandOutcome::Stale {
                         reason: error.to_string(),
@@ -909,11 +912,24 @@ fn commit_synthesis_outcome(
                 }
             }
         }
-        synthesis::SynthesisOutcome::InvalidSchema { reason, .. } => {
-            SynthesisCommandOutcome::InvalidSchema { reason, snapshot }
+        synthesis::SynthesisOutcome::InvalidSchema { token, reason } => {
+            // A failure earns the cooldown but not the checkpoint: a model
+            // that reliably answers with nonsense must not be re-asked on
+            // every keystroke, and must not consume the thinker's next five
+            // organized Notes either.
+            let _ = store.record_synthesis_cooldown(&token.workspace_id);
+            SynthesisCommandOutcome::InvalidSchema {
+                reason,
+                snapshot: store.snapshot().unwrap_or(snapshot),
+            }
         }
-        synthesis::SynthesisOutcome::ProviderFailed { code, message, .. } => {
-            SynthesisCommandOutcome::ProviderFailed { code, message, snapshot }
+        synthesis::SynthesisOutcome::ProviderFailed { token, code, message } => {
+            let _ = store.record_synthesis_cooldown(&token.workspace_id);
+            SynthesisCommandOutcome::ProviderFailed {
+                code,
+                message,
+                snapshot: store.snapshot().unwrap_or(snapshot),
+            }
         }
     }
 }

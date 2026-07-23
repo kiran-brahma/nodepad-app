@@ -87,26 +87,25 @@ export function SynthesisSection({
   )
 }
 
+/** The two statuses that mean "an attempt is on its way" read the same to
+ *  the thinker, and neither carries a message of its own. */
+const FIXED_MESSAGES: Partial<Record<SynthesisStatus["kind"], string>> = {
+  debouncing: "Looking for a Synthesis across these Notes…",
+  in_flight: "Looking for a Synthesis across these Notes…",
+  no_insight: "Nothing worth proposing yet. Nodepad will look again as this Workspace grows.",
+}
+
 /**
  * One calm sentence about the last attempt. Finding no Synthesis is a
  * successful outcome, and so is being ineligible, so neither is rendered as
  * an alert; only a real provider or schema failure is.
  */
 function statusMessage(status: SynthesisStatus, pendingCount: number): string {
-  switch (status.kind) {
-    case "debouncing":
-    case "in_flight":
-      return "Looking for a Synthesis across these Notes…"
-    case "no_insight":
-      return "Nothing worth proposing yet. Nodepad will look again as this Workspace grows."
-    case "ineligible":
-      return status.message
-    case "failed":
-      return `Synthesis could not run: ${status.message}`
-    case "proposed":
-    case "idle":
-      return pendingCount === 0
-        ? "No Synthesis is waiting on you."
-        : `${pendingCount} Synthesis${pendingCount === 1 ? "" : "es"} waiting on you.`
-  }
+  const fixed = FIXED_MESSAGES[status.kind]
+  if (fixed) return fixed
+  if (status.kind === "ineligible") return status.message
+  if (status.kind === "failed") return `Synthesis could not run: ${status.message}`
+  return pendingCount === 0
+    ? "No Synthesis is waiting on you."
+    : `${pendingCount} Synthesis${pendingCount === 1 ? "" : "es"} waiting on you.`
 }
