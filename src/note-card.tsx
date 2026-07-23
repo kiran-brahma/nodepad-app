@@ -339,14 +339,19 @@ export function NoteCard({
   drafts: NoteDrafts
   intents: NoteIntents
   focused: boolean
-  registerElement: (element: HTMLLIElement | null) => void
+  registerElement: (element: HTMLDivElement | null) => void
 }) {
   const relatedCount = degree(context.relationships, note.id)
   return (
-    <li
+    <div
       className={["note", note.pinned ? "pinned" : "", focused ? "focused" : ""]
         .filter(Boolean)
         .join(" ")}
+      // A Note card is one self-contained piece of the thinking, whichever
+      // arrangement the surrounding layout gives it. Neither view nests a
+      // card directly under its group, so it carries no list semantics.
+      role="article"
+      aria-label={notePreview(note)}
       tabIndex={-1}
       aria-current={focused ? "true" : undefined}
       ref={registerElement}
@@ -393,6 +398,6 @@ export function NoteCard({
           </div>
         </div>
       )}
-    </li>
+    </div>
   )
 }

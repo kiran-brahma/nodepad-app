@@ -1,6 +1,12 @@
 import { FormEvent, useCallback, useMemo, useState } from "react"
-import { thinkingWorkspace, type SearchResult, type ThinkingWorkspace } from "./workspace-client"
+import {
+  thinkingWorkspace,
+  type Note,
+  type SearchResult,
+  type ThinkingWorkspace,
+} from "./workspace-client"
 import { requestDelete, resolveDeleteConfirmation, type PendingDelete } from "./workspace-lifecycle"
+import { matchingNoteIds, visibleNotes, workspaceNotes, type NoteView } from "./note-views"
 import { NoteCard, type NoteCardContext } from "./note-card"
 import { buildNoteIntents } from "./note-intents"
 import { useNoteDrafts } from "./note-drafts"
@@ -10,13 +16,13 @@ import { useUndoShortcut } from "./undo-shortcut"
 import { WorkspaceSection } from "./workspace-section"
 import { CaptureSection } from "./capture-section"
 import { SearchSection } from "./search-section"
+import { CommittedNotesSection } from "./committed-notes-section"
 import { StorageRecovery } from "./storage-recovery"
 
 export function App() {
   const { snapshot, openFailure, failure, submit, reportFailure, dismissFailure } =
     useWorkspaceSnapshot()
   const drafts = useNoteDrafts()
-  const focus = useNoteFocus()
   const [workspaceName, setWorkspaceName] = useState("")
   const [noteMarkdown, setNoteMarkdown] = useState("")
   const [renameDraft, setRenameDraft] = useState<{ id: string; name: string } | null>(null)
@@ -24,21 +30,32 @@ export function App() {
   const [renameLabelDraft, setRenameLabelDraft] = useState<{ id: string; name: string } | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null)
+  // How the same committed Notes are arranged. Not committed, so a restart
+  // reconstructs both views from SQLite alone.
+  const [view, setView] = useState<NoteView>("tiling")
 
   const activeWorkspace = useMemo(
     () => snapshot?.workspaces.find(({ id }) => id === snapshot.activeWorkspaceId),
     [snapshot],
   )
-  const notes = snapshot?.notes.filter((note) => note.workspaceId === activeWorkspace?.id) ?? []
+  const notes = workspaceNotes(snapshot?.notes ?? [], activeWorkspace?.id)
   const workspaces = snapshot?.workspaces ?? []
+  // The one result set both views read, so they can never disagree about which
+  // Notes are on screen or in what order.
+  const visible = useMemo(
+    () => visibleNotes(snapshot?.notes ?? [], activeWorkspace?.id, matchingNoteIds(searchResults)),
+    [snapshot, activeWorkspace?.id, searchResults],
+  )
+  const focus = useNoteFocus(visible)
+
   const cardContext: NoteCardContext = {
     notes,
     relationships: snapshot?.relationships ?? [],
     workspaces,
   }
 
-  // One set of Note intents, built once and handed to every card, so no view
-  // can grow its own copy of what changing a Note means.
+  // One set of Note intents, built once and handed to every card, so a layout
+  // decides only where a Note appears and never what may be done to one.
   const noteIntents = buildNoteIntents({
     drafts,
     workspaces,
@@ -46,6 +63,21 @@ export function App() {
     focusNote: focus.focusNote,
     startLabelRename: (label) => setRenameLabelDraft({ id: label.id, name: label.name }),
   })
+
+  // The one card every view places, over the one set of intents.
+  function noteCard(note: Note) {
+    return (
+      <NoteCard
+        key={note.id}
+        note={note}
+        context={cardContext}
+        drafts={drafts}
+        intents={noteIntents}
+        focused={focus.focusedNoteId === note.id}
+        registerElement={(element) => focus.registerNoteElement(note.id, element)}
+      />
+    )
+  }
 
   function createWorkspace(event: FormEvent) {
     event.preventDefault()
@@ -154,42 +186,24 @@ export function App() {
 
       <SearchSection
         query={searchQuery}
-        results={searchResults}
+        searching={searchResults !== null}
+        matchCount={visible.length}
+        noteCount={notes.length}
         canSearch={Boolean(activeWorkspace)}
         onQueryChange={setSearchQuery}
         onSearch={search}
         onClear={() => { setSearchQuery(""); setSearchResults(null) }}
       />
 
-      <section aria-label="Committed Notes">
-        <div className="row">
-          <h2>Committed Notes</h2>
-          <button
-            onClick={undoLastChange}
-            disabled={!snapshot || snapshot.undoableCommands === 0}
-            title="Undo the last change in this Thinking Workspace (⌘Z)"
-          >
-            Undo
-          </button>
-        </div>
-        {notes.length === 0 ? (
-          <p>No Notes yet.</p>
-        ) : (
-          <ul className="notes">
-            {notes.map((note) => (
-              <NoteCard
-                key={note.id}
-                note={note}
-                context={cardContext}
-                drafts={drafts}
-                intents={noteIntents}
-                focused={focus.focusedNoteId === note.id}
-                registerElement={(element) => focus.registerNoteElement(note.id, element)}
-              />
-            ))}
-          </ul>
-        )}
-      </section>
+      <CommittedNotesSection
+        notes={visible}
+        searching={searchResults !== null}
+        view={view}
+        canUndo={Boolean(snapshot) && snapshot!.undoableCommands > 0}
+        onChooseView={setView}
+        onUndo={undoLastChange}
+        card={noteCard}
+      />
       {renameLabelDraft && <section role="dialog" aria-label="Rename Label"><form onSubmit={saveRenamedLabel}><label htmlFor="rename-label">Label name</label><input autoFocus id="rename-label" value={renameLabelDraft.name} onChange={(event) => setRenameLabelDraft({ ...renameLabelDraft, name: event.target.value })} /><button type="submit">Save Label name</button><button type="button" onClick={() => setRenameLabelDraft(null)}>Cancel</button></form></section>}
     </main>
   )

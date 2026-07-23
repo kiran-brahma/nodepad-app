@@ -243,11 +243,11 @@ async function captureNote(user: ReturnType<typeof userEvent.setup>, markdown: s
   await user.click(screen.getByLabelText("New Note"))
   await user.paste(markdown)
   await user.click(screen.getByRole("button", { name: "Commit Note" }))
-  await screen.findAllByRole("listitem")
+  await screen.findAllByRole("article")
 }
 
 function noteCards() {
-  return screen.getAllByRole("listitem")
+  return screen.getAllByRole("article")
 }
 
 describe("manual Note controls", () => {
@@ -368,13 +368,19 @@ describe("manual Note controls", () => {
     const user = userEvent.setup()
     render(<App />)
     await captureNote(user, "A thought to recover")
-    await user.click(screen.getByRole("button", { name: "Add Label" }))
+    await captureNote(user, "An unrelated thought")
+    await user.click(within(noteCards()[0]).getByRole("button", { name: "Add Label" }))
     await user.type(screen.getByLabelText("Label"), "Rêverie")
     await user.click(screen.getByRole("button", { name: "Save Label" }))
     expect(await screen.findByText("Rêverie")).toBeDefined()
+
     await user.type(screen.getByLabelText("Search this Thinking Workspace"), "Rêverie")
     await user.click(screen.getByRole("button", { name: "Search" }))
-    expect(within(screen.getByLabelText("Search Notes")).getByText("A thought to recover")).toBeDefined()
+
+    // The search narrows the Notes on screen; it renders no second copy of them.
+    await waitFor(() => expect(noteCards()).toHaveLength(1))
+    expect(noteCards()[0].textContent).toContain("A thought to recover")
+    expect(screen.queryByText("An unrelated thought")).toBeNull()
   })
 })
 
@@ -558,5 +564,153 @@ describe("Relationships on the Note detail surface", () => {
         name: /^Go to/,
       }),
     ).toBeNull()
+  })
+})
+
+describe("tiling and kanban over one committed projection", () => {
+  /** Switching view is a way of reading, so it submits nothing. */
+  async function switchTo(user: ReturnType<typeof userEvent.setup>, view: "Tiling" | "Kanban") {
+    await user.click(
+      within(screen.getByRole("group", { name: "Note view" })).getByRole("button", { name: view }),
+    )
+  }
+
+  it("shows the same Notes after a switch and commits nothing", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await captureNote(user, "Cities grew around rivers")
+    const committed = snapshot
+
+    await switchTo(user, "Kanban")
+    expect(screen.getByText("Cities grew around rivers")).toBeDefined()
+    await switchTo(user, "Tiling")
+    expect(screen.getByText("Cities grew around rivers")).toBeDefined()
+    expect(snapshot).toBe(committed)
+  })
+
+  it("edits a Note in one view and shows the committed text in the other", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await captureNote(user, "First thought")
+
+    await switchTo(user, "Kanban")
+    await user.click(screen.getByRole("button", { name: "Edit Note" }))
+    await user.clear(screen.getByLabelText("Note text"))
+    await user.paste("Revised in kanban")
+    await user.click(screen.getByRole("button", { name: "Save Note text" }))
+    expect(await screen.findByText("Revised in kanban")).toBeDefined()
+
+    await switchTo(user, "Tiling")
+    expect(screen.getByText("Revised in kanban")).toBeDefined()
+    expect(screen.queryByText("First thought")).toBeNull()
+  })
+
+  it("groups Notes into one column per Note Type present", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await captureNote(user, "Is this true?")
+    await captureNote(user, "Rivers shaped trade")
+    await user.selectOptions(within(noteCards()[0]).getByLabelText("Note Type"), "question")
+    await waitFor(() =>
+      expect(within(noteCards()[0]).getByText("Question", { selector: ".badge" })).toBeDefined(),
+    )
+
+    await switchTo(user, "Kanban")
+    const question = screen.getByRole("group", { name: "Question Notes" })
+    const general = screen.getByRole("group", { name: "General Notes" })
+    expect(within(question).getAllByRole("article")).toHaveLength(1)
+    expect(within(question).getByText("Is this true?")).toBeDefined()
+    expect(within(general).getByText("Rivers shaped trade")).toBeDefined()
+    // A Note Type nobody used has no column.
+    expect(screen.queryByRole("group", { name: "Thesis Notes" })).toBeNull()
+  })
+
+  it("keeps the selected Note across a switch and lets it go when it leaves", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await captureNote(user, "Cities grew around rivers")
+    await captureNote(user, "Trade follows water")
+    await user.click(within(noteCards()[0]).getByRole("button", { name: "Relate Note" }))
+    await user.click(within(noteCards()[0]).getByRole("button", { name: "Trade follows water" }))
+    await user.click(
+      within(noteCards()[0]).getByRole("button", { name: "Go to Trade follows water" }),
+    )
+    await waitFor(() => expect(noteCards()[1].getAttribute("aria-current")).toBe("true"))
+
+    await switchTo(user, "Kanban")
+    const selected = noteCards().find((card) => card.getAttribute("aria-current") === "true")
+    expect(selected?.textContent).toContain("Trade follows water")
+
+    await user.click(screen.getByLabelText("Search this Thinking Workspace"))
+    await user.paste("Cities")
+    await user.click(screen.getByRole("button", { name: "Search" }))
+
+    // The selected Note is no longer on screen, so the selection is let go.
+    await waitFor(() => expect(noteCards()).toHaveLength(1))
+    expect(noteCards()[0].getAttribute("aria-current")).toBeNull()
+  })
+
+  it("filters both views from the same result set and keeps pinned Notes first", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await captureNote(user, "Older thought about rivers")
+    await captureNote(user, "Newer thought about rivers")
+    await captureNote(user, "A thought about something else")
+    await user.click(within(noteCards()[1]).getByRole("button", { name: "Pin" }))
+    await waitFor(() => expect(noteCards()[0].textContent).toContain("Newer thought"))
+
+    await user.click(screen.getByLabelText("Search this Thinking Workspace"))
+    await user.paste("rivers")
+    await user.click(screen.getByRole("button", { name: "Search" }))
+    await waitFor(() => expect(noteCards()).toHaveLength(2))
+    expect(noteCards()[0].textContent).toContain("Newer thought")
+    expect(screen.getByRole("status").textContent).toContain("2 of 3 Notes match")
+
+    await switchTo(user, "Kanban")
+    expect(noteCards()).toHaveLength(2)
+    expect(noteCards()[0].textContent).toContain("Newer thought")
+    expect(screen.queryByText("A thought about something else")).toBeNull()
+  })
+
+  it("renders an empty, a one-Note, and a many-Note Workspace safely in both views", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    expect(await screen.findByText("No Notes yet.")).toBeDefined()
+    await switchTo(user, "Kanban")
+    expect(screen.getByText("No Notes yet.")).toBeDefined()
+
+    await switchTo(user, "Tiling")
+    await captureNote(user, "The only thought")
+    expect(noteCards()).toHaveLength(1)
+
+    // More Notes than one tiled page holds.
+    for (let index = 0; index < 8; index += 1) await captureNote(user, `Thought ${index}`)
+    expect(noteCards()).toHaveLength(9)
+    expect(screen.getAllByRole("group", { name: /Tiled Notes, page/ })).toHaveLength(2)
+    await switchTo(user, "Kanban")
+    expect(noteCards()).toHaveLength(9)
+  })
+
+  it("reconstructs both views from the committed snapshot after a restart", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await captureNote(user, "Older thought")
+    await captureNote(user, "Newer thought")
+    await user.click(within(noteCards()[1]).getByRole("button", { name: "Pin" }))
+    await waitFor(() => expect(noteCards()[0].textContent).toContain("Newer thought"))
+
+    // A restart keeps only what SQLite holds: no view choice, no layout.
+    cleanup()
+    render(<App />)
+    await screen.findAllByRole("article")
+    expect(noteCards()[0].textContent).toContain("Newer thought")
+    expect(
+      within(screen.getByRole("group", { name: "Note view" }))
+        .getByRole("button", { name: "Tiling" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true")
+
+    await switchTo(user, "Kanban")
+    expect(noteCards()[0].textContent).toContain("Newer thought")
   })
 })
