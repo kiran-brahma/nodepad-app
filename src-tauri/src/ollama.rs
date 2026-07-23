@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 const OLLAMA_LOCAL_BASE_URL: &str = "http://localhost:11434";
+pub(crate) const OLLAMA_LOCAL_BASE_URL_PUBLIC: &str = OLLAMA_LOCAL_BASE_URL;
 
 /// One failure mode the UI can act on. Distinct states let the thinker know
 /// whether Ollama is missing, slow, confused, or simply empty, or whether

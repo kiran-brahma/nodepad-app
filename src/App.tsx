@@ -23,6 +23,7 @@ import { CommittedNotesSection } from "./committed-notes-section"
 import { StorageRecovery } from "./storage-recovery"
 import { AssistanceSection, CloudConsentDialog } from "./assistance-section"
 import { useLocalDiscovery } from "./use-local-discovery"
+import { useEnrichmentController } from "./enrichment-controller"
 import { useCloudDiscovery } from "./use-cloud-discovery"
 
 export function App() {
@@ -69,6 +70,13 @@ export function App() {
   const focus = useNoteFocus(visible, graph)
   const localDiscovery = useLocalDiscovery(activeWorkspace)
   const cloudDiscovery = useCloudDiscovery(activeWorkspace)
+  const enrichment = useEnrichmentController({
+    workspaceId: activeWorkspace?.id ?? "",
+    snapshot: snapshot ?? null,
+    enabled:
+      activeWorkspace?.assistancePolicy === "local_ai" ||
+      activeWorkspace?.assistancePolicy === "cloud_ai",
+  })
 
   const cardContext: NoteCardContext = { graph, workspaces }
 
@@ -80,10 +88,17 @@ export function App() {
     submit,
     focusNote: focus.focusNote,
     startLabelRename: (label) => setRenameLabelDraft({ id: label.id, name: label.name }),
+    onNoteTextSaved: (noteId) => enrichment.schedule(noteId),
+    onRetryEnrichment: () => enrichment.retry(),
+    onRequestReplaceEnrichment: () => enrichment.requestReplace(),
+    onConfirmReplaceEnrichment: () => enrichment.confirmReplace(),
+    onCancelReplaceEnrichment: () => enrichment.cancelReplace(),
   })
 
   // The one card every view places, over the one set of intents.
   function noteCard(note: Note) {
+    const enrichmentStatus =
+      enrichment.activeNoteId === note.id ? enrichment.status : undefined
     return (
       <NoteCard
         key={note.id}
@@ -94,14 +109,15 @@ export function App() {
         focused={focus.focusedNoteId === note.id}
         dimmed={focus.litNoteIds !== null && !focus.litNoteIds.has(note.id)}
         registerElement={(element) => focus.registerNoteElement(note.id, element)}
+        enrichment={enrichmentStatus}
       />
     )
   }
 
   function createWorkspace(event: FormEvent) {
     event.preventDefault()
-    void submit(thinkingWorkspace.createWorkspace(workspaceName)).then((committed) => {
-      if (committed) setWorkspaceName("")
+    void submit(thinkingWorkspace.createWorkspace(workspaceName)).then((result) => {
+      if (result.committed) setWorkspaceName("")
     })
   }
 
@@ -109,8 +125,8 @@ export function App() {
     event.preventDefault()
     if (!renameDraft) return
     void submit(thinkingWorkspace.renameWorkspace(renameDraft.id, renameDraft.name)).then(
-      (committed) => {
-        if (committed) setRenameDraft(null)
+      (result) => {
+        if (result.committed) setRenameDraft(null)
       },
     )
   }
@@ -125,16 +141,23 @@ export function App() {
   function createNote(event: FormEvent) {
     event.preventDefault()
     if (!activeWorkspace) return
-    void submit(thinkingWorkspace.createNote(activeWorkspace.id, noteMarkdown)).then((committed) => {
-      if (committed) setNoteMarkdown("")
+    void submit(thinkingWorkspace.createNote(activeWorkspace.id, noteMarkdown)).then((result) => {
+      if (!result.committed || !result.snapshot) return
+      setNoteMarkdown("")
+      // Find the freshly committed Note so the Enrichment controller can
+      // schedule an automatic organization attempt for it.
+      const newest = [...result.snapshot.notes]
+        .filter((candidate) => candidate.workspaceId === activeWorkspace.id)
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+      if (newest) enrichment.schedule(newest.id)
     })
   }
 
   function saveRenamedLabel(event: FormEvent) {
     event.preventDefault()
     if (!renameLabelDraft) return
-    void submit(thinkingWorkspace.renameLabel(renameLabelDraft.id, renameLabelDraft.name)).then((committed) => {
-      if (committed) setRenameLabelDraft(null)
+    void submit(thinkingWorkspace.renameLabel(renameLabelDraft.id, renameLabelDraft.name)).then((result) => {
+      if (result.committed) setRenameLabelDraft(null)
     })
   }
 

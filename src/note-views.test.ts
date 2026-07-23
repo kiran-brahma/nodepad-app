@@ -26,6 +26,8 @@ function note(
     updatedAt: fields.createdAt,
     pinned: false,
     labels: [],
+    enrichmentRevision: 0,
+    lastEnrichedAt: null,
     ...fields,
   }
 }
@@ -49,6 +51,8 @@ function results(...noteIds: string[]): SearchResult[] {
     snippet: "a snippet no view reads",
     noteType: "general" as NoteType,
     labels: [],
+    enrichmentRevision: 0,
+    lastEnrichedAt: null,
     rank: 0,
   }))
 }

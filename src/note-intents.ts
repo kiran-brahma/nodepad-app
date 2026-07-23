@@ -5,11 +5,14 @@ import {
   type NoteType,
   type ThinkingWorkspace,
   type WorkspaceOutcome,
+  type WorkspaceSnapshot,
 } from "./workspace-client"
 import { isAnnotationTooLong, requestNoteDelete, resolveNoteDeleteConfirmation } from "./note-controls"
 import { requestTransfer } from "./note-transfer"
 import type { NoteDrafts } from "./note-drafts"
 import type { NoteIntents } from "./note-card"
+
+export type SubmitResult = { committed: boolean; snapshot: WorkspaceSnapshot | null }
 
 /**
  * Builds the one set of Note intents the application has. Every view draws
@@ -22,19 +25,39 @@ export function buildNoteIntents({
   submit,
   focusNote,
   startLabelRename,
+  onNoteTextSaved,
+  onRetryEnrichment,
+  onRequestReplaceEnrichment,
+  onConfirmReplaceEnrichment,
+  onCancelReplaceEnrichment,
 }: {
   drafts: NoteDrafts
   workspaces: ThinkingWorkspace[]
-  submit: (pending: Promise<WorkspaceOutcome>) => Promise<boolean>
+  submit: (pending: Promise<WorkspaceOutcome>) => Promise<SubmitResult>
   focusNote: (noteId: string) => void
   startLabelRename: (label: Label) => void
+  /** Called when a Note's text was just saved. The Enrichment controller
+   *  uses this to schedule an automatic organization attempt. */
+  onNoteTextSaved?: (noteId: string) => void
+  /** Called when the thinker clicks Retry on the enrichment status. */
+  onRetryEnrichment?: () => void
+  /** Called when the thinker clicks Re-enrich and Replace; the
+   *  controller uses this to surface a confirmation dialog. */
+  onRequestReplaceEnrichment?: () => void
+  /** Called when the thinker confirms the Re-enrich and Replace. */
+  onConfirmReplaceEnrichment?: () => void
+  /** Called when the thinker backs out of the Re-enrich and Replace. */
+  onCancelReplaceEnrichment?: () => void
 }): NoteIntents {
   function saveText(event: FormEvent) {
     event.preventDefault()
     const draft = drafts.noteDraft
     if (!draft) return
-    void submit(thinkingWorkspace.editNoteText(draft.id, draft.markdown)).then((committed) => {
-      if (committed) drafts.setNoteDraft(null)
+    void submit(thinkingWorkspace.editNoteText(draft.id, draft.markdown)).then((result) => {
+      if (result.committed) {
+        drafts.setNoteDraft(null)
+        onNoteTextSaved?.(draft.id)
+      }
     })
   }
 
@@ -42,8 +65,8 @@ export function buildNoteIntents({
     event.preventDefault()
     const draft = drafts.annotationDraft
     if (!draft || isAnnotationTooLong(draft.text)) return
-    void submit(thinkingWorkspace.setNoteAnnotation(draft.id, draft.text)).then((committed) => {
-      if (committed) drafts.setAnnotationDraft(null)
+    void submit(thinkingWorkspace.setNoteAnnotation(draft.id, draft.text)).then((result) => {
+      if (result.committed) drafts.setAnnotationDraft(null)
     })
   }
 
@@ -51,8 +74,8 @@ export function buildNoteIntents({
     event.preventDefault()
     const draft = drafts.labelDraft
     if (!draft) return
-    void submit(thinkingWorkspace.attachLabel(draft.noteId, draft.name)).then((committed) => {
-      if (committed) drafts.setLabelDraft(null)
+    void submit(thinkingWorkspace.attachLabel(draft.noteId, draft.name)).then((result) => {
+      if (result.committed) drafts.setLabelDraft(null)
     })
   }
 
@@ -75,8 +98,8 @@ export function buildNoteIntents({
       kind === "move"
         ? thinkingWorkspace.moveNote(noteId, targetWorkspaceId)
         : thinkingWorkspace.copyNote(noteId, targetWorkspaceId)
-    void submit(committing).then((committed) => {
-      if (committed) drafts.setPendingTransfer(null)
+    void submit(committing).then((result) => {
+      if (result.committed) drafts.setPendingTransfer(null)
     })
   }
 
@@ -108,8 +131,8 @@ export function buildNoteIntents({
     editRelateQuery: (query) =>
       drafts.setRelateDraft((draft) => (draft ? { ...draft, query } : draft)),
     relate: (note, otherNoteId) => {
-      void submit(thinkingWorkspace.relateNotes(note.id, otherNoteId)).then((committed) => {
-        if (committed) drafts.setRelateDraft(null)
+      void submit(thinkingWorkspace.relateNotes(note.id, otherNoteId)).then((result) => {
+        if (result.committed) drafts.setRelateDraft(null)
       })
     },
     unrelate: (note, otherNoteId) =>
@@ -121,5 +144,9 @@ export function buildNoteIntents({
       drafts.setPendingTransfer((pending) => (pending ? { ...pending, targetWorkspaceId } : pending)),
     transfer,
     cancelTransfer: () => drafts.setPendingTransfer(null),
+    retryEnrichment: () => onRetryEnrichment?.(),
+    requestReplaceEnrichment: () => onRequestReplaceEnrichment?.(),
+    confirmReplaceEnrichment: () => onConfirmReplaceEnrichment?.(),
+    cancelReplaceEnrichment: () => onCancelReplaceEnrichment?.(),
   }
 }

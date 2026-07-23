@@ -16,7 +16,7 @@ export interface WorkspaceState {
    * the snapshot, a failed one is reported, and nothing is shown that the
    * Thinking Workspace has not already committed.
    */
-  submit: (pending: Promise<WorkspaceOutcome>) => Promise<boolean>
+  submit: (pending: Promise<WorkspaceOutcome>) => Promise<{ committed: boolean; snapshot: WorkspaceSnapshot | null }>
   reportFailure: (failure: WorkspaceFailure) => void
   dismissFailure: () => void
 }
@@ -30,16 +30,16 @@ export function useWorkspaceSnapshot(): WorkspaceState {
     const outcome = await pending
     if (outcome.status === "unavailable") {
       setOpenFailure(outcome.failure)
-      return false
+      return { committed: false, snapshot: null }
     }
     if (outcome.status === "failed") {
       setFailure(outcome.failure)
-      return false
+      return { committed: false, snapshot: null }
     }
     setSnapshot(outcome.snapshot)
     setOpenFailure(null)
     setFailure(null)
-    return true
+    return { committed: true, snapshot: outcome.snapshot }
   }, [])
 
   useEffect(() => {

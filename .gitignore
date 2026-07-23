@@ -15,6 +15,7 @@ src-tauri/gen/
 .env*.local
 .DS_Store
 .claude/
+.pi-subagents/
 tsconfig.tsbuildinfo
 next-env.d.ts
 

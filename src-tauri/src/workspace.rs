@@ -42,17 +42,17 @@ const MAX_REVERSIBLE_COMMANDS: usize = 20;
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThinkingWorkspace {
-    id: String,
-    name: String,
-    assistance_policy: AssistancePolicy,
-    selected_model: Option<String>,
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) assistance_policy: AssistancePolicy,
+    pub(crate) selected_model: Option<String>,
     /// When the thinker first accepted the Cloud AI disclosure for this
     /// Workspace. Present means the disclosure has been read and the
     /// Workspace may use Ollama Cloud; absence is "not yet asked" or
     /// "asked and declined". The bearer key itself is never stored here.
-    cloud_consent_at: Option<String>,
-    created_at: String,
-    updated_at: String,
+    pub(crate) cloud_consent_at: Option<String>,
+    pub(crate) created_at: String,
+    pub(crate) updated_at: String,
 }
 
 impl ThinkingWorkspace {
@@ -66,6 +66,18 @@ impl ThinkingWorkspace {
     /// Cloud. The actual bearer key lives in the macOS keychain, not here.
     pub fn cloud_consent_at(&self) -> Option<&str> {
         self.cloud_consent_at.as_deref()
+    }
+
+    /// The Assistance Policy the Workspace is currently using. The Tauri
+    /// command surface reads this to decide whether to send an enrichment
+    /// request to Ollama.
+    pub fn assistance_policy(&self) -> AssistancePolicy {
+        self.assistance_policy
+    }
+
+    /// The opaque model identifier the thinker has selected, if any.
+    pub fn selected_model(&self) -> Option<&str> {
+        self.selected_model.as_deref()
     }
 }
 
@@ -82,7 +94,7 @@ pub enum AssistancePolicy {
 }
 
 impl AssistancePolicy {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Manual => "manual",
             Self::LocalAi => "local_ai",
@@ -100,12 +112,15 @@ impl AssistancePolicy {
 }
 
 /// Who last decided a value. Manual authorship is durable so a later AI slice
-/// cannot overwrite a thinker's choice silently.
+/// cannot overwrite a thinker's choice silently. `Ai` is admitted as a new
+/// variant so AI-authored fields are visibly distinguishable in the UI and a
+/// later AI result may refresh them, while `Manual` always wins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Provenance {
     Default,
     Manual,
+    Ai,
 }
 
 impl Provenance {
@@ -113,14 +128,24 @@ impl Provenance {
         match self {
             Self::Default => "default",
             Self::Manual => "manual",
+            Self::Ai => "ai",
         }
     }
 
     fn from_str(value: &str) -> Self {
         match value {
             "manual" => Self::Manual,
+            "ai" => Self::Ai,
             _ => Self::Default,
         }
+    }
+
+    /// Whether an AI result may overwrite a value with this provenance.
+    /// `Manual` always wins; `Default` and `Ai` both yield. Re-enrich and
+    /// Replace is the only path that bypasses this rule, and it does so by
+    /// passing `force = true` through a separate command.
+    pub fn is_ai_writable(self) -> bool {
+        matches!(self, Self::Default | Self::Ai)
     }
 }
 
@@ -137,6 +162,15 @@ pub struct Note {
     created_at: String,
     updated_at: String,
     pinned: bool,
+    /// Bumped on every commit that touches this Note. The Enrichment
+    /// Workflow captures the value at request time and refuses to apply a
+    /// result that names a different revision, so an edit made during
+    /// inference invalidates the in-flight response.
+    pub(crate) enrichment_revision: u64,
+    /// The moment a successful AI organization was last applied, if any.
+    /// `None` means the Note has never been enriched; present means a
+    /// subsequent regular enrichment may refresh AI-authored fields.
+    pub(crate) last_enriched_at: Option<String>,
     labels: Vec<Label>,
 }
 
@@ -149,6 +183,112 @@ impl Note {
     pub fn workspace_id(&self) -> &str {
         &self.workspace_id
     }
+
+    /// The enrichment revision at the moment of the most recent commit. The
+    /// Enrichment Workflow captures this value into the request token and
+    /// refuses to apply a result that names a different revision, so an
+    /// edit made during inference invalidates the in-flight response.
+    pub fn enrichment_revision(&self) -> u64 {
+        self.enrichment_revision
+    }
+
+    /// The Labels this Note currently carries, in their canonical order.
+    /// Used by the Enrichment Workflow to dedupe suggested Labels and to
+    /// decide which new Labels a parsed result adds.
+    pub fn labels(&self) -> &[Label] {
+        &self.labels
+    }
+
+    /// The Markdown body of the Note. The Enrichment Workflow reads this
+    /// for the target and for each candidate it sends.
+    pub fn markdown(&self) -> &str {
+        &self.markdown
+    }
+
+    /// The current Note Type. Used by the Enrichment Workflow to decide
+    /// whether a parsed result actually changes the value.
+    pub fn note_type(&self) -> &str {
+        &self.note_type
+    }
+
+    /// The current Annotation, if any.
+    pub fn annotation(&self) -> Option<&str> {
+        self.annotation.as_deref()
+    }
+
+    /// The provenance of the current Note Type. The Enrichment Workflow
+    /// reads this to decide whether a parsed result may overwrite it.
+    pub fn note_type_provenance(&self) -> Provenance {
+        self.note_type_provenance
+    }
+
+    /// The provenance of the current Annotation.
+    pub fn annotation_provenance(&self) -> Provenance {
+        self.annotation_provenance
+    }
+
+    /// The last update timestamp, used to sort candidates by recency.
+    pub fn updated_at(&self) -> &str {
+        &self.updated_at
+    }
+
+    /// When a successful AI organization was last applied, if ever. A
+    /// subsequent regular enrichment may refresh AI-authored fields
+    /// whose provenance is `Ai`; a manual edit supersedes that for the
+    /// touched field only. The Tauri command surface may use this to
+    /// skip an enrichment when the same response would just re-confirm
+    /// the current values.
+    #[allow(dead_code)]
+    pub fn last_enriched_at(&self) -> Option<&str> {
+        self.last_enriched_at.as_deref()
+    }
+
+    /// Replaces the Note Type and its provenance in one call. The Enrichment
+    /// Workflow uses this on the test path; the application code paths go
+    /// through the public trait methods so the transaction and provenance
+    /// invariants stay in one place.
+    #[cfg(test)]
+    pub fn set_note_type_provenance(&mut self, note_type: &str, provenance: Provenance) {
+        self.note_type = note_type.to_owned();
+        self.note_type_provenance = provenance;
+    }
+
+    /// Replaces the Annotation and its provenance in one call.
+    #[cfg(test)]
+    pub fn set_annotation_provenance(&mut self, annotation: Option<&str>, provenance: Provenance) {
+        self.annotation = annotation.map(str::to_owned);
+        self.annotation_provenance = provenance;
+    }
+
+    /// Constructs a Note for tests. Production code paths go through the
+    /// `create_note` and `apply_note_mutation` seams so the schema and
+    /// invariants stay in one place.
+    #[cfg(test)]
+    pub fn new_for_test(
+        id: &str,
+        workspace_id: &str,
+        markdown: &str,
+        note_type: &str,
+        updated_at: &str,
+        annotation: Option<&str>,
+        labels: Vec<Label>,
+    ) -> Self {
+        Self {
+            id: id.to_owned(),
+            workspace_id: workspace_id.to_owned(),
+            markdown: markdown.to_owned(),
+            note_type: note_type.to_owned(),
+            note_type_provenance: Provenance::Default,
+            annotation: annotation.map(str::to_owned),
+            annotation_provenance: Provenance::Default,
+            created_at: updated_at.to_owned(),
+            updated_at: updated_at.to_owned(),
+            pinned: false,
+            enrichment_revision: 0,
+            last_enriched_at: None,
+            labels,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -157,6 +297,26 @@ pub struct Label {
     id: String,
     workspace_id: String,
     name: String,
+}
+
+impl Label {
+    /// The display name as the thinker sees it. Case is preserved; identity
+    /// is the canonical (lowercased) form held by the database.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Constructs a Label for tests. Production code paths go through the
+    /// `attach_label` intent so identity, canonicalization, and dedup
+    /// stay in one place.
+    #[cfg(test)]
+    pub fn new_for_test(id: &str, workspace_id: &str, name: &str) -> Self {
+        Self {
+            id: id.to_owned(),
+            workspace_id: workspace_id.to_owned(),
+            name: name.to_owned(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -260,15 +420,15 @@ impl UndoHistory {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceSnapshot {
-    workspaces: Vec<ThinkingWorkspace>,
-    notes: Vec<Note>,
+    pub(crate) workspaces: Vec<ThinkingWorkspace>,
+    pub(crate) notes: Vec<Note>,
     /// Every Relationship in every Workspace, in creation order. Each endpoint
     /// always names a Note in `notes`.
-    relationships: Vec<Relationship>,
-    active_workspace_id: String,
+    pub(crate) relationships: Vec<Relationship>,
+    pub(crate) active_workspace_id: String,
     /// How many mutations in the active Workspace can still be undone in this
     /// session. Always zero right after a restart.
-    undoable_commands: usize,
+    pub(crate) undoable_commands: usize,
 }
 
 impl WorkspaceSnapshot {
@@ -287,12 +447,15 @@ pub enum WorkspaceFailureCode {
     NotFound,
     NothingToUndo,
     Storage,
+    /// The Enrichment request token no longer matches the Note or the
+    /// Workspace. The UI uses this to render a typed retry state.
+    Stale,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct WorkspaceFailure {
-    code: WorkspaceFailureCode,
-    message: String,
+    pub(crate) code: WorkspaceFailureCode,
+    pub(crate) message: String,
 }
 
 /// Why durable storage could not be opened, so recovery can name the category.
@@ -307,8 +470,8 @@ pub enum StorageOpenFailureCategory {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageOpenFailure {
-    category: StorageOpenFailureCategory,
-    message: String,
+    pub(crate) category: StorageOpenFailureCategory,
+    pub(crate) message: String,
 }
 
 impl StorageOpenFailure {
@@ -378,6 +541,8 @@ pub(crate) enum WorkspaceError {
     SameWorkspaceTransfer,
     #[error("There is nothing left to undo in this Thinking Workspace.")]
     NothingToUndo,
+    #[error("The AI organization result no longer matches this Note. Retry enrichment.")]
+    StaleEnrichment,
     #[error("Local storage could not commit this change. Please try again.")]
     Storage(#[source] rusqlite::Error),
 }
@@ -397,6 +562,7 @@ impl WorkspaceError {
             | Self::SameWorkspaceTransfer => WorkspaceFailureCode::Validation,
             Self::WorkspaceNotFound | Self::NoteNotFound | Self::LabelNotFound => WorkspaceFailureCode::NotFound,
             Self::NothingToUndo => WorkspaceFailureCode::NothingToUndo,
+            Self::StaleEnrichment => WorkspaceFailureCode::Stale,
             Self::Storage(_) => WorkspaceFailureCode::Storage,
         };
         WorkspaceFailure {
@@ -491,6 +657,8 @@ pub trait ThinkingWorkspaceInterface {
             created_at: now.clone(),
             updated_at: now,
             pinned: false,
+            enrichment_revision: 0,
+            last_enriched_at: None,
             labels: vec![],
         };
         let note_id = note.id.clone();
@@ -507,6 +675,7 @@ pub trait ThinkingWorkspaceInterface {
         let mut edited = previous.clone();
         edited.markdown = markdown;
         edited.updated_at = timestamp();
+        edited.enrichment_revision = previous.enrichment_revision + 1;
         self.commit_note(
             NoteMutation::Replace(edited),
             NoteMutation::Replace(previous),
@@ -524,6 +693,7 @@ pub trait ThinkingWorkspaceInterface {
         typed.note_type = note_type;
         typed.note_type_provenance = Provenance::Manual;
         typed.updated_at = timestamp();
+        typed.enrichment_revision = previous.enrichment_revision + 1;
         self.commit_note(NoteMutation::Replace(typed), NoteMutation::Replace(previous))
     }
 
@@ -539,6 +709,7 @@ pub trait ThinkingWorkspaceInterface {
         annotated.annotation = annotation;
         annotated.annotation_provenance = Provenance::Manual;
         annotated.updated_at = timestamp();
+        annotated.enrichment_revision = previous.enrichment_revision + 1;
         self.commit_note(
             NoteMutation::Replace(annotated),
             NoteMutation::Replace(previous),
@@ -554,6 +725,7 @@ pub trait ThinkingWorkspaceInterface {
         let mut repinned = previous.clone();
         repinned.pinned = pinned;
         repinned.updated_at = timestamp();
+        repinned.enrichment_revision = previous.enrichment_revision + 1;
         self.commit_note(
             NoteMutation::Replace(repinned),
             NoteMutation::Replace(previous),
@@ -602,6 +774,9 @@ pub trait ThinkingWorkspaceInterface {
             .collect();
         let mut moved = source.clone();
         moved.workspace_id = target_workspace_id.to_owned();
+        // The move itself is a fresh commit, so the revision advances. The
+        // compensation restores the row at its prior revision verbatim.
+        moved.enrichment_revision = source.enrichment_revision + 1;
         // The command belongs to the Workspace the thinker acted in, so its
         // undo is where the Note was last seen leaving.
         let origin = source.workspace_id.clone();
@@ -653,6 +828,76 @@ pub trait ThinkingWorkspaceInterface {
             NoteMutation::Insert(previous),
         )
     }
+
+    /// Applies a parsed AI organization result to a Note, gated by the
+    /// manual-provenance rule and the request token. Returns the new
+    /// snapshot on success, or a typed failure when the token is stale
+    /// (revision moved), the Workspace policy no longer permits AI, or the
+    /// Note disappeared. The Note's text is never rewritten, merged, or
+    /// deleted.
+    fn apply_enrichment(
+        &mut self,
+        workspace_id: &str,
+        note_id: &str,
+        result: &crate::enrichment::ParsedEnrichmentResult,
+        token: &crate::enrichment::RequestToken,
+        force: bool,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        let snapshot = self.snapshot()?;
+        let workspace = snapshot
+            .workspaces
+            .iter()
+            .find(|candidate| candidate.id == workspace_id)
+            .ok_or(WorkspaceError::WorkspaceNotFound)?;
+        // Policy drift invalidates the result even if everything else
+        // matched; the thinker returned to Manual since the request began.
+        if !force
+            && !matches!(
+                workspace.assistance_policy,
+                crate::workspace::AssistancePolicy::LocalAi
+                    | crate::workspace::AssistancePolicy::CloudAi
+            )
+        {
+            return Err(WorkspaceError::StaleEnrichment);
+        }
+        let note = snapshot
+            .notes
+            .iter()
+            .find(|candidate| candidate.id == note_id)
+            .cloned()
+            .ok_or(WorkspaceError::NoteNotFound)?;
+        if note.workspace_id != workspace_id {
+            return Err(WorkspaceError::NoteNotFound);
+        }
+        if note.enrichment_revision() != token.revision {
+            return Err(WorkspaceError::StaleEnrichment);
+        }
+        let existing_relationship_ids: Vec<String> = snapshot
+            .relationships
+            .iter()
+            .filter(|relationship| relationship.other_endpoint(note_id).is_some())
+            .filter_map(|relationship| relationship.other_endpoint(note_id).map(str::to_owned))
+            .collect();
+        let applied = crate::enrichment::gate_parsed_against_source(
+            result,
+            &note,
+            &existing_relationship_ids,
+            force,
+        );
+        self.persist_enrichment(workspace_id, note_id, &note, &applied)
+    }
+
+    /// The transactional commit. Implementations open a single transaction,
+    /// update the Note row, attach the suggested Labels, insert the new
+    /// Relationships with `Ai` provenance, refresh the FTS index, and
+    /// commit. A failure leaves nothing behind.
+    fn persist_enrichment(
+        &mut self,
+        workspace_id: &str,
+        note_id: &str,
+        previous: &Note,
+        applied: &crate::enrichment::ApplicableFields,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError>;
 
     /// Undo commits a new compensating transaction; it never rewinds storage.
     fn undo(&mut self, workspace_id: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
@@ -835,6 +1080,23 @@ pub trait ThinkingWorkspaceInterface {
         other_note_id: &str,
     ) -> WorkspaceCommandResult {
         outcome(self.unrelate_notes(note_id, other_note_id))
+    }
+    /// Atomically applies a parsed AI organization result to a Note. The
+    /// manual-provenance gate means a later AI result never overwrites a
+    /// manual field. The `force` flag is set by the explicit Re-enrich and
+    /// Replace action; otherwise enrichment only writes fields that are
+    /// `Default` or `Ai` at commit time. A stale request token (a Note,
+    /// revision, policy, or model that no longer matches) is rejected
+    /// before any write happens.
+    fn apply_enrichment_outcome(
+        &mut self,
+        workspace_id: &str,
+        note_id: &str,
+        result: &crate::enrichment::ParsedEnrichmentResult,
+        token: &crate::enrichment::RequestToken,
+        force: bool,
+    ) -> WorkspaceCommandResult {
+        outcome(self.apply_enrichment(workspace_id, note_id, result, token, force))
     }
     fn search_outcome(&self, workspace_id: &str, query: &str) -> WorkspaceSearchOutcome {
         match self.search_notes(workspace_id, query) {
@@ -1126,7 +1388,7 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
             .map_err(WorkspaceError::Storage)?;
         let changed = match mutation {
             NoteMutation::Insert(note) => transaction.execute(
-                "INSERT INTO notes (id, workspace_id, markdown, note_type, note_type_provenance, annotation, annotation_provenance, created_at, updated_at, pinned) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                "INSERT INTO notes (id, workspace_id, markdown, note_type, note_type_provenance, annotation, annotation_provenance, created_at, updated_at, pinned, enrichment_revision, last_enriched_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     note.id,
                     note.workspace_id,
@@ -1138,10 +1400,12 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
                     note.created_at,
                     note.updated_at,
                     i64::from(note.pinned),
+                    note.enrichment_revision as i64,
+                    note.last_enriched_at,
                 ],
             ),
             NoteMutation::Replace(note) => transaction.execute(
-                "UPDATE notes SET markdown = ?2, note_type = ?3, note_type_provenance = ?4, annotation = ?5, annotation_provenance = ?6, updated_at = ?7, pinned = ?8 WHERE id = ?1",
+                "UPDATE notes SET markdown = ?2, note_type = ?3, note_type_provenance = ?4, annotation = ?5, annotation_provenance = ?6, updated_at = ?7, pinned = ?8, enrichment_revision = ?9 WHERE id = ?1",
                 params![
                     note.id,
                     note.markdown,
@@ -1151,14 +1415,15 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
                     note.annotation_provenance.as_str(),
                     note.updated_at,
                     i64::from(note.pinned),
+                    note.enrichment_revision as i64,
                 ],
             ),
             NoteMutation::Delete { note_id } => {
                 transaction.execute("DELETE FROM notes WHERE id = ?1", params![note_id])
             }
             NoteMutation::Relocate { note, .. } => transaction.execute(
-                "UPDATE notes SET workspace_id = ?2 WHERE id = ?1",
-                params![note.id, note.workspace_id],
+                "UPDATE notes SET workspace_id = ?2, enrichment_revision = ?3 WHERE id = ?1",
+                params![note.id, note.workspace_id, note.enrichment_revision as i64],
             ),
         }
         .map_err(WorkspaceError::Storage)?;
@@ -1193,7 +1458,10 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
         let (name, canonical_name) = validated_label_name(name)?;
         let transaction = self.connection.transaction().map_err(WorkspaceError::Storage)?;
         let label_id = label_id_for(&transaction, &note.workspace_id, &name, &canonical_name)?;
-        transaction.execute("INSERT OR IGNORE INTO note_labels (note_id, label_id) VALUES (?1, ?2)", params![note_id, label_id]).map_err(WorkspaceError::Storage)?;
+        let inserted = transaction.execute("INSERT OR IGNORE INTO note_labels (note_id, label_id) VALUES (?1, ?2)", params![note_id, label_id]).map_err(WorkspaceError::Storage)?;
+        if inserted > 0 {
+            transaction.execute("UPDATE notes SET enrichment_revision = enrichment_revision + 1 WHERE id = ?1", [note_id]).map_err(WorkspaceError::Storage)?;
+        }
         refresh_workspace_search(&transaction, &note.workspace_id)?;
         transaction.commit().map_err(WorkspaceError::Storage)?;
         self.snapshot()
@@ -1202,7 +1470,10 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
     fn detach_label(&mut self, note_id: &str, label_id: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
         let note = self.note(note_id)?;
         let transaction = self.connection.transaction().map_err(WorkspaceError::Storage)?;
-        transaction.execute("DELETE FROM note_labels WHERE note_id = ?1 AND label_id = ?2", params![note_id, label_id]).map_err(WorkspaceError::Storage)?;
+        let removed = transaction.execute("DELETE FROM note_labels WHERE note_id = ?1 AND label_id = ?2", params![note_id, label_id]).map_err(WorkspaceError::Storage)?;
+        if removed > 0 {
+            transaction.execute("UPDATE notes SET enrichment_revision = enrichment_revision + 1 WHERE id = ?1", [note_id]).map_err(WorkspaceError::Storage)?;
+        }
         transaction.execute("DELETE FROM labels WHERE id = ?1 AND NOT EXISTS (SELECT 1 FROM note_labels WHERE label_id = ?1)", [label_id]).map_err(WorkspaceError::Storage)?;
         refresh_workspace_search(&transaction, &note.workspace_id)?;
         transaction.commit().map_err(WorkspaceError::Storage)?;
@@ -1253,7 +1524,7 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
             .map_err(WorkspaceError::Storage)?;
         // The unique index is the second guard: a pair raced past the check
         // above is ignored rather than stored twice.
-        transaction
+        let inserted = transaction
             .execute(
                 "INSERT INTO relationships (id, workspace_id, note_id_a, note_id_b, provenance, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(note_id_a, note_id_b) DO NOTHING",
                 params![
@@ -1266,6 +1537,14 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
                 ],
             )
             .map_err(WorkspaceError::Storage)?;
+        if inserted > 0 {
+            transaction
+                .execute(
+                    "UPDATE notes SET enrichment_revision = enrichment_revision + 1 WHERE id IN (?1, ?2)",
+                    params![first, second],
+                )
+                .map_err(WorkspaceError::Storage)?;
+        }
         transaction.commit().map_err(WorkspaceError::Storage)?;
         self.snapshot()
     }
@@ -1282,12 +1561,118 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
             .connection
             .transaction()
             .map_err(WorkspaceError::Storage)?;
-        transaction
+        let removed = transaction
             .execute(
                 "DELETE FROM relationships WHERE note_id_a = ?1 AND note_id_b = ?2",
                 params![first, second],
             )
             .map_err(WorkspaceError::Storage)?;
+        if removed > 0 {
+            transaction
+                .execute(
+                    "UPDATE notes SET enrichment_revision = enrichment_revision + 1 WHERE id IN (?1, ?2)",
+                    params![first, second],
+                )
+                .map_err(WorkspaceError::Storage)?;
+        }
+        transaction.commit().map_err(WorkspaceError::Storage)?;
+        self.snapshot()
+    }
+
+    fn persist_enrichment(
+        &mut self,
+        workspace_id: &str,
+        note_id: &str,
+        previous: &Note,
+        applied: &crate::enrichment::ApplicableFields,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        require_workspace(&read_workspaces(&self.connection)?, workspace_id)?;
+        if previous.workspace_id != workspace_id {
+            return Err(WorkspaceError::NoteNotFound);
+        }
+        if applied.note_type.is_none()
+            && applied.annotation.is_none()
+            && applied.add_labels.is_empty()
+            && applied.add_relationships.is_empty()
+        {
+            return self.snapshot();
+        }
+        // Capture the candidate set before the transaction so the borrow
+        // checker is happy and the relationship inserts see a stable view.
+        let existing_relationships = self.snapshot()?.relationships;
+        let note_ids: std::collections::HashSet<String> = self
+            .snapshot()?
+            .notes
+            .into_iter()
+            .map(|note| note.id)
+            .collect();
+        let now = timestamp();
+        let mut next = previous.clone();
+        if let Some(note_type) = &applied.note_type {
+            next.note_type = note_type.clone();
+            next.note_type_provenance = Provenance::Ai;
+        }
+        if let Some(annotation) = &applied.annotation {
+            next.annotation = Some(annotation.clone());
+            next.annotation_provenance = Provenance::Ai;
+        }
+        next.updated_at = now.clone();
+        next.enrichment_revision = previous.enrichment_revision + 1;
+        next.last_enriched_at = Some(now);
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(WorkspaceError::Storage)?;
+        transaction
+            .execute(
+                "UPDATE notes SET note_type = ?2, note_type_provenance = ?3, annotation = ?4, annotation_provenance = ?5, updated_at = ?6, enrichment_revision = ?7, last_enriched_at = ?8 WHERE id = ?1",
+                params![
+                    next.id,
+                    next.note_type,
+                    next.note_type_provenance.as_str(),
+                    next.annotation,
+                    next.annotation_provenance.as_str(),
+                    next.updated_at,
+                    next.enrichment_revision as i64,
+                    next.last_enriched_at,
+                ],
+            )
+            .map_err(WorkspaceError::Storage)?;
+        for label_name in &applied.add_labels {
+            let (name, canonical) = validated_label_name(label_name)?;
+            let label_id = label_id_for(&transaction, workspace_id, &name, &canonical)?;
+            transaction
+                .execute(
+                    "INSERT OR IGNORE INTO note_labels (note_id, label_id) VALUES (?1, ?2)",
+                    params![note_id, label_id],
+                )
+                .map_err(WorkspaceError::Storage)?;
+        }
+        for other_id in &applied.add_relationships {
+            // A candidate that disappeared is silently dropped rather than
+            // a partial Relationship committed.
+            if !note_ids.contains(other_id) {
+                continue;
+            }
+            if is_related(&existing_relationships, note_id, other_id) {
+                continue;
+            }
+            let (first, second) = canonical_pair(note_id, other_id);
+            transaction
+                .execute(
+                    "INSERT INTO relationships (id, workspace_id, note_id_a, note_id_b, provenance, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(note_id_a, note_id_b) DO NOTHING",
+                    params![
+                        id(),
+                        workspace_id,
+                        first,
+                        second,
+                        RelationshipProvenance::Ai.as_str(),
+                        timestamp()
+                    ],
+                )
+                .map_err(WorkspaceError::Storage)?;
+        }
+        refresh_workspace_search(&transaction, workspace_id)?;
         transaction.commit().map_err(WorkspaceError::Storage)?;
         self.snapshot()
     }
@@ -1429,6 +1814,7 @@ fn migrate(connection: &mut Connection) -> Result<(), WorkspaceError> {
         (5_i64, include_str!("../migrations/0005_relationships.sql")),
         (6_i64, include_str!("../migrations/0006_assistance_policy.sql")),
         (7_i64, include_str!("../migrations/0007_cloud_consent.sql")),
+        (8_i64, include_str!("../migrations/0008_note_enrichment.sql")),
     ];
     for (version, sql) in migrations {
         let transaction = connection.transaction().map_err(WorkspaceError::Storage)?;
@@ -1615,7 +2001,7 @@ fn read_relationships(connection: &Connection) -> Result<Vec<Relationship>, Work
 
 fn read_snapshot(connection: &Connection) -> Result<WorkspaceSnapshot, WorkspaceError> {
     let workspaces = read_workspaces(connection)?;
-    let mut notes = connection.prepare("SELECT id, workspace_id, markdown, note_type, note_type_provenance, annotation, annotation_provenance, created_at, updated_at, pinned FROM notes")
+    let mut notes = connection.prepare("SELECT id, workspace_id, markdown, note_type, note_type_provenance, annotation, annotation_provenance, created_at, updated_at, pinned, enrichment_revision, last_enriched_at FROM notes")
         .map_err(WorkspaceError::Storage)?
         .query_map([], |row| Ok(Note {
             id: row.get(0)?,
@@ -1628,6 +2014,8 @@ fn read_snapshot(connection: &Connection) -> Result<WorkspaceSnapshot, Workspace
             created_at: row.get(7)?,
             updated_at: row.get(8)?,
             pinned: row.get::<_, i64>(9)? != 0,
+            enrichment_revision: row.get::<_, i64>(10)? as u64,
+            last_enriched_at: row.get(11)?,
             labels: vec![],
         }))
         .map_err(WorkspaceError::Storage)?.collect::<Result<Vec<_>, _>>().map_err(WorkspaceError::Storage)?;
@@ -1721,6 +2109,15 @@ mod tests {
                         })
                 })
                 .collect()
+        }
+
+        /// A commit that touches the Note row bumps the enrichment revision,
+        /// so a stale AI result that names the previous revision is rejected
+        /// by the application gate.
+        fn bump_revision(&mut self, note_id: &str) {
+            if let Some(existing) = self.notes.iter_mut().find(|candidate| candidate.id == note_id) {
+                existing.enrichment_revision += 1;
+            }
         }
     }
 
@@ -1934,13 +2331,18 @@ mod tests {
                 self.labels.push(label.clone()); label
             });
             let note = self.notes.iter_mut().find(|note| note.id == note_id).ok_or(WorkspaceError::NoteNotFound)?;
-            if !note.labels.iter().any(|candidate| candidate.id == label.id) { note.labels.push(label); }
+            if !note.labels.iter().any(|candidate| candidate.id == label.id) {
+                note.labels.push(label);
+                note.enrichment_revision += 1;
+            }
             self.snapshot()
         }
 
         fn detach_label(&mut self, note_id: &str, label_id: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
             let note = self.notes.iter_mut().find(|note| note.id == note_id).ok_or(WorkspaceError::NoteNotFound)?;
+            let before = note.labels.len();
             note.labels.retain(|label| label.id != label_id);
+            if note.labels.len() != before { note.enrichment_revision += 1; }
             self.labels.retain(|label| label.id != label_id || self.notes.iter().any(|note| note.labels.iter().any(|candidate| candidate.id == label_id)));
             self.snapshot()
         }
@@ -1984,6 +2386,8 @@ mod tests {
                 provenance: RelationshipProvenance::Manual,
                 created_at: timestamp(),
             });
+            self.bump_revision(note_id);
+            self.bump_revision(other_note_id);
             self.snapshot()
         }
 
@@ -1994,9 +2398,86 @@ mod tests {
         ) -> Result<WorkspaceSnapshot, WorkspaceError> {
             relatable_workspace_id(&self.notes, note_id, other_note_id)?;
             let (first, second) = canonical_pair(note_id, other_note_id);
+            let before = self.relationships.len();
             self.relationships.retain(|relationship| {
                 relationship.note_id_a != first || relationship.note_id_b != second
             });
+            if self.relationships.len() != before {
+                self.bump_revision(note_id);
+                self.bump_revision(other_note_id);
+            }
+            self.snapshot()
+        }
+
+        fn persist_enrichment(
+            &mut self,
+            workspace_id: &str,
+            note_id: &str,
+            previous: &Note,
+            applied: &crate::enrichment::ApplicableFields,
+        ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+            require_workspace(&self.workspaces, workspace_id)?;
+            if previous.workspace_id != workspace_id {
+                return Err(WorkspaceError::NoteNotFound);
+            }
+            if applied.note_type.is_none()
+                && applied.annotation.is_none()
+                && applied.add_labels.is_empty()
+                && applied.add_relationships.is_empty()
+            {
+                return self.snapshot();
+            }
+            let now = timestamp();
+            let position = self
+                .notes
+                .iter()
+                .position(|candidate| candidate.id == note_id)
+                .ok_or(WorkspaceError::NoteNotFound)?;
+            let mut next = self.notes[position].clone();
+            if let Some(note_type) = &applied.note_type {
+                next.note_type = note_type.clone();
+                next.note_type_provenance = Provenance::Ai;
+            }
+            if let Some(annotation) = &applied.annotation {
+                next.annotation = Some(annotation.clone());
+                next.annotation_provenance = Provenance::Ai;
+            }
+            next.updated_at = now.clone();
+            next.enrichment_revision = previous.enrichment_revision + 1;
+            next.last_enriched_at = Some(now);
+            for label_name in &applied.add_labels {
+                let (name, canonical) = validated_label_name(label_name)?;
+                let label_id = if let Some(existing) = self.labels.iter().find(|label| label.workspace_id == workspace_id && label.name.to_lowercase() == canonical) {
+                    existing.id.clone()
+                } else {
+                    let created = Label { id: id(), workspace_id: workspace_id.to_owned(), name };
+                    self.labels.push(created.clone());
+                    created.id
+                };
+                if !next.labels.iter().any(|candidate| candidate.id == label_id) {
+                    if let Some(stored) = self.labels.iter().find(|label| label.id == label_id).cloned() {
+                        next.labels.push(stored);
+                    }
+                }
+            }
+            for other_id in &applied.add_relationships {
+                if !self.notes.iter().any(|candidate| candidate.id == *other_id) {
+                    continue;
+                }
+                if is_related(&self.relationships, note_id, other_id) {
+                    continue;
+                }
+                let (first, second) = canonical_pair(note_id, other_id);
+                self.relationships.push(Relationship {
+                    id: id(),
+                    workspace_id: workspace_id.to_owned(),
+                    note_id_a: first.to_owned(),
+                    note_id_b: second.to_owned(),
+                    provenance: RelationshipProvenance::Ai,
+                    created_at: timestamp(),
+                });
+            }
+            self.notes[position] = next;
             self.snapshot()
         }
 
@@ -3533,5 +4014,297 @@ mod tests {
         let _ = serialized;
         drop(store);
         remove_database(&path);
+    }
+
+    fn parsed_enrichment() -> crate::enrichment::ParsedEnrichmentResult {
+        crate::enrichment::ParsedEnrichmentResult {
+            note_type: "claim".to_owned(),
+            labels: vec!["alpha".to_owned(), "beta".to_owned()],
+            annotation: Some("an additive note".to_owned()),
+            related_note_ids: vec![],
+        }
+    }
+
+    fn token_for(workspace_id: &str, note_id: &str, revision: u64) -> crate::enrichment::RequestToken {
+        crate::enrichment::RequestToken {
+            workspace_id: workspace_id.to_owned(),
+            note_id: note_id.to_owned(),
+            revision,
+            policy: "local_ai".to_owned(),
+            endpoint: "http://localhost:11434".to_owned(),
+            model: "phi3:latest".to_owned(),
+        }
+    }
+
+    #[test]
+    fn apply_enrichment_sets_ai_provenance_on_organization_fields() {
+        let mut store = MemoryStore::new();
+        let workspace_id = workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
+        committed(store.set_assistance_policy_outcome(&workspace_id, "local_ai"));
+        let note = committed(store.create_note_outcome(&workspace_id, "an org thought"));
+        let note_id = note.notes[0].id.clone();
+        let outcome = committed(store.apply_enrichment_outcome(
+            &workspace_id,
+            &note_id,
+            &parsed_enrichment(),
+            &token_for(&workspace_id, &note_id, 0),
+            false,
+        ));
+        let after = note_in(&outcome, &note_id);
+        assert_eq!(after.note_type, "claim");
+        assert_eq!(after.note_type_provenance, Provenance::Ai);
+        assert_eq!(after.annotation.as_deref(), Some("an additive note"));
+        assert_eq!(after.annotation_provenance, Provenance::Ai);
+        let label_names: Vec<String> = after.labels.iter().map(|label| label.name().to_owned()).collect();
+        assert_eq!(label_names, vec!["alpha".to_owned(), "beta".to_owned()]);
+        assert!(after.last_enriched_at().is_some());
+    }
+
+    #[test]
+    fn apply_enrichment_never_writes_a_manual_note_type() {
+        let mut store = MemoryStore::new();
+        let workspace_id = workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
+        committed(store.set_assistance_policy_outcome(&workspace_id, "local_ai"));
+        let note = committed(store.create_note_outcome(&workspace_id, "a manual thought"));
+        let note_id = note.notes[0].id.clone();
+        committed(store.set_note_type_outcome(&note_id, "opinion"));
+        let before = note_in(&committed(store.snapshot_outcome()), &note_id);
+        let outcome = committed(store.apply_enrichment_outcome(
+            &workspace_id,
+            &note_id,
+            &parsed_enrichment(),
+            &token_for(&workspace_id, &note_id, before.enrichment_revision()),
+            false,
+        ));
+        let after = note_in(&outcome, &note_id);
+        assert_eq!(after.note_type, "opinion");
+        assert_eq!(after.note_type_provenance, Provenance::Manual);
+    }
+
+    #[test]
+    fn apply_enrichment_replaces_manual_fields_when_forced() {
+        let mut store = MemoryStore::new();
+        let workspace_id = workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
+        committed(store.set_assistance_policy_outcome(&workspace_id, "local_ai"));
+        let note = committed(store.create_note_outcome(&workspace_id, "a manual thought"));
+        let note_id = note.notes[0].id.clone();
+        committed(store.set_note_type_outcome(&note_id, "opinion"));
+        committed(store.set_note_annotation_outcome(&note_id, "kept by hand"));
+        let before = note_in(&committed(store.snapshot_outcome()), &note_id);
+        let outcome = committed(store.apply_enrichment_outcome(
+            &workspace_id,
+            &note_id,
+            &parsed_enrichment(),
+            &token_for(&workspace_id, &note_id, before.enrichment_revision()),
+            true,
+        ));
+        let after = note_in(&outcome, &note_id);
+        assert_eq!(after.note_type, "claim");
+        assert_eq!(after.note_type_provenance, Provenance::Ai);
+        assert_eq!(after.annotation.as_deref(), Some("an additive note"));
+    }
+
+    #[test]
+    fn apply_enrichment_rejects_stale_revision() {
+        let mut store = MemoryStore::new();
+        let workspace_id = workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
+        committed(store.set_assistance_policy_outcome(&workspace_id, "local_ai"));
+        let note = committed(store.create_note_outcome(&workspace_id, "an org thought"));
+        let note_id = note.notes[0].id.clone();
+        // Bump the revision with a manual edit, so the token's revision (0) is stale.
+        committed(store.set_note_pinned_outcome(&note_id, true));
+        let outcome = store.apply_enrichment_outcome(
+            &workspace_id,
+            &note_id,
+            &parsed_enrichment(),
+            &token_for(&workspace_id, &note_id, 0),
+            false,
+        );
+        assert!(matches!(
+            outcome,
+            WorkspaceCommandResult::Failed {
+                failure: WorkspaceFailure {
+                    code: WorkspaceFailureCode::Stale,
+                    ..
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn apply_enrichment_rejects_manual_policy() {
+        let mut store = MemoryStore::new();
+        let workspace_id = workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
+        let note = committed(store.create_note_outcome(&workspace_id, "an org thought"));
+        let note_id = note.notes[0].id.clone();
+        // Policy remains Manual; the request should be rejected.
+        let outcome = store.apply_enrichment_outcome(
+            &workspace_id,
+            &note_id,
+            &parsed_enrichment(),
+            &token_for(&workspace_id, &note_id, 0),
+            false,
+        );
+        assert!(matches!(
+            outcome,
+            WorkspaceCommandResult::Failed {
+                failure: WorkspaceFailure {
+                    code: WorkspaceFailureCode::Stale,
+                    ..
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn apply_enrichment_never_overwrites_a_manual_label_membership() {
+        let mut store = MemoryStore::new();
+        let workspace_id = workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
+        committed(store.set_assistance_policy_outcome(&workspace_id, "local_ai"));
+        let note = committed(store.create_note_outcome(&workspace_id, "an org thought"));
+        let note_id = note.notes[0].id.clone();
+        // A manual Label of the same name; the AI must not add a duplicate.
+        committed(store.attach_label_outcome(&note_id, "alpha"));
+        let before = note_in(&committed(store.snapshot_outcome()), &note_id);
+        let outcome = committed(store.apply_enrichment_outcome(
+            &workspace_id,
+            &note_id,
+            &parsed_enrichment(),
+            &token_for(&workspace_id, &note_id, before.enrichment_revision()),
+            false,
+        ));
+        let after = note_in(&outcome, &note_id);
+        let label_names: Vec<String> = after.labels.iter().map(|label| label.name().to_owned()).collect();
+        // The manual "alpha" stays; the AI suggestion of "alpha" is skipped
+        // because it is already a membership, and "beta" is added.
+        assert_eq!(label_names, vec!["alpha".to_owned(), "beta".to_owned()]);
+    }
+
+    #[test]
+    fn apply_enrichment_does_not_change_note_text() {
+        let mut store = MemoryStore::new();
+        let workspace_id = workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
+        committed(store.set_assistance_policy_outcome(&workspace_id, "local_ai"));
+        let original_text = "A thought that must never be rewritten.";
+        let note = committed(store.create_note_outcome(&workspace_id, original_text));
+        let note_id = note.notes[0].id.clone();
+        let before = note_in(&committed(store.snapshot_outcome()), &note_id);
+        let outcome = committed(store.apply_enrichment_outcome(
+            &workspace_id,
+            &note_id,
+            &parsed_enrichment(),
+            &token_for(&workspace_id, &note_id, before.enrichment_revision()),
+            false,
+        ));
+        let after = note_in(&outcome, &note_id);
+        assert_eq!(after.markdown(), original_text);
+    }
+
+    #[test]
+    fn apply_enrichment_adds_relationships_with_ai_provenance() {
+        let mut store = MemoryStore::new();
+        let workspace_id = workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
+        committed(store.set_assistance_policy_outcome(&workspace_id, "local_ai"));
+        let target = committed(store.create_note_outcome(&workspace_id, "target"));
+        let other = committed(store.create_note_outcome(&workspace_id, "related"));
+        let target_id = target.notes[0].id.clone();
+        let other_id = other.notes[0].id.clone();
+        let before_target = note_in(&committed(store.snapshot_outcome()), &target_id);
+        let before_other = note_in(&committed(store.snapshot_outcome()), &other_id);
+        let mut parsed = parsed_enrichment();
+        parsed.related_note_ids = vec![other_id.clone()];
+        let outcome = committed(store.apply_enrichment_outcome(
+            &workspace_id,
+            &target_id,
+            &parsed,
+            &token_for(&workspace_id, &target_id, before_target.enrichment_revision()),
+            false,
+        ));
+        let after = &outcome;
+        assert_eq!(after.relationships.len(), 1);
+        assert_eq!(
+            after.relationships[0].provenance,
+            RelationshipProvenance::Ai
+        );
+        // The other endpoint's enrichment revision was bumped by the gate,
+        // so a later manual edit can invalidate in-flight AI against it.
+        let after_other = note_in(after, &other_id);
+        assert!(after_other.enrichment_revision() > before_other.enrichment_revision());
+    }
+
+    #[test]
+    fn apply_enrichment_survives_reopen() {
+        let path = temporary_path();
+        let workspace_id;
+        let note_id;
+        let original_text;
+        {
+            let mut store = WorkspaceStore::open(&path).unwrap();
+            let snapshot = committed(store.snapshot_outcome());
+            workspace_id = workspace_id_named(&snapshot, DEFAULT_WORKSPACE_NAME);
+            committed(store.set_assistance_policy_outcome(&workspace_id, "local_ai"));
+            original_text = "an org thought that persists";
+            let note = committed(store.create_note_outcome(&workspace_id, original_text));
+            note_id = note.notes[0].id.clone();
+            let before = note_in(&committed(store.snapshot_outcome()), &note_id);
+            let outcome = committed(store.apply_enrichment_outcome(
+                &workspace_id,
+                &note_id,
+                &parsed_enrichment(),
+                &token_for(&workspace_id, &note_id, before.enrichment_revision()),
+                false,
+            ));
+            let after = note_in(&outcome, &note_id);
+            assert_eq!(after.note_type, "claim");
+            assert_eq!(after.note_type_provenance, Provenance::Ai);
+        }
+        let reopened = WorkspaceStore::open(&path).unwrap().snapshot().unwrap();
+        let after = reopened
+            .notes
+            .iter()
+            .find(|note| note.id == note_id)
+            .expect("note survives reopen");
+        assert_eq!(after.markdown(), original_text);
+        assert_eq!(after.note_type, "claim");
+        assert_eq!(after.note_type_provenance, Provenance::Ai);
+        assert_eq!(after.annotation.as_deref(), Some("an additive note"));
+        assert!(after.last_enriched_at().is_some());
+        let label_names: Vec<String> = after.labels.iter().map(|label| label.name().to_owned()).collect();
+        assert_eq!(label_names, vec!["alpha".to_owned(), "beta".to_owned()]);
+        drop(reopened);
+        remove_database(&path);
+    }
+
+    /// A Note edit between request and apply must invalidate the
+    /// in-flight enrichment result, even when the AI result is otherwise
+    /// valid. The capture is the revision; the apply re-checks it.
+    #[test]
+    fn apply_enrichment_drops_results_when_the_thinker_edits_during_inference() {
+        let mut store = MemoryStore::new();
+        let workspace_id = workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
+        committed(store.set_assistance_policy_outcome(&workspace_id, "local_ai"));
+        let note = committed(store.create_note_outcome(&workspace_id, "an org thought"));
+        let note_id = note.notes[0].id.clone();
+        // Capture the revision at request time, then bump it with a manual
+        // edit while the AI is "thinking" — the apply path should reject
+        // the captured token as stale.
+        let captured_revision = note.notes[0].enrichment_revision();
+        committed(store.set_note_pinned_outcome(&note_id, true));
+        let outcome = store.apply_enrichment_outcome(
+            &workspace_id,
+            &note_id,
+            &parsed_enrichment(),
+            &token_for(&workspace_id, &note_id, captured_revision),
+            false,
+        );
+        assert!(matches!(
+            outcome,
+            WorkspaceCommandResult::Failed {
+                failure: WorkspaceFailure {
+                    code: WorkspaceFailureCode::Stale,
+                    ..
+                }
+            }
+        ));
     }
 }
