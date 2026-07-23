@@ -3,6 +3,9 @@ import type { Note } from "./workspace-client"
 import { noteViewLabel, NOTE_VIEWS, type NoteView } from "./note-views"
 import { TilingView } from "./tiling-view"
 import { KanbanView } from "./kanban-view"
+import { GraphView } from "./graph-view"
+import type { ThinkingGraph } from "./thinking-graph"
+import type { NoteFocus } from "./note-focus"
 
 /**
  * The committed Notes, arranged however the thinker chose to read them. The
@@ -11,6 +14,8 @@ import { KanbanView } from "./kanban-view"
  */
 export function CommittedNotesSection({
   notes,
+  graph,
+  focus,
   searching,
   view,
   canUndo,
@@ -19,6 +24,9 @@ export function CommittedNotesSection({
   card,
 }: {
   notes: Note[]
+  /** The whole Thinking Graph of the active Workspace, which no search narrows. */
+  graph: ThinkingGraph
+  focus: NoteFocus
   searching: boolean
   view: NoteView
   canUndo: boolean
@@ -53,7 +61,11 @@ export function CommittedNotesSection({
           </button>
         ))}
       </div>
-      {notes.length === 0 ? (
+      {/* The graph shows the Thinking Graph of the whole active Workspace, so
+          it reads the projection rather than the searched-narrowed result. */}
+      {view === "graph" ? (
+        <GraphView graph={graph} focus={focus} card={card} />
+      ) : notes.length === 0 ? (
         <p>{searching ? "No Notes match this search." : "No Notes yet."}</p>
       ) : view === "tiling" ? (
         <TilingView notes={notes} card={card} />

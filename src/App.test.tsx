@@ -569,7 +569,10 @@ describe("Relationships on the Note detail surface", () => {
 
 describe("tiling and kanban over one committed projection", () => {
   /** Switching view is a way of reading, so it submits nothing. */
-  async function switchTo(user: ReturnType<typeof userEvent.setup>, view: "Tiling" | "Kanban") {
+  async function switchTo(
+    user: ReturnType<typeof userEvent.setup>,
+    view: "Tiling" | "Kanban" | "Graph",
+  ) {
     await user.click(
       within(screen.getByRole("group", { name: "Note view" })).getByRole("button", { name: view }),
     )
@@ -712,5 +715,236 @@ describe("tiling and kanban over one committed projection", () => {
 
     await switchTo(user, "Kanban")
     expect(noteCards()[0].textContent).toContain("Newer thought")
+  })
+})
+
+describe("the graph view and Relationship focus", () => {
+  async function switchTo(
+    user: ReturnType<typeof userEvent.setup>,
+    view: "Tiling" | "Kanban" | "Graph",
+  ) {
+    await user.click(
+      within(screen.getByRole("group", { name: "Note view" })).getByRole("button", { name: view }),
+    )
+  }
+
+  function graph() {
+    return screen.getByRole("group", { name: "Thinking Graph" })
+  }
+
+  /** One node per Note, found the same way a Note is found anywhere else. */
+  function node(preview: string) {
+    return within(graph()).getByRole("button", { name: preview })
+  }
+
+  /** No card is on screen while nothing is focused, so nothing is asserted into being. */
+  function cards() {
+    return screen.queryAllByRole("article")
+  }
+
+  function dimmedCards() {
+    return cards().filter((card) => card.className.includes("dimmed"))
+  }
+
+  /** SVG class names are not plain strings, so the attribute is read directly. */
+  function nodeClass(preview: string) {
+    return node(preview).parentElement!.getAttribute("class") ?? ""
+  }
+
+  /** Two Notes related to each other, and a third related to neither. */
+  async function threeNotes(user: ReturnType<typeof userEvent.setup>) {
+    await captureNote(user, "Cities grew around rivers")
+    await captureNote(user, "Trade follows water")
+    await captureNote(user, "An unrelated thought")
+    await user.click(within(cards()[0]).getByRole("button", { name: "Relate Note" }))
+    await user.click(within(cards()[0]).getByRole("button", { name: "Trade follows water" }))
+    await waitFor(() => expect(within(cards()[0]).getByText("1 related")).toBeDefined())
+  }
+
+  it("shows every Note of the Workspace once and every Relationship once", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await threeNotes(user)
+    await switchTo(user, "Graph")
+
+    expect(within(graph()).getAllByRole("button")).toHaveLength(3)
+    expect(node("Cities grew around rivers")).toBeDefined()
+    expect(node("Trade follows water")).toBeDefined()
+    // The unrelated Note is a node like any other, not a hidden one.
+    expect(node("An unrelated thought")).toBeDefined()
+    expect(graph().querySelectorAll("line")).toHaveLength(1)
+  })
+
+  it("previews related Notes on hover and lets them go again", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await threeNotes(user)
+    await switchTo(user, "Graph")
+
+    await user.hover(node("Cities grew around rivers"))
+    // Hover lights the Note and what it is related to; the rest is dimmed.
+    await waitFor(() =>
+      expect(nodeClass("An unrelated thought")).toContain("dimmed"),
+    )
+    expect(nodeClass("Trade follows water")).not.toContain("dimmed")
+
+    await user.unhover(node("Cities grew around rivers"))
+    await waitFor(() =>
+      expect(nodeClass("An unrelated thought")).not.toContain("dimmed"),
+    )
+  })
+
+  it("locks focus on click, opens the Note, and lets go on a second click", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await threeNotes(user)
+    await switchTo(user, "Graph")
+
+    await user.click(node("Cities grew around rivers"))
+    // Selecting a node opens the same Note card every other view places.
+    await waitFor(() => expect(cards()).toHaveLength(1))
+    expect(cards()[0].textContent).toContain("Cities grew around rivers")
+    expect(node("Cities grew around rivers").getAttribute("aria-pressed")).toBe("true")
+    expect(nodeClass("An unrelated thought")).toContain("dimmed")
+
+    await user.click(node("Cities grew around rivers"))
+    await waitFor(() => expect(cards()).toHaveLength(0))
+    expect(node("Cities grew around rivers").getAttribute("aria-pressed")).toBe("false")
+    // The pointer is still on the node, so its hover preview outlives the lock.
+    await user.unhover(node("Cities grew around rivers"))
+    await waitFor(() => expect(nodeClass("An unrelated thought")).not.toContain("dimmed"))
+  })
+
+  it("lets go of a locked focus on Escape", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await threeNotes(user)
+    await switchTo(user, "Graph")
+
+    await user.click(node("Cities grew around rivers"))
+    await waitFor(() => expect(cards()).toHaveLength(1))
+
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(cards()).toHaveLength(0))
+    expect(node("Cities grew around rivers").getAttribute("aria-pressed")).toBe("false")
+  })
+
+  it("dims the same unrelated Notes in tiling and in kanban", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await threeNotes(user)
+    await switchTo(user, "Graph")
+    await user.click(node("Cities grew around rivers"))
+    await waitFor(() => expect(cards()).toHaveLength(1))
+
+    await switchTo(user, "Tiling")
+    await waitFor(() => expect(cards()).toHaveLength(3))
+    const dimmedInTiling = dimmedCards().map((card) => card.getAttribute("aria-label"))
+    expect(dimmedInTiling).toEqual(["An unrelated thought"])
+
+    await switchTo(user, "Kanban")
+    expect(dimmedCards().map((card) => card.getAttribute("aria-label"))).toEqual(dimmedInTiling)
+  })
+
+  it("lets go of the focus when the focused Note is deleted", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await threeNotes(user)
+    await switchTo(user, "Graph")
+    await user.click(node("Trade follows water"))
+    await waitFor(() => expect(cards()).toHaveLength(1))
+
+    await user.click(within(cards()[0]).getByRole("button", { name: "Delete Note" }))
+    await user.click(
+      within(screen.getByRole("alertdialog", { name: "Confirm delete Note" })).getByRole("button", {
+        name: "Delete Note",
+      }),
+    )
+
+    // The node, its link, and the focus all go with the committed delete.
+    await waitFor(() => expect(within(graph()).getAllByRole("button")).toHaveLength(2))
+    expect(cards()).toHaveLength(0)
+    expect(graph().querySelectorAll("line")).toHaveLength(0)
+    expect(dimmedCards()).toHaveLength(0)
+  })
+
+  it("redraws from committed state when a Relationship is removed", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await threeNotes(user)
+    await switchTo(user, "Graph")
+    expect(graph().querySelectorAll("line")).toHaveLength(1)
+
+    await user.click(node("Cities grew around rivers"))
+    await waitFor(() => expect(cards()).toHaveLength(1))
+    await user.click(
+      within(cards()[0]).getByRole("button", {
+        name: "Remove Relationship to Trade follows water",
+      }),
+    )
+
+    await waitFor(() => expect(graph().querySelectorAll("line")).toHaveLength(0))
+    // Degree and the related set agree, because both read the one projection.
+    expect(within(cards()[0]).queryByText("1 related")).toBeNull()
+    expect(nodeClass("Trade follows water")).toContain("dimmed")
+  })
+
+  it("draws no link for a Relationship the Workspace no longer holds", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await threeNotes(user)
+
+    // Moving a Note takes it and its Relationships out of this Workspace.
+    await user.click(within(cards()[1]).getByRole("button", { name: "Move or Copy Note" }))
+    await user.click(within(cards()[1]).getByRole("button", { name: "Move Note" }))
+    await waitFor(() => expect(cards()).toHaveLength(2))
+
+    await switchTo(user, "Graph")
+    expect(within(graph()).getAllByRole("button")).toHaveLength(2)
+    expect(graph().querySelectorAll("line")).toHaveLength(0)
+  })
+
+  it("draws an empty, a single-Note, and a disconnected Workspace safely", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByRole("button", { name: "Undo" })
+    await switchTo(user, "Graph")
+    expect(screen.getByText("No Notes yet.")).toBeDefined()
+    expect(screen.queryByRole("group", { name: "Thinking Graph" })).toBeNull()
+
+    await switchTo(user, "Tiling")
+    await captureNote(user, "The only thought")
+    await switchTo(user, "Graph")
+    expect(within(graph()).getAllByRole("button")).toHaveLength(1)
+    expect(graph().querySelectorAll("line")).toHaveLength(0)
+
+    // Every Note related to nothing is still a node, and none of them dim.
+    await switchTo(user, "Tiling")
+    for (let index = 0; index < 8; index += 1) await captureNote(user, `Thought ${index}`)
+    await switchTo(user, "Graph")
+    expect(within(graph()).getAllByRole("button")).toHaveLength(9)
+    expect(graph().querySelectorAll("line")).toHaveLength(0)
+    expect(nodeClass("Thought 0")).not.toContain("dimmed")
+  })
+
+  it("rebuilds the graph from the committed snapshot after a restart", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await threeNotes(user)
+    await switchTo(user, "Graph")
+    const drawn = graph().innerHTML
+
+    // A restart keeps only what SQLite holds: no view choice, no arrangement.
+    cleanup()
+    render(<App />)
+    await screen.findAllByRole("article")
+    expect(
+      within(screen.getByRole("group", { name: "Note view" }))
+        .getByRole("button", { name: "Tiling" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true")
+
+    await switchTo(user, "Graph")
+    expect(graph().innerHTML).toBe(drawn)
   })
 })
