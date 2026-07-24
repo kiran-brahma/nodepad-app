@@ -25,6 +25,7 @@ import { CaptureSection } from "./capture-section"
 import { SearchSection } from "./search-section"
 import { CommittedNotesSection } from "./committed-notes-section"
 import { StorageRecovery } from "./storage-recovery"
+import { AppShell } from "./app-shell"
 import { AssistanceSection, CloudConsentDialog } from "./assistance-section"
 import { IntroVideo } from "./intro-video"
 import { useLocalDiscovery } from "./use-local-discovery"
@@ -311,105 +312,114 @@ export function App() {
   }
 
   return (
-    <main>
-      <header>
-        <p className="eyebrow">Nodepad</p>
-        <h1>Thinking Workspace</h1>
-        <p>Capture one atomic thought at a time. Every change is committed locally before it appears here.</p>
-      </header>
+    <>
+      <AppShell
+      rail={
+        <WorkspaceSection
+          workspaces={workspaces}
+          activeWorkspaceId={activeWorkspace?.id}
+          name={workspaceName}
+          onSelect={(workspaceId) => void submit(thinkingWorkspace.selectWorkspace(workspaceId))}
+          onNameChange={setWorkspaceName}
+          onCreate={createWorkspace}
+        />
+      }
+      main={
+        <>
+          <header>
+            <p className="eyebrow">Nodepad</p>
+            <h1>Thinking Workspace</h1>
+            <p>Capture one atomic thought at a time. Every change is committed locally before it appears here.</p>
+          </header>
 
-      <IntroVideo />
+          <IntroVideo />
 
-      {failure && <aside role="alert">{failure.message} <button onClick={dismissFailure}>Dismiss</button></aside>}
+          {failure && <aside role="alert">{failure.message} <button onClick={dismissFailure}>Dismiss</button></aside>}
 
-      <WorkspaceSection
-        workspaces={workspaces}
-        activeWorkspaceId={activeWorkspace?.id}
-        name={workspaceName}
-        onSelect={(workspaceId) => void submit(thinkingWorkspace.selectWorkspace(workspaceId))}
-        onNameChange={setWorkspaceName}
-        onCreate={createWorkspace}
-      />
+          <AssistanceSection
+            activeWorkspace={activeWorkspace}
+            localState={localDiscovery.state}
+            localQuery={localDiscovery.query}
+            localFilteredModels={localDiscovery.filteredModels}
+            cloudState={cloudDiscovery.state}
+            cloudQuery={cloudDiscovery.query}
+            cloudFilteredModels={cloudDiscovery.filteredModels}
+            cloudKeyPresent={cloudDiscovery.keyPresent}
+            selectedMissing={
+              localDiscovery.selectedMissing || cloudDiscovery.selectedMissing
+            }
+            onPolicyChange={setAssistancePolicy}
+            onCloudProviderChange={setCloudProvider}
+            onLocalQueryChange={localDiscovery.setQuery}
+            onLocalRefresh={localDiscovery.refresh}
+            onCloudQueryChange={cloudDiscovery.setQuery}
+            onCloudRefresh={cloudDiscovery.refresh}
+            onCloudKeyChange={cloudDiscovery.refreshKeyPresence}
+            onRequestCloudConsent={() =>
+              activeWorkspace &&
+              setConsentDialog({ workspaceId: activeWorkspace.id, workspaceName: activeWorkspace.name, provider: activeWorkspace.cloudProvider ?? "ollama" })
+            }
+            onRevokeCloudConsent={revokeCloudConsent}
+            onSelectModel={selectModel}
+          />
 
-      <CaptureSection
-        activeWorkspace={activeWorkspace}
-        renameDraft={renameDraft}
-        pendingDelete={pendingDelete}
-        noteMarkdown={noteMarkdown}
-        onStartRename={(workspace: ThinkingWorkspace) =>
-          setRenameDraft({ id: workspace.id, name: workspace.name })
-        }
-        onRenameDraftChange={(name) => setRenameDraft((draft) => (draft ? { ...draft, name } : draft))}
-        onRename={renameWorkspace}
-        onCancelRename={() => setRenameDraft(null)}
-        onRequestDelete={(workspace) => setPendingDelete(requestDelete(workspace))}
-        onAnswerDelete={answerDeleteConfirmation}
-        onNoteMarkdownChange={setNoteMarkdown}
-        onCreateNote={createNote}
-        onExport={exportWorkspace}
-        onExportArchive={exportWorkspaceArchive}
-        onImportArchive={importWorkspaceArchive}
-      />
+          <SearchSection
+            query={searchQuery}
+            searching={searchResults !== null}
+            matchCount={visible.length}
+            noteCount={notes.length}
+            canSearch={Boolean(activeWorkspace)}
+            onQueryChange={setSearchQuery}
+            onSearch={search}
+            onClear={() => { setSearchQuery(""); setSearchResults(null) }}
+          />
 
-      <AssistanceSection
-        activeWorkspace={activeWorkspace}
-        localState={localDiscovery.state}
-        localQuery={localDiscovery.query}
-        localFilteredModels={localDiscovery.filteredModels}
-        cloudState={cloudDiscovery.state}
-        cloudQuery={cloudDiscovery.query}
-        cloudFilteredModels={cloudDiscovery.filteredModels}
-        cloudKeyPresent={cloudDiscovery.keyPresent}
-        selectedMissing={
-          localDiscovery.selectedMissing || cloudDiscovery.selectedMissing
-        }
-        onPolicyChange={setAssistancePolicy}
-        onCloudProviderChange={setCloudProvider}
-        onLocalQueryChange={localDiscovery.setQuery}
-        onLocalRefresh={localDiscovery.refresh}
-        onCloudQueryChange={cloudDiscovery.setQuery}
-        onCloudRefresh={cloudDiscovery.refresh}
-        onCloudKeyChange={cloudDiscovery.refreshKeyPresence}
-        onRequestCloudConsent={() =>
-          activeWorkspace &&
-          setConsentDialog({ workspaceId: activeWorkspace.id, workspaceName: activeWorkspace.name, provider: activeWorkspace.cloudProvider ?? "ollama" })
-        }
-        onRevokeCloudConsent={revokeCloudConsent}
-        onSelectModel={selectModel}
-      />
+          <CommittedNotesSection
+            notes={visible}
+            graph={graph}
+            focus={focus}
+            searching={searchResults !== null}
+            view={view}
+            canUndo={canUndo}
+            onChooseView={setView}
+            onUndo={undoLastChange}
+            card={noteCard}
+            pendingSyntheses={synthesis.pending}
+          />
 
-      <SearchSection
-        query={searchQuery}
-        searching={searchResults !== null}
-        matchCount={visible.length}
-        noteCount={notes.length}
-        canSearch={Boolean(activeWorkspace)}
-        onQueryChange={setSearchQuery}
-        onSearch={search}
-        onClear={() => { setSearchQuery(""); setSearchResults(null) }}
-      />
+          <SynthesisSection
+            pending={synthesis.pending}
+            notes={notes}
+            status={synthesis.status}
+            aiEnabled={aiEnabled}
+            onAccept={synthesis.accept}
+            onDismiss={synthesis.dismiss}
+          />
+        </>
+      }
+      footer={
+        <CaptureSection
+          activeWorkspace={activeWorkspace}
+          renameDraft={renameDraft}
+          pendingDelete={pendingDelete}
+          noteMarkdown={noteMarkdown}
+          onStartRename={(workspace: ThinkingWorkspace) =>
+            setRenameDraft({ id: workspace.id, name: workspace.name })
+          }
+          onRenameDraftChange={(name) => setRenameDraft((draft) => (draft ? { ...draft, name } : draft))}
+          onRename={renameWorkspace}
+          onCancelRename={() => setRenameDraft(null)}
+          onRequestDelete={(workspace) => setPendingDelete(requestDelete(workspace))}
+          onAnswerDelete={answerDeleteConfirmation}
+          onNoteMarkdownChange={setNoteMarkdown}
+          onCreateNote={createNote}
+          onExport={exportWorkspace}
+          onExportArchive={exportWorkspaceArchive}
+          onImportArchive={importWorkspaceArchive}
+        />
+      }
+    />
 
-      <CommittedNotesSection
-        notes={visible}
-        graph={graph}
-        focus={focus}
-        searching={searchResults !== null}
-        view={view}
-        canUndo={canUndo}
-        onChooseView={setView}
-        onUndo={undoLastChange}
-        card={noteCard}
-        pendingSyntheses={synthesis.pending}
-      />
-
-      <SynthesisSection
-        pending={synthesis.pending}
-        notes={notes}
-        status={synthesis.status}
-        aiEnabled={aiEnabled}
-        onAccept={synthesis.accept}
-        onDismiss={synthesis.dismiss}
-      />
       {renameLabelDraft && (
         <RenameLabelModal
           draft={renameLabelDraft}
@@ -435,7 +445,7 @@ export function App() {
           actions={paletteActions}
         />
       )}
-    </main>
+    </>
   )
 }
 

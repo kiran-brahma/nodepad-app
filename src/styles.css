@@ -29,6 +29,51 @@ a:focus-visible,
 }
 
 main { max-width: 760px; margin: 0 auto; padding: 4rem 1.5rem; }
+
+/* Three-region app shell: left rail, main pane with scrollable content and
+   pinned footer capture bar. The shell fills the viewport; the main pane's
+   content area keeps the existing max-width for readability. */
+.app-shell { display: flex; height: 100vh; overflow: hidden; }
+.app-rail {
+  width: 240px;
+  min-width: 240px;
+  background: #f7f3eb;
+  border-right: 2px solid #cdbfb0;
+  overflow-y: auto;
+  padding: 1.5rem 1rem;
+}
+.app-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+.app-main-topbar {
+  /* Reserved for later slices (R3/R4/R6). Currently empty. */
+  flex-shrink: 0;
+}
+.app-main-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 2rem 1.5rem 1rem;
+  max-width: 760px;
+  width: 100%;
+}
+.app-main-footer {
+  flex-shrink: 0;
+  border-top: 2px solid #cdbfb0;
+  background: #f7f3eb;
+  padding: 0.75rem 1.5rem;
+}
+
+/* Narrow windows: rail collapses to a narrower width so the main pane
+   keeps enough space for Notes. Below 640px the rail becomes icon-like. */
+@media (max-width: 640px) {
+  .app-rail { width: 56px; min-width: 56px; padding: 1.5rem 0.5rem; }
+  .app-main-content { padding: 1rem 0.75rem; }
+  .app-main-footer { padding: 0.5rem 0.75rem; }
+}
 header { border-bottom: 1px solid #cdbfb0; margin-bottom: 1.5rem; }
 h1, h2 { font-weight: 500; }
 .eyebrow { color: #8f3d27; font: 700 .75rem/1 system-ui, sans-serif; letter-spacing: .14em; text-transform: uppercase; }
