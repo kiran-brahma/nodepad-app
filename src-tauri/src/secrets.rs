@@ -84,14 +84,7 @@ impl Default for SecurityCliKeychain {
 impl KeychainAdapter for SecurityCliKeychain {
     fn read(&self, service: &str, account: &str) -> KeychainOutcome<String> {
         let output = Command::new("security")
-            .args([
-                "find-generic-password",
-                "-s",
-                service,
-                "-a",
-                account,
-                "-w",
-            ])
+            .args(["find-generic-password", "-s", service, "-a", account, "-w"])
             .output();
         match output {
             Ok(out) if out.status.success() => {
@@ -115,7 +108,9 @@ impl KeychainAdapter for SecurityCliKeychain {
                         .next()
                         .map(|line| line.trim().to_owned())
                         .filter(|line| !line.is_empty())
-                        .unwrap_or_else(|| "The macOS keychain refused to read the Ollama Cloud key.".to_owned()),
+                        .unwrap_or_else(|| {
+                            "The macOS keychain refused to read the Ollama Cloud key.".to_owned()
+                        }),
                 ),
             },
             Err(error) => KeychainOutcome::Failed {
@@ -162,7 +157,9 @@ impl KeychainAdapter for SecurityCliKeychain {
                         .next()
                         .map(|line| line.trim().to_owned())
                         .filter(|line| !line.is_empty())
-                        .unwrap_or_else(|| "The macOS keychain refused to save the Ollama Cloud key.".to_owned()),
+                        .unwrap_or_else(|| {
+                            "The macOS keychain refused to save the Ollama Cloud key.".to_owned()
+                        }),
                 ),
             },
             Err(error) => KeychainOutcome::Failed {
@@ -196,10 +193,10 @@ impl KeychainAdapter for SecurityCliKeychain {
     }
 }
 
-/// The shared handle production code uses; tests construct their own fake.
+/// A scripted keychain so the seam's contract is the only thing under test.
+/// Production code uses [`SecurityCliKeychain`]; tests construct their own fake.
 #[cfg(test)]
 pub mod fake {
-    //! A scripted keychain so the seam's contract is the only thing under test.
     use super::{KeychainAdapter, KeychainFailure, KeychainFailureCode, KeychainOutcome};
     use std::sync::Mutex;
 
@@ -254,7 +251,7 @@ pub mod fake {
                 account: account.to_owned(),
                 value: Some(value.to_owned()),
             });
-            match self.write_result.lock().unwrap().clone() {
+            match *self.write_result.lock().unwrap() {
                 Ok(()) => {
                     *self.stored.lock().unwrap() = Some(value.to_owned());
                     KeychainOutcome::Ok(())
@@ -272,7 +269,7 @@ pub mod fake {
                 account: account.to_owned(),
                 value: None,
             });
-            match self.delete_result.lock().unwrap().clone() {
+            match *self.delete_result.lock().unwrap() {
                 Ok(()) => {
                     *self.stored.lock().unwrap() = None;
                     KeychainOutcome::Ok(())

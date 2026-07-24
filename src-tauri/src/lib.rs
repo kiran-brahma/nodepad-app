@@ -5,6 +5,7 @@ mod enrichment;
 mod external_link;
 mod markdown_export;
 mod ollama;
+mod release_audit;
 mod secrets;
 mod synthesis;
 mod thinking_graph;
@@ -14,7 +15,6 @@ mod workspace;
 use external_link::open_external_link;
 
 use cloud::{CloudOllamaProvider, CloudTagsClient, HttpCloudTagsClient, OLLAMA_CLOUD_BASE_URL};
-use std::path::PathBuf;
 use enrichment::{
     EnrichmentClient, EnrichmentFailureCode, EnrichmentOutcome, EnrichmentRequest,
     HttpEnrichmentClient, ParsedEnrichmentResult, RequestToken,
@@ -27,6 +27,7 @@ use secrets::{
     KeychainAdapter, KeychainFailure, KeychainOutcome, SecurityCliKeychain,
     OLLAMA_CLOUD_KEYCHAIN_ACCOUNT, OLLAMA_CLOUD_KEYCHAIN_SERVICE,
 };
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -62,10 +63,7 @@ impl AppState {
         &self,
         intent: impl FnOnce(&mut WorkspaceStore) -> WorkspaceCommandResult,
     ) -> WorkspaceCommandResult {
-        let mut storage = self
-            .storage
-            .lock()
-            .expect("workspace lock poisoned");
+        let mut storage = self.storage.lock().expect("workspace lock poisoned");
         let result = match storage.as_mut() {
             Ok(store) => intent(store),
             Err(failure) => WorkspaceCommandResult::Unavailable {
@@ -1189,8 +1187,7 @@ fn commit_synthesis_outcome(
                     let proposed = committed
                         .pending_syntheses()
                         .iter()
-                        .filter(|pending| pending.workspace_id == token.workspace_id)
-                        .next_back()
+                        .rfind(|pending| pending.workspace_id == token.workspace_id)
                         .cloned();
                     match proposed {
                         Some(synthesis) => SynthesisCommandOutcome::Proposed {
@@ -1347,8 +1344,13 @@ enum RestoreFailureCode {
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 enum RestoreOutcome {
-    Restored { snapshot: WorkspaceSnapshot },
-    Failed { code: RestoreFailureCode, message: String },
+    Restored {
+        snapshot: WorkspaceSnapshot,
+    },
+    Failed {
+        code: RestoreFailureCode,
+        message: String,
+    },
 }
 
 fn restore_failure_code(error: &backup::BackupError) -> RestoreFailureCode {
@@ -1378,11 +1380,7 @@ fn list_backups(app: AppHandle) -> Vec<backup::BackupManifest> {
 /// durable store is reopened. Any failure preserves the current database and
 /// reports a typed recovery state; an invalid backup never replaces data.
 #[tauri::command]
-fn restore_backup(
-    backup_id: String,
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> RestoreOutcome {
+fn restore_backup(backup_id: String, app: AppHandle, state: State<'_, AppState>) -> RestoreOutcome {
     let data_dir = match locate_data_dir(&app) {
         Ok(data_dir) => data_dir,
         Err(failure) => {
@@ -1421,7 +1419,12 @@ fn restore_backup(
     // live connection is still open. A failure here aborts before any durable
     // file is touched.
     if let Ok(store) = storage.as_ref() {
-        match store.create_backup(&backups_dir, backup::BackupKind::PreRestore, &now, app_version) {
+        match store.create_backup(
+            &backups_dir,
+            backup::BackupKind::PreRestore,
+            &now,
+            app_version,
+        ) {
             Ok(pre_restore) => {
                 let _ = backup::validate_backup(&backups_dir, &pre_restore);
                 let _ = backup::retain(&backups_dir, backup::BackupKind::PreRestore);

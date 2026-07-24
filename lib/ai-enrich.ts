@@ -170,7 +170,13 @@ const JSON_SCHEMA = {
   },
 }
 
-// ── URL metadata (via server route to bypass CORS) ────────────────────────────
+// ── URL metadata ──────────────────────────────────────────────────────────────
+// The `/api/fetch-url` route this called was removed in V0-18: a public CORS
+// proxy is a network surface the desktop release does not need and will not
+// ship. The desktop app fetches metadata natively in `src-tauri/src/
+// url_metadata.rs`, with SSRF guards the browser route never had. This
+// function now always resolves to `null`, which callers already handle; it
+// stays as the seam a future port wires to a Tauri command instead.
 
 type UrlMeta = { title: string; description: string; excerpt: string; statusCode: number }
 

@@ -61,9 +61,14 @@ fn a_wal_active_database_backs_up_safely() {
         write_note(&connection, "n1", "first");
         // Leaving the WAL active (un-checkpointed) proves the backup is not a
         // naive file copy: `VACUUM INTO` reads a consistent snapshot.
-        let manifest =
-            create_backup(&connection, &dir, BackupKind::Automatic, "2026-07-22T00:00:00.000000Z", "0.1.0")
-                .unwrap();
+        let manifest = create_backup(
+            &connection,
+            &dir,
+            BackupKind::Automatic,
+            "2026-07-22T00:00:00.000000Z",
+            "0.1.0",
+        )
+        .unwrap();
         assert_eq!(manifest.schema_version, 9);
         assert!(!manifest.checksum.is_empty());
     }
@@ -156,8 +161,14 @@ fn pre_migration_backups_do_not_crowd_out_automatic_backups() {
     }
     // Automatic retention is independent: ten pre-migration backups must not
     // delete any automatic slot.
-    create_backup(&connection, &dir, BackupKind::Automatic, "2026-07-22T00:00:00.000000Z", "0.1.0")
-        .unwrap();
+    create_backup(
+        &connection,
+        &dir,
+        BackupKind::Automatic,
+        "2026-07-22T00:00:00.000000Z",
+        "0.1.0",
+    )
+    .unwrap();
     retain(&dir, BackupKind::Automatic).unwrap();
     let pre_migration = read_manifests(&dir)
         .into_iter()
@@ -178,9 +189,14 @@ fn a_checksum_mismatch_is_rejected_before_restore() {
         let connection = open_database(&db);
         seed(&connection);
         write_note(&connection, "n1", "first");
-        manifest =
-            create_backup(&connection, &dir, BackupKind::Automatic, "2026-07-22T00:00:00.000000Z", "0.1.0")
-                .unwrap();
+        manifest = create_backup(
+            &connection,
+            &dir,
+            BackupKind::Automatic,
+            "2026-07-22T00:00:00.000000Z",
+            "0.1.0",
+        )
+        .unwrap();
         connection.close().unwrap();
     }
     // Tamper with the backup bytes so the checksum no longer matches.
@@ -206,9 +222,14 @@ fn a_corrupt_sqlite_file_is_rejected() {
         let connection = open_database(&db);
         seed(&connection);
         write_note(&connection, "n1", "first");
-        manifest =
-            create_backup(&connection, &dir, BackupKind::Automatic, "2026-07-22T00:00:00.000000Z", "0.1.0")
-                .unwrap();
+        manifest = create_backup(
+            &connection,
+            &dir,
+            BackupKind::Automatic,
+            "2026-07-22T00:00:00.000000Z",
+            "0.1.0",
+        )
+        .unwrap();
         connection.close().unwrap();
     }
     // Overwrite the checksum so the checksum check passes, then corrupt the
@@ -223,10 +244,7 @@ fn a_corrupt_sqlite_file_is_rejected() {
         checksum: sha256_of_file(&backup_db).unwrap(),
         ..manifest.clone()
     };
-    assert_eq!(
-        validate_backup(&dir, &tampered),
-        Err(BackupError::Corrupt)
-    );
+    assert_eq!(validate_backup(&dir, &tampered), Err(BackupError::Corrupt));
     remove_database(&db);
     fs::remove_dir_all(&dir).unwrap();
 }
@@ -248,9 +266,14 @@ fn an_unsupported_schema_version_is_rejected() {
                 [],
             )
             .unwrap();
-        manifest =
-            create_backup(&connection, &dir, BackupKind::Automatic, "2026-07-22T00:00:00.000000Z", "0.1.0")
-                .unwrap();
+        manifest = create_backup(
+            &connection,
+            &dir,
+            BackupKind::Automatic,
+            "2026-07-22T00:00:00.000000Z",
+            "0.1.0",
+        )
+        .unwrap();
         assert_eq!(manifest.schema_version, 10);
         connection.close().unwrap();
     }
@@ -277,11 +300,18 @@ fn replace_database_swaps_in_the_backup_and_preserves_current_on_failure() {
     {
         let connection = open_database(&live);
         // Change the live database so the backup differs from it.
-        connection.execute("DELETE FROM notes WHERE id = 'live'", []).unwrap();
+        connection
+            .execute("DELETE FROM notes WHERE id = 'live'", [])
+            .unwrap();
         write_note(&connection, "backup", "backup note");
-        manifest =
-            create_backup(&connection, &dir, BackupKind::Automatic, "2026-07-22T00:00:00.000000Z", "0.1.0")
-                .unwrap();
+        manifest = create_backup(
+            &connection,
+            &dir,
+            BackupKind::Automatic,
+            "2026-07-22T00:00:00.000000Z",
+            "0.1.0",
+        )
+        .unwrap();
         connection.close().unwrap();
         backup_db = backup_db_path(&dir, &manifest.id);
     }
@@ -356,8 +386,13 @@ fn create_backup_deletes_an_invalid_backup_and_reports_the_error() {
     let connection = open_database(&db);
     seed(&connection);
     write_note(&connection, "n1", "first");
-    let result =
-        create_backup(&connection, &file_as_dir, BackupKind::Automatic, "2026-07-22T00:00:00.000000Z", "0.1.0");
+    let result = create_backup(
+        &connection,
+        &file_as_dir,
+        BackupKind::Automatic,
+        "2026-07-22T00:00:00.000000Z",
+        "0.1.0",
+    );
     assert!(matches!(result, Err(BackupError::BackupsDir(_))));
     connection.close().unwrap();
     remove_database(&db);

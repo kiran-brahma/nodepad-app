@@ -386,7 +386,10 @@ pub fn select_synthesis_candidates(notes: &[&Note]) -> Vec<CandidateView> {
         if taken.len() >= MAX_CANDIDATES {
             break;
         }
-        if taken.iter().any(|kept| kept.note_type() == note.note_type()) {
+        if taken
+            .iter()
+            .any(|kept| kept.note_type() == note.note_type())
+        {
             continue;
         }
         taken.push(note);
@@ -617,7 +620,15 @@ mod tests {
             .iter()
             .map(|name| Label::new_for_test(&format!("label-{name}"), "w", name))
             .collect();
-        Note::new_for_test(id, "w", &format!("text of {id}"), note_type, updated_at, None, labels)
+        Note::new_for_test(
+            id,
+            "w",
+            &format!("text of {id}"),
+            note_type,
+            updated_at,
+            None,
+            labels,
+        )
     }
 
     fn token() -> SynthesisRequestToken {
@@ -702,14 +713,19 @@ Before returning, verify the insight is absent from every individual source, two
             Some(&Value::from(5))
         );
         assert_eq!(
-            properties.get("labels").and_then(|field| field.get("maxItems")),
+            properties
+                .get("labels")
+                .and_then(|field| field.get("maxItems")),
             Some(&Value::from(2))
         );
     }
 
     #[test]
     fn eligibility_admits_a_ready_workspace() {
-        assert_eq!(evaluate_eligibility(&eligible_input()), Eligibility::Eligible);
+        assert_eq!(
+            evaluate_eligibility(&eligible_input()),
+            Eligibility::Eligible
+        );
     }
 
     #[test]
@@ -848,7 +864,7 @@ Before returning, verify the insight is absent from every individual source, two
 
     #[test]
     fn select_prefers_note_type_diversity_over_recency() {
-        let notes = vec![
+        let notes = [
             note("a", "2026-07-10T00:00:00Z", "claim", &[]),
             note("b", "2026-07-09T00:00:00Z", "claim", &[]),
             note("c", "2026-07-08T00:00:00Z", "claim", &[]),
@@ -924,7 +940,10 @@ Before returning, verify the insight is absent from every individual source, two
             .and_then(|rest| rest.split("\n</previous_syntheses>").next())
             .expect("previous block");
         let parsed: Value = serde_json::from_str(block).expect("previous JSON");
-        assert_eq!(parsed.as_array().expect("array").len(), MAX_PREVIOUS_SYNTHESES);
+        assert_eq!(
+            parsed.as_array().expect("array").len(),
+            MAX_PREVIOUS_SYNTHESES
+        );
     }
 
     #[test]
@@ -1012,7 +1031,10 @@ Before returning, verify the insight is absent from every individual source, two
             }
             other => panic!("expected InvalidSchema, got {other:?}"),
         }
-        let long_text = (0..60).map(|index| format!("word{index}")).collect::<Vec<_>>().join(" ");
+        let long_text = (0..60)
+            .map(|index| format!("word{index}"))
+            .collect::<Vec<_>>()
+            .join(" ");
         let long = serde_json::json!({
             "found": true,
             "text": long_text,
@@ -1090,9 +1112,8 @@ Before returning, verify the insight is absent from every individual source, two
 
     #[test]
     fn semantic_repeat_catches_a_restatement() {
-        let previous = vec![
-            "Reliability and speed pull the same team in different directions.".to_owned(),
-        ];
+        let previous =
+            vec!["Reliability and speed pull the same team in different directions.".to_owned()];
         assert!(is_semantic_repeat(
             "Speed and reliability pull the same team in different directions!",
             &previous

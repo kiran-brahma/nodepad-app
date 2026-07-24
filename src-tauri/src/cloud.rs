@@ -205,7 +205,9 @@ impl CloudOllamaProvider {
 /// Maps an HTTP response to either a body the parser can read or a typed
 /// failure. The 401/403 and 429 codes are cloud-specific, so the rest of the
 /// code path is shared with the local provider.
-fn classify_http_response(response: CloudHttpResponse) -> Result<String, CloudDiscoveryFailureCode> {
+fn classify_http_response(
+    response: CloudHttpResponse,
+) -> Result<String, CloudDiscoveryFailureCode> {
     match response.status {
         200..=299 => Ok(response.body),
         401 | 403 => Err(CloudDiscoveryFailureCode::AuthenticationFailed),
@@ -215,8 +217,8 @@ fn classify_http_response(response: CloudHttpResponse) -> Result<String, CloudDi
 }
 
 fn parse_tags_response(body: &str) -> Result<Vec<String>, CloudDiscoveryFailureCode> {
-    let parsed: TagsResponse = serde_json::from_str(body)
-        .map_err(|_| CloudDiscoveryFailureCode::MalformedResponse)?;
+    let parsed: TagsResponse =
+        serde_json::from_str(body).map_err(|_| CloudDiscoveryFailureCode::MalformedResponse)?;
     let mut names: Vec<String> = parsed
         .models
         .into_iter()
@@ -251,12 +253,8 @@ fn default_message(code: CloudDiscoveryFailureCode) -> String {
         CloudDiscoveryFailureCode::RateLimited => {
             "Ollama Cloud is throttling requests. Try again in a moment.".into()
         }
-        CloudDiscoveryFailureCode::Unavailable => {
-            "Ollama Cloud is not reachable right now.".into()
-        }
-        CloudDiscoveryFailureCode::Timeout => {
-            "Ollama Cloud did not respond in time.".into()
-        }
+        CloudDiscoveryFailureCode::Unavailable => "Ollama Cloud is not reachable right now.".into(),
+        CloudDiscoveryFailureCode::Timeout => "Ollama Cloud did not respond in time.".into(),
         CloudDiscoveryFailureCode::MalformedResponse => {
             "The model list from Ollama Cloud was not the expected shape.".into()
         }
@@ -348,12 +346,7 @@ mod tests {
         keychain: Arc<FakeKeychain>,
         client: Arc<FakeCloudClient>,
     ) -> CloudOllamaProvider {
-        CloudOllamaProvider::new(
-            client,
-            keychain as Arc<dyn KeychainAdapter>,
-            "svc",
-            "acct",
-        )
+        CloudOllamaProvider::new(client, keychain as Arc<dyn KeychainAdapter>, "svc", "acct")
     }
 
     fn keychain_with_key(key: &str) -> Arc<FakeKeychain> {
@@ -386,9 +379,13 @@ mod tests {
     #[tokio::test]
     async fn fails_with_unauthenticated_when_keychain_is_empty() {
         let keychain = keychain_without_key();
-        let client = Arc::new(FakeCloudClient::new(Err(CloudDiscoveryFailureCode::Unavailable)));
+        let client = Arc::new(FakeCloudClient::new(Err(
+            CloudDiscoveryFailureCode::Unavailable,
+        )));
         let outcome = provider_with(keychain, client).discover_models().await;
-        assert!(matches!(outcome, CloudDiscoveryOutcome::Failed { ref failure } if failure.code == CloudDiscoveryFailureCode::Unauthenticated));
+        assert!(
+            matches!(outcome, CloudDiscoveryOutcome::Failed { ref failure } if failure.code == CloudDiscoveryFailureCode::Unauthenticated)
+        );
     }
 
     #[tokio::test]
@@ -399,7 +396,9 @@ mod tests {
             body: String::new(),
         })));
         let outcome = provider_with(keychain, client).discover_models().await;
-        assert!(matches!(outcome, CloudDiscoveryOutcome::Failed { ref failure } if failure.code == CloudDiscoveryFailureCode::AuthenticationFailed));
+        assert!(
+            matches!(outcome, CloudDiscoveryOutcome::Failed { ref failure } if failure.code == CloudDiscoveryFailureCode::AuthenticationFailed)
+        );
     }
 
     #[tokio::test]
@@ -410,7 +409,9 @@ mod tests {
             body: String::new(),
         })));
         let outcome = provider_with(keychain, client).discover_models().await;
-        assert!(matches!(outcome, CloudDiscoveryOutcome::Failed { ref failure } if failure.code == CloudDiscoveryFailureCode::RateLimited));
+        assert!(
+            matches!(outcome, CloudDiscoveryOutcome::Failed { ref failure } if failure.code == CloudDiscoveryFailureCode::RateLimited)
+        );
     }
 
     #[tokio::test]
@@ -421,15 +422,21 @@ mod tests {
             body: String::new(),
         })));
         let outcome = provider_with(keychain, client).discover_models().await;
-        assert!(matches!(outcome, CloudDiscoveryOutcome::Failed { ref failure } if failure.code == CloudDiscoveryFailureCode::Unavailable));
+        assert!(
+            matches!(outcome, CloudDiscoveryOutcome::Failed { ref failure } if failure.code == CloudDiscoveryFailureCode::Unavailable)
+        );
     }
 
     #[tokio::test]
     async fn reports_timeout_when_client_cannot_reach_host() {
         let keychain = keychain_with_key("any");
-        let client = Arc::new(FakeCloudClient::new(Err(CloudDiscoveryFailureCode::Timeout)));
+        let client = Arc::new(FakeCloudClient::new(Err(
+            CloudDiscoveryFailureCode::Timeout,
+        )));
         let outcome = provider_with(keychain, client).discover_models().await;
-        assert!(matches!(outcome, CloudDiscoveryOutcome::Failed { ref failure } if failure.code == CloudDiscoveryFailureCode::Timeout));
+        assert!(
+            matches!(outcome, CloudDiscoveryOutcome::Failed { ref failure } if failure.code == CloudDiscoveryFailureCode::Timeout)
+        );
     }
 
     #[tokio::test]
@@ -440,7 +447,9 @@ mod tests {
             body: "not json".into(),
         })));
         let outcome = provider_with(keychain, client).discover_models().await;
-        assert!(matches!(outcome, CloudDiscoveryOutcome::Failed { ref failure } if failure.code == CloudDiscoveryFailureCode::MalformedResponse));
+        assert!(
+            matches!(outcome, CloudDiscoveryOutcome::Failed { ref failure } if failure.code == CloudDiscoveryFailureCode::MalformedResponse)
+        );
     }
 
     #[tokio::test]
@@ -451,7 +460,9 @@ mod tests {
             body: r#"{"models":[]}"#.into(),
         })));
         let outcome = provider_with(keychain, client).discover_models().await;
-        assert!(matches!(outcome, CloudDiscoveryOutcome::Failed { ref failure } if failure.code == CloudDiscoveryFailureCode::EmptyList));
+        assert!(
+            matches!(outcome, CloudDiscoveryOutcome::Failed { ref failure } if failure.code == CloudDiscoveryFailureCode::EmptyList)
+        );
     }
 
     #[tokio::test]
@@ -466,10 +477,7 @@ mod tests {
         assert_eq!(
             outcome,
             CloudDiscoveryOutcome::Committed {
-                models: vec![
-                    "some/vendor/model:tag".into(),
-                    "先生-7b:cloud".into(),
-                ],
+                models: vec!["some/vendor/model:tag".into(), "先生-7b:cloud".into(),],
             }
         );
     }
@@ -479,7 +487,9 @@ mod tests {
         let fake = FakeKeychain::default();
         *fake.read_result.lock().unwrap() = Ok("a-bearer-key".to_owned());
         let provider = CloudOllamaProvider::new(
-            Arc::new(FakeCloudClient::new(Err(CloudDiscoveryFailureCode::Unavailable))),
+            Arc::new(FakeCloudClient::new(Err(
+                CloudDiscoveryFailureCode::Unavailable,
+            ))),
             Arc::new(fake) as Arc<dyn KeychainAdapter>,
             "svc",
             "acct",
@@ -488,7 +498,9 @@ mod tests {
 
         let fake = FakeKeychain::default();
         let provider = CloudOllamaProvider::new(
-            Arc::new(FakeCloudClient::new(Err(CloudDiscoveryFailureCode::Unavailable))),
+            Arc::new(FakeCloudClient::new(Err(
+                CloudDiscoveryFailureCode::Unavailable,
+            ))),
             Arc::new(fake) as Arc<dyn KeychainAdapter>,
             "svc",
             "acct",

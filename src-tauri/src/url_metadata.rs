@@ -160,8 +160,8 @@ pub fn explicit_http_url(note_text: &str) -> Option<Url> {
     let candidate = note_text[start..]
         .split_whitespace()
         .next()?
-        .trim_matches(|c| matches!(c, '<' | '>' | '(' | ')' | '[' | ']'))
-        .trim_end_matches(|c| matches!(c, '.' | ',' | ';' | ':' | '!' | '?'));
+        .trim_matches(['<', '>', '(', ')', '[', ']'])
+        .trim_end_matches(['.', ',', ';', ':', '!', '?']);
     let url = Url::parse(candidate).ok()?;
     allowed_scheme(&url).then_some(url)
 }
