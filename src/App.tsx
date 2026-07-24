@@ -21,13 +21,13 @@ import { useEscape, ESCAPE_PRIORITY } from "./escape-stack"
 import { useModalFocus } from "./modal-focus"
 import { CommandPalette, useCommandPaletteShortcut, type PaletteAction } from "./command-palette"
 import { WorkspaceSection } from "./workspace-section"
-import { CaptureSection } from "./capture-section"
 import { CaptureBar } from "./capture-bar"
 import { SearchSection } from "./search-section"
 import { CommittedNotesSection } from "./committed-notes-section"
 import { StorageRecovery } from "./storage-recovery"
 import { AppShell } from "./app-shell"
-import { AssistanceSection, CloudConsentDialog } from "./assistance-section"
+import { CloudConsentDialog } from "./assistance-section"
+import { WorkspaceSettingsSheet } from "./workspace-settings-sheet"
 import { IntroVideo } from "./intro-video"
 import { useLocalDiscovery } from "./use-local-discovery"
 import { useEnrichmentController } from "./enrichment-controller"
@@ -61,6 +61,9 @@ export function App() {
   const [consentDialog, setConsentDialog] = useState<{ workspaceId: string; workspaceName: string; provider: import("./workspace-client").CloudProvider } | null>(null)
   // Command-K opens the palette; it owns no business rule, only an open flag.
   const [paletteOpen, setPaletteOpen] = useState(false)
+  // The Workspace settings sheet. Opens from the rail; closes on Escape or
+  // scrim click. All settings controls are inside the sheet, not the main pane.
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   const activeWorkspace = useMemo(
     () => snapshot?.workspaces.find(({ id }) => id === snapshot.activeWorkspaceId),
@@ -324,27 +327,11 @@ export function App() {
           onSelect={(workspaceId) => void submit(thinkingWorkspace.selectWorkspace(workspaceId))}
           onNameChange={setWorkspaceName}
           onCreate={createWorkspace}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
       }
       main={
         <>
-          <CaptureSection
-            activeWorkspace={activeWorkspace}
-            renameDraft={renameDraft}
-            pendingDelete={pendingDelete}
-            onStartRename={(workspace: ThinkingWorkspace) =>
-              setRenameDraft({ id: workspace.id, name: workspace.name })
-            }
-            onRenameDraftChange={(name) => setRenameDraft((draft) => (draft ? { ...draft, name } : draft))}
-            onRename={renameWorkspace}
-            onCancelRename={() => setRenameDraft(null)}
-            onRequestDelete={(workspace) => setPendingDelete(requestDelete(workspace))}
-            onAnswerDelete={answerDeleteConfirmation}
-            onExport={exportWorkspace}
-            onExportArchive={exportWorkspaceArchive}
-            onImportArchive={importWorkspaceArchive}
-          />
-
           <header>
             <p className="eyebrow">Nodepad</p>
             <h1>Thinking Workspace</h1>
@@ -354,33 +341,6 @@ export function App() {
           <IntroVideo />
 
           {failure && <aside role="alert">{failure.message} <button onClick={dismissFailure}>Dismiss</button></aside>}
-
-          <AssistanceSection
-            activeWorkspace={activeWorkspace}
-            localState={localDiscovery.state}
-            localQuery={localDiscovery.query}
-            localFilteredModels={localDiscovery.filteredModels}
-            cloudState={cloudDiscovery.state}
-            cloudQuery={cloudDiscovery.query}
-            cloudFilteredModels={cloudDiscovery.filteredModels}
-            cloudKeyPresent={cloudDiscovery.keyPresent}
-            selectedMissing={
-              localDiscovery.selectedMissing || cloudDiscovery.selectedMissing
-            }
-            onPolicyChange={setAssistancePolicy}
-            onCloudProviderChange={setCloudProvider}
-            onLocalQueryChange={localDiscovery.setQuery}
-            onLocalRefresh={localDiscovery.refresh}
-            onCloudQueryChange={cloudDiscovery.setQuery}
-            onCloudRefresh={cloudDiscovery.refresh}
-            onCloudKeyChange={cloudDiscovery.refreshKeyPresence}
-            onRequestCloudConsent={() =>
-              activeWorkspace &&
-              setConsentDialog({ workspaceId: activeWorkspace.id, workspaceName: activeWorkspace.name, provider: activeWorkspace.cloudProvider ?? "ollama" })
-            }
-            onRevokeCloudConsent={revokeCloudConsent}
-            onSelectModel={selectModel}
-          />
 
           <SearchSection
             query={searchQuery}
@@ -425,6 +385,49 @@ export function App() {
         />
       }
     />
+
+      {settingsOpen && activeWorkspace && (
+        <WorkspaceSettingsSheet
+          activeWorkspace={activeWorkspace}
+          renameDraft={renameDraft}
+          pendingDelete={pendingDelete}
+          localState={localDiscovery.state}
+          localQuery={localDiscovery.query}
+          localFilteredModels={localDiscovery.filteredModels}
+          cloudState={cloudDiscovery.state}
+          cloudQuery={cloudDiscovery.query}
+          cloudFilteredModels={cloudDiscovery.filteredModels}
+          cloudKeyPresent={cloudDiscovery.keyPresent}
+          selectedMissing={
+            localDiscovery.selectedMissing || cloudDiscovery.selectedMissing
+          }
+          onClose={() => setSettingsOpen(false)}
+          onStartRename={(workspace: ThinkingWorkspace) =>
+            setRenameDraft({ id: workspace.id, name: workspace.name })
+          }
+          onRenameDraftChange={(name) => setRenameDraft((draft) => (draft ? { ...draft, name } : draft))}
+          onRename={renameWorkspace}
+          onCancelRename={() => setRenameDraft(null)}
+          onRequestDelete={(workspace) => setPendingDelete(requestDelete(workspace))}
+          onAnswerDelete={answerDeleteConfirmation}
+          onExport={exportWorkspace}
+          onExportArchive={exportWorkspaceArchive}
+          onImportArchive={importWorkspaceArchive}
+          onPolicyChange={setAssistancePolicy}
+          onCloudProviderChange={setCloudProvider}
+          onLocalQueryChange={localDiscovery.setQuery}
+          onLocalRefresh={localDiscovery.refresh}
+          onCloudQueryChange={cloudDiscovery.setQuery}
+          onCloudRefresh={cloudDiscovery.refresh}
+          onCloudKeyChange={cloudDiscovery.refreshKeyPresence}
+          onRequestCloudConsent={() =>
+            activeWorkspace &&
+            setConsentDialog({ workspaceId: activeWorkspace.id, workspaceName: activeWorkspace.name, provider: activeWorkspace.cloudProvider ?? "ollama" })
+          }
+          onRevokeCloudConsent={revokeCloudConsent}
+          onSelectModel={selectModel}
+        />
+      )}
 
       {renameLabelDraft && (
         <RenameLabelModal

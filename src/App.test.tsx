@@ -390,6 +390,12 @@ function noteCards() {
   return screen.getAllByRole("article")
 }
 
+/** Opens the Workspace settings sheet from the rail. */
+async function openSettings(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "Workspace settings" }))
+  await screen.findByRole("dialog", { name: "Workspace settings" })
+}
+
 describe("persistent capture bar", () => {
   it("commits a Note on Enter and clears the draft", async () => {
     const user = userEvent.setup()
@@ -469,6 +475,7 @@ describe("manual Note controls", () => {
     const user = userEvent.setup()
     render(<App />)
 
+    await openSettings(user)
     await user.click(await screen.findByRole("button", { name: "Export Markdown" }))
 
     await waitFor(() => expect(exportRequests).toBe(1))
@@ -479,6 +486,7 @@ describe("manual Note controls", () => {
     const user = userEvent.setup()
     render(<App />)
 
+    await openSettings(user)
     await user.click(await screen.findByRole("button", { name: "Export Archive" }))
     await waitFor(() => expect(archiveExportRequests).toBe(1))
 
@@ -512,6 +520,7 @@ describe("manual Note controls", () => {
     const user = userEvent.setup()
     render(<App />)
     const before = archiveImportRequests
+    await openSettings(user)
     await user.click(await screen.findByRole("button", { name: "Import Archive" }))
     await waitFor(() => expect(archiveImportRequests).toBe(before + 1))
     expect(screen.queryByRole("button", { name: /Research \(2\)/ })).toBeNull()
@@ -522,6 +531,7 @@ describe("manual Note controls", () => {
     const user = userEvent.setup()
     render(<App />)
 
+    await openSettings(user)
     await user.click(await screen.findByRole("button", { name: "Import Archive" }))
     await waitFor(() => expect(archiveImportRequests).toBe(1))
     expect(await screen.findByText(/The archive is not valid JSON/)).toBeDefined()
@@ -1231,6 +1241,7 @@ describe("the graph view and Relationship focus", () => {
 
 describe("Assistance Policy and local Ollama discovery", () => {
   async function switchToLocalAi(user: ReturnType<typeof userEvent.setup>) {
+    await openSettings(user)
     await user.click(await screen.findByText("Local AI"))
     await waitFor(() =>
       expect(
@@ -1240,7 +1251,9 @@ describe("Assistance Policy and local Ollama discovery", () => {
   }
 
   it("starts with Manual assistance policy", async () => {
+    const user = userEvent.setup()
     render(<App />)
+    await openSettings(user)
     expect(await screen.findByText(/Manual assistance/)).toBeDefined()
   })
 
@@ -1304,7 +1317,9 @@ describe("Assistance Policy and local Ollama discovery", () => {
           : workspace,
       ),
     }
+    const user = userEvent.setup()
     render(<App />)
+    await openSettings(user)
 
     expect(
       await screen.findByText(/The selected model “retired-model:latest” is no longer available/),
@@ -1320,6 +1335,7 @@ describe("Ollama Cloud consent, keychain, and discovery", () => {
     const user = userEvent.setup()
     render(<App />)
 
+    await openSettings(user)
     // Clicking Cloud AI on a non-consented Workspace opens the disclosure,
     // and the policy does not move to cloud_ai until the thinker accepts.
     await user.click(await screen.findByRole("button", { name: "Cloud AI" }))
@@ -1335,6 +1351,7 @@ describe("Ollama Cloud consent, keychain, and discovery", () => {
     const user = userEvent.setup()
     render(<App />)
 
+    await openSettings(user)
     await user.click(await screen.findByRole("button", { name: "Cloud AI" }))
     await user.click(
       screen.getByRole("button", { name: "I understand, enable Cloud AI" }),
@@ -1352,6 +1369,7 @@ describe("Ollama Cloud consent, keychain, and discovery", () => {
     const user = userEvent.setup()
     render(<App />)
 
+    await openSettings(user)
     await user.click(await screen.findByRole("button", { name: "Cloud AI" }))
     await user.click(screen.getByRole("button", { name: "Cancel" }))
 
@@ -1364,6 +1382,7 @@ describe("Ollama Cloud consent, keychain, and discovery", () => {
     const user = userEvent.setup()
     render(<App />)
 
+    await openSettings(user)
     // Bring the Workspace onto Cloud AI through the disclosure path so the
     // key section is on screen.
     await user.click(await screen.findByRole("button", { name: "Cloud AI" }))
@@ -1412,7 +1431,9 @@ describe("Ollama Cloud consent, keychain, and discovery", () => {
           : workspace,
       ),
     }
+    const user = userEvent.setup()
     render(<App />)
+    await openSettings(user)
 
     expect(await screen.findByText("qwen3:cloud")).toBeDefined()
     expect(screen.getByText("gpt-oss:cloud")).toBeDefined()
@@ -1432,7 +1453,9 @@ describe("Ollama Cloud consent, keychain, and discovery", () => {
           : workspace,
       ),
     }
+    const user = userEvent.setup()
     render(<App />)
+    await openSettings(user)
 
     expect(await screen.findByText("Add your Ollama Cloud key to discover cloud-hosted models.")).toBeDefined()
     expect(screen.queryByText("qwen3:cloud")).toBeNull()
@@ -1453,7 +1476,9 @@ describe("Ollama Cloud consent, keychain, and discovery", () => {
           : workspace,
       ),
     }
+    const user = userEvent.setup()
     render(<App />)
+    await openSettings(user)
 
     expect(
       await screen.findByText(/The selected model “retired-cloud-model:tag” is no longer available/),
@@ -1478,7 +1503,9 @@ describe("Ollama Cloud consent, keychain, and discovery", () => {
           : workspace,
       ),
     }
+    const user = userEvent.setup()
     render(<App />)
+    await openSettings(user)
 
     expect((await screen.findByRole("alert")).textContent).toContain("Ollama Cloud rejected the key.")
   })
@@ -1487,6 +1514,7 @@ describe("Ollama Cloud consent, keychain, and discovery", () => {
     const user = userEvent.setup()
     render(<App />)
 
+    await openSettings(user)
     // Consent the active Workspace through the disclosure path.
     await user.click(await screen.findByRole("button", { name: "Cloud AI" }))
     await user.click(
@@ -1509,6 +1537,7 @@ describe("Ollama Cloud consent, keychain, and discovery", () => {
     const user = userEvent.setup()
     render(<App />)
 
+    await openSettings(user)
     await user.click(await screen.findByRole("button", { name: "Cloud AI" }))
     await user.click(
       screen.getByRole("button", { name: "I understand, enable Cloud AI" }),
@@ -1536,6 +1565,7 @@ describe("Ollama Cloud consent, keychain, and discovery", () => {
     const user = userEvent.setup()
     render(<App />)
 
+    await openSettings(user)
     await user.click(await screen.findByRole("button", { name: "Cloud AI" }))
     await user.click(
       screen.getByRole("button", { name: "I understand, enable Cloud AI" }),
@@ -1569,9 +1599,9 @@ describe("V0-17 macOS keyboard, accessibility, and external links", () => {
   it("closes the command palette with Escape and restores focus to the invoker", async () => {
     const user = userEvent.setup()
     render(<App />)
-    const exportButton = await screen.findByRole("button", { name: "Export Markdown" })
-    exportButton.focus()
-    expect(document.activeElement).toBe(exportButton)
+    const captureInput = await screen.findByLabelText("New Note")
+    await user.click(captureInput)
+    expect(document.activeElement).toBe(captureInput)
 
     await user.keyboard("{Meta>}k{/Meta}")
     await screen.findByRole("dialog", { name: "Command palette" })
@@ -1579,15 +1609,17 @@ describe("V0-17 macOS keyboard, accessibility, and external links", () => {
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "Command palette" })).toBeNull(),
     )
-    expect(document.activeElement).toBe(exportButton)
+    expect(document.activeElement).toBe(captureInput)
   })
 
   it("traps focus in the Cloud consent modal, dismisses it with Escape, and restores focus", async () => {
     const user = userEvent.setup()
     render(<App />)
-    const cloudButton = await screen.findByRole("button", { name: "Cloud AI" })
-    cloudButton.focus()
+    const settingsButton = await screen.findByRole("button", { name: "Workspace settings" })
+    settingsButton.focus()
 
+    await openSettings(user)
+    const cloudButton = screen.getByRole("button", { name: "Cloud AI" })
     await user.click(cloudButton)
     const modal = await screen.findByRole("dialog", { name: "Cloud AI disclosure" })
     // Focus moved into the modal, not left behind on the opener or the body.
@@ -1611,6 +1643,7 @@ describe("V0-17 macOS keyboard, accessibility, and external links", () => {
     render(<App />)
     await screen.findByRole("button", { name: "Research" })
 
+    await openSettings(user)
     await user.click(screen.getByRole("button", { name: "Rename" }))
     const input = screen.getByLabelText("Thinking Workspace name")
     await user.type(input, "Renamed")
@@ -1731,6 +1764,7 @@ describe("V0-17 macOS keyboard, accessibility, and external links", () => {
       const user = userEvent.setup()
       render(<App />)
       await captureNote(user, "Visible under reduced motion")
+      await openSettings(user)
       // State is not hidden by reduced motion: the Note, the Undo control, and
       // the assistance policy all remain on screen.
       expect(screen.getAllByRole("article")).toHaveLength(1)

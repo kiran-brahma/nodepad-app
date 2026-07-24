@@ -9,6 +9,7 @@ export function WorkspaceSection({
   onSelect,
   onNameChange,
   onCreate,
+  onOpenSettings,
 }: {
   workspaces: ThinkingWorkspace[]
   activeWorkspaceId: string | undefined
@@ -16,6 +17,8 @@ export function WorkspaceSection({
   onSelect: (workspaceId: string) => void
   onNameChange: (name: string) => void
   onCreate: (event: FormEvent) => void
+  /** Opens the Workspace settings sheet for the active Workspace. */
+  onOpenSettings: () => void
 }) {
   return (
     <section aria-label="Thinking Workspaces">
@@ -34,6 +37,15 @@ export function WorkspaceSection({
         <input aria-label="New Thinking Workspace name" value={name} onChange={(event) => onNameChange(event.target.value)} placeholder="New Thinking Workspace" />
         <button type="submit">Create Workspace</button>
       </form>
+      <div className="workspace-rail-footer">
+        <button
+          onClick={onOpenSettings}
+          disabled={!activeWorkspaceId}
+          aria-label="Workspace settings"
+        >
+          Settings
+        </button>
+      </div>
     </section>
   )
 }
