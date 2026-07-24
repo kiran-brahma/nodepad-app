@@ -82,16 +82,13 @@ impl HttpTagsClient {
 impl TagsClient for HttpTagsClient {
     async fn fetch_tags(&self, base_url: &str) -> Result<String, DiscoveryFailureCode> {
         let url = format!("{base_url}/api/tags");
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|error| if error.is_timeout() {
+        let response = self.client.get(&url).send().await.map_err(|error| {
+            if error.is_timeout() {
                 DiscoveryFailureCode::Timeout
             } else {
                 DiscoveryFailureCode::Unavailable
-            })?;
+            }
+        })?;
         response
             .text()
             .await
@@ -159,9 +156,7 @@ fn failure_from_code(code: DiscoveryFailureCode) -> DiscoveryFailure {
         DiscoveryFailureCode::EmptyList => {
             "Ollama reported no models. Pull one with `ollama pull <model>`."
         }
-        DiscoveryFailureCode::Unauthenticated => {
-            "Add your Ollama Cloud key to enable Cloud AI."
-        }
+        DiscoveryFailureCode::Unauthenticated => "Add your Ollama Cloud key to enable Cloud AI.",
         DiscoveryFailureCode::AuthenticationFailed => {
             "Ollama Cloud rejected the key. Update it in Settings."
         }
@@ -211,10 +206,7 @@ mod tests {
         assert_eq!(
             outcome,
             DiscoveryOutcome::Committed {
-                models: vec![
-                    "some/vendor/model:tag".into(),
-                    "先生-7b:latest".into(),
-                ],
+                models: vec!["some/vendor/model:tag".into(), "先生-7b:latest".into(),],
             }
         );
     }

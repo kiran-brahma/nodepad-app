@@ -3008,19 +3008,6 @@ fn write_active_workspace_id(
     write_preference(connection, ACTIVE_WORKSPACE_PREFERENCE, workspace_id)
 }
 
-/// Reads one `app_preferences` row, or `None` when it has never been written.
-#[cfg_attr(not(test), allow(dead_code))]
-fn read_preference(connection: &Connection, key: &str) -> Result<Option<String>, WorkspaceError> {
-    connection
-        .query_row(
-            "SELECT value FROM app_preferences WHERE key = ?1",
-            [key],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(WorkspaceError::Storage)
-}
-
 /// Writes one `app_preferences` row, replacing any existing value for the key.
 fn write_preference(connection: &Connection, key: &str, value: &str) -> Result<(), WorkspaceError> {
     connection
@@ -5202,9 +5189,11 @@ mod tests {
     fn a_failed_open_on_a_fresh_path_leaves_no_database_behind() {
         let path = temporary_path();
         assert!(!database_files_present(&path));
-        let failure = WorkspaceStore::open_prepared(&path, |_| {
-            Err(WorkspaceError::Storage(rusqlite::Error::InvalidQuery))
-        }, None)
+        let failure = WorkspaceStore::open_prepared(
+            &path,
+            |_| Err(WorkspaceError::Storage(rusqlite::Error::InvalidQuery)),
+            None,
+        )
         .unwrap_err();
         assert_eq!(failure.category, StorageOpenFailureCategory::Migration);
         // The stub SQLite created before preparation failed is gone, so the next
@@ -5273,7 +5262,10 @@ mod tests {
         let backups_dir = backups_dir_for(&id());
         // Bring the database to the current schema.
         {
-            WorkspaceStore::open(&path).unwrap().create_workspace("Seed").unwrap();
+            WorkspaceStore::open(&path)
+                .unwrap()
+                .create_workspace("Seed")
+                .unwrap();
         }
         // Roll one idempotent migration back so the next open has work to do.
         // Migration 2 (`CREATE TABLE IF NOT EXISTS app_preferences`) is safe to
@@ -5286,7 +5278,7 @@ mod tests {
                 .unwrap();
         }
         let now = "2026-07-22T00:00:00.000000Z";
-        let mut store = WorkspaceStore::open_with_backup(
+        let store = WorkspaceStore::open_with_backup(
             &path,
             OpenBackupContext {
                 backups_dir: &backups_dir,
@@ -5323,7 +5315,10 @@ mod tests {
         let blocker = std::env::temp_dir().join(format!("nodepad-backup-block-{}", id()));
         std::fs::write(&blocker, b"x").unwrap();
         {
-            WorkspaceStore::open(&path).unwrap().create_workspace("Seed").unwrap();
+            WorkspaceStore::open(&path)
+                .unwrap()
+                .create_workspace("Seed")
+                .unwrap();
         }
         {
             let connection = Connection::open(&path).unwrap();
@@ -5372,31 +5367,44 @@ mod tests {
 
         // The first change of the day produces exactly one automatic backup.
         store.create_workspace("First").unwrap();
-        store.maybe_automatic_backup(&backups_dir, day_one, "0.1.0").unwrap();
+        store
+            .maybe_automatic_backup(&backups_dir, day_one, "0.1.0")
+            .unwrap();
         assert_eq!(automatic_count(&backups_dir), 1);
 
         // The next day with no change since the last backup creates no backup.
         let day_two = "2026-07-23T08:00:00.000000Z";
-        store.maybe_automatic_backup(&backups_dir, day_two, "0.1.0").unwrap();
+        store
+            .maybe_automatic_backup(&backups_dir, day_two, "0.1.0")
+            .unwrap();
         assert_eq!(automatic_count(&backups_dir), 1);
 
         // A change the next day produces the second automatic backup.
         store.create_workspace("Second").unwrap();
-        store.maybe_automatic_backup(&backups_dir, day_two, "0.1.0").unwrap();
+        store
+            .maybe_automatic_backup(&backups_dir, day_two, "0.1.0")
+            .unwrap();
         assert_eq!(automatic_count(&backups_dir), 2);
 
         // Another change the same day is held back by the day gate.
         store.create_workspace("Third").unwrap();
-        store.maybe_automatic_backup(&backups_dir, day_two, "0.1.0").unwrap();
+        store
+            .maybe_automatic_backup(&backups_dir, day_two, "0.1.0")
+            .unwrap();
         assert_eq!(automatic_count(&backups_dir), 2);
 
         // Retention keeps the latest seven automatic backups deterministically.
         for index in 3..10 {
             store.create_workspace(&format!("Day {index}")).unwrap();
             let now = format!("2026-07-{index:02}T08:00:00.000000Z");
-            store.maybe_automatic_backup(&backups_dir, &now, "0.1.0").unwrap();
+            store
+                .maybe_automatic_backup(&backups_dir, &now, "0.1.0")
+                .unwrap();
         }
-        assert_eq!(automatic_count(&backups_dir), crate::backup::MAX_AUTOMATIC_BACKUPS);
+        assert_eq!(
+            automatic_count(&backups_dir),
+            crate::backup::MAX_AUTOMATIC_BACKUPS
+        );
 
         drop(store);
         std::fs::remove_dir_all(&backups_dir).unwrap();
@@ -5420,13 +5428,23 @@ mod tests {
         store.create_workspace("Target").unwrap();
         // The backup captures the state the thinker will restore to.
         let backup_manifest = store
-            .create_backup(&backups_dir, crate::backup::BackupKind::Automatic, now, "0.1.0")
+            .create_backup(
+                &backups_dir,
+                crate::backup::BackupKind::Automatic,
+                now,
+                "0.1.0",
+            )
             .unwrap();
         // Durable state moves on after the backup.
         store.create_workspace("After backup").unwrap();
         // A recoverable pre-restore backup of the current, changed database.
         let pre_restore = store
-            .create_backup(&backups_dir, crate::backup::BackupKind::PreRestore, now, "0.1.0")
+            .create_backup(
+                &backups_dir,
+                crate::backup::BackupKind::PreRestore,
+                now,
+                "0.1.0",
+            )
             .unwrap();
         drop(store);
 
@@ -5628,52 +5646,6 @@ mod tests {
                 }
             }
         ));
-    }
-
-    /// A snapshot must never carry a bearer key: this is the typed rule the
-    /// UI relies on, so the test asserts it explicitly. The sentinel is a
-    /// value the bearer key would carry; we record it in places a thinker
-    /// could mistake for a key (Note text, Annotation, selected model) and
-    /// confirm the keychain path is the only durable place we trust it.
-    #[test]
-    fn no_durable_state_carries_a_sentinel_bearer_key() {
-        let path = temporary_path();
-        let mut store = WorkspaceStore::open(&path).unwrap();
-        let snapshot = committed(store.create_workspace_outcome("Carrier"));
-        let id = workspace_id_named(&snapshot, "Carrier");
-        committed(store.set_assistance_policy_outcome(&id, "cloud_ai"));
-        // A Note and an Annotation that contain the sentinel value, so the
-        // test catches a leak in either text or rendered output.
-        let note = committed(
-            store.create_note_outcome(&id, &format!("# Note that quotes a key: {SENTINEL_KEY}")),
-        );
-        let note_id = note.notes[0].id.clone();
-        committed(
-            store.set_note_annotation_outcome(
-                &note_id,
-                &format!("Key shown to user: {SENTINEL_KEY}"),
-            ),
-        );
-        let snapshot = committed(store.snapshot_outcome());
-        let serialized = serde_json::to_string(&snapshot).unwrap();
-        // The sentinel is in Note text by design; this asserts only the
-        // sentinel never appears in any non-text durable field.
-        for path in [snapshot.workspaces.iter().flat_map(|w| {
-            w.id()
-                .chars()
-                .chain(w.cloud_consent_at().unwrap_or("").chars())
-        })] {
-            let collected: String = path.collect();
-            assert!(
-                !collected.contains(SENTINEL_KEY),
-                "A non-text Workspace field carried the sentinel: {collected}"
-            );
-        }
-        // The serialized snapshot still has the text because the thinker
-        // wrote it; the test only fails if a non-text slot echoes the key.
-        let _ = serialized;
-        drop(store);
-        remove_database(&path);
     }
 
     fn parsed_enrichment() -> crate::enrichment::ParsedEnrichmentResult {

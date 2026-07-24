@@ -196,9 +196,8 @@ pub fn create_backup(
             BackupError::Create(error.to_string())
         })?;
     let schema_version = read_schema_version(connection)?;
-    let checksum = sha256_of_file(&target).map_err(|error| {
+    let checksum = sha256_of_file(&target).inspect_err(|_| {
         let _ = fs::remove_file(&target);
-        error
     })?;
     // Verify the backup is usable before claiming success. A backup that
     // fails its own integrity check is deleted so retention never promotes
@@ -406,10 +405,9 @@ pub fn replace_database(
         rollback_to_live(&staging, db_path);
         BackupError::Replace(error.to_string())
     })?;
-    let copied = sha256_of_file(&tmp).map_err(|error| {
+    let copied = sha256_of_file(&tmp).inspect_err(|_| {
         let _ = fs::remove_file(&tmp);
         rollback_to_live(&staging, db_path);
-        error
     })?;
     if copied != manifest.checksum {
         let _ = fs::remove_file(&tmp);
@@ -433,7 +431,10 @@ fn rollback_to_live(staging: &Path, db_path: &Path) {
 }
 
 fn sidecar(db_path: &Path, suffix: &str) -> PathBuf {
-    let mut name = db_path.file_name().map(|name| name.to_os_string()).unwrap_or_default();
+    let mut name = db_path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_default();
     name.push(format!("-{suffix}"));
     db_path.with_file_name(name)
 }
@@ -442,8 +443,8 @@ fn checkpoint(db_path: &Path) -> Result<(), BackupError> {
     if !db_path.exists() {
         return Ok(());
     }
-    let connection = Connection::open(db_path)
-        .map_err(|error| BackupError::Reopen(error.to_string()))?;
+    let connection =
+        Connection::open(db_path).map_err(|error| BackupError::Reopen(error.to_string()))?;
     connection
         .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
         .map_err(|error| BackupError::Reopen(error.to_string()))?;
@@ -452,8 +453,7 @@ fn checkpoint(db_path: &Path) -> Result<(), BackupError> {
 
 fn write_manifest(dir: &Path, manifest: &BackupManifest) -> Result<(), BackupError> {
     let path = manifest_path(dir, &manifest.id);
-    let bytes = serde_json::to_vec_pretty(manifest)
-        .map_err(|_| BackupError::Manifest)?;
+    let bytes = serde_json::to_vec_pretty(manifest).map_err(|_| BackupError::Manifest)?;
     fs::write(&path, bytes).map_err(|_| BackupError::Manifest)
 }
 
@@ -478,8 +478,7 @@ fn integrity_check(db_path: &Path) -> Result<(), BackupError> {
     // A file that exists and matches its checksum but cannot be opened as a
     // SQLite database is corrupt, not merely unreadable: the bytes are there,
     // they just do not form a usable database.
-    let connection = Connection::open(db_path)
-        .map_err(|_| BackupError::Corrupt)?;
+    let connection = Connection::open(db_path).map_err(|_| BackupError::Corrupt)?;
     let result: String = connection
         .query_row("PRAGMA integrity_check", [], |row| row.get(0))
         .map_err(|_| BackupError::Corrupt)?;
@@ -499,8 +498,8 @@ fn read_schema_version(connection: &Connection) -> Result<i64, BackupError> {
 }
 
 fn read_schema_version_path(db_path: &Path) -> Result<i64, BackupError> {
-    let connection = Connection::open(db_path)
-        .map_err(|error| BackupError::Read(error.to_string()))?;
+    let connection =
+        Connection::open(db_path).map_err(|error| BackupError::Read(error.to_string()))?;
     read_schema_version_inner(&connection)
 }
 
@@ -516,7 +515,9 @@ fn read_schema_version_inner(connection: &Connection) -> Result<i64, BackupError
         return Ok(0);
     }
     let version: Option<i64> = connection
-        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0))
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
         .ok();
     Ok(version.unwrap_or(0))
 }

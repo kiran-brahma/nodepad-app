@@ -147,7 +147,11 @@ pub enum EnrichmentOutcome {
     /// The HTTP call failed: the host was unreachable, the request timed
     /// out, the keychain had no key, the model was missing, the cloud host
     /// returned 4xx/5xx, or the response was cancelled mid-flight.
-    ProviderFailed { token: RequestToken, code: EnrichmentFailureCode, message: String },
+    ProviderFailed {
+        token: RequestToken,
+        code: EnrichmentFailureCode,
+        message: String,
+    },
 }
 
 /// Why a provider call did not produce a parsed result. Mirrors the typed
@@ -195,9 +199,19 @@ pub struct CandidateView {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum UrlMetadata {
-    Retrieved { final_url: String, title: Option<String>, description: Option<String>, excerpt: Option<String> },
-    NonHtml { final_url: String, content_type: Option<String> },
-    Failed { code: String },
+    Retrieved {
+        final_url: String,
+        title: Option<String>,
+        description: Option<String>,
+        excerpt: Option<String>,
+    },
+    NonHtml {
+        final_url: String,
+        content_type: Option<String>,
+    },
+    Failed {
+        code: String,
+    },
 }
 
 /// The full request the workflow hands to the provider. The application
@@ -305,22 +319,33 @@ pub fn build_user_message(request: &EnrichmentRequest) -> String {
 /// XML-significant characters keeps URL content inside its data block.
 fn safe_url_metadata_json(metadata: Option<&UrlMetadata>) -> String {
     let bounded = match metadata {
-        Some(UrlMetadata::Retrieved { final_url, title, description, excerpt }) => serde_json::json!({
+        Some(UrlMetadata::Retrieved {
+            final_url,
+            title,
+            description,
+            excerpt,
+        }) => serde_json::json!({
             "status": "retrieved",
             "finalUrl": truncate_scalars(final_url, MAX_URL_FINAL_URL_SCALARS),
             "title": title.as_deref().map(|value| truncate_scalars(value, MAX_URL_TITLE_SCALARS)),
             "description": description.as_deref().map(|value| truncate_scalars(value, MAX_URL_DESCRIPTION_SCALARS)),
             "excerpt": excerpt.as_deref().map(|value| truncate_scalars(value, MAX_URL_EXCERPT_SCALARS)),
         }),
-        Some(UrlMetadata::NonHtml { final_url, content_type }) => serde_json::json!({
+        Some(UrlMetadata::NonHtml {
+            final_url,
+            content_type,
+        }) => serde_json::json!({
             "status": "non_html",
             "finalUrl": truncate_scalars(final_url, MAX_URL_FINAL_URL_SCALARS),
             "contentType": content_type,
         }),
-        Some(UrlMetadata::Failed { code }) => serde_json::json!({ "status": "failed", "code": truncate_scalars(code, 64) }),
+        Some(UrlMetadata::Failed { code }) => {
+            serde_json::json!({ "status": "failed", "code": truncate_scalars(code, 64) })
+        }
         None => serde_json::Value::Null,
     };
-    serde_json::to_string(&bounded).unwrap_or_else(|_| "null".to_owned())
+    serde_json::to_string(&bounded)
+        .unwrap_or_else(|_| "null".to_owned())
         .replace('<', "\\u003c")
         .replace('>', "\\u003e")
         .replace('&', "\\u0026")
@@ -353,7 +378,10 @@ pub fn select_candidates(notes: &[&Note], target_note_id: &str) -> Vec<Candidate
             if taken.len() >= MAX_CANDIDATES {
                 break;
             }
-            if taken.iter().any(|existing| existing.note_type() == note.note_type()) {
+            if taken
+                .iter()
+                .any(|existing| existing.note_type() == note.note_type())
+            {
                 continue;
             }
             taken.push(*note);
@@ -639,7 +667,8 @@ impl EnrichmentClient for HttpEnrichmentClient {
                 { "role": "user", "content": user_message }
             ],
         });
-        let body_text = serde_json::to_string(&body).map_err(|_| EnrichmentFailureCode::MalformedResponse)?;
+        let body_text =
+            serde_json::to_string(&body).map_err(|_| EnrichmentFailureCode::MalformedResponse)?;
         let mut request = self
             .client
             .post(&url)
@@ -802,7 +831,10 @@ pub fn gate_parsed_against_source<S: EnrichmentSource>(
     let existing_labels = source.labels();
     let mut add_labels: Vec<String> = Vec::new();
     for label in &parsed.labels {
-        if existing_labels.iter().any(|existing| existing.to_lowercase() == label.to_lowercase()) {
+        if existing_labels
+            .iter()
+            .any(|existing| existing.to_lowercase() == label.to_lowercase())
+        {
             continue;
         }
         add_labels.push(label.clone());
@@ -874,7 +906,14 @@ mod tests {
     use super::*;
     use crate::workspace::{Label, Provenance};
 
-    fn make_note(id: &str, updated_at: &str, note_type: &str, label_names: &[&str], markdown: &str, annotation: Option<&str>) -> Note {
+    fn make_note(
+        id: &str,
+        updated_at: &str,
+        note_type: &str,
+        label_names: &[&str],
+        markdown: &str,
+        annotation: Option<&str>,
+    ) -> Note {
         let labels = label_names
             .iter()
             .map(|name| Label::new_for_test(&format!("label-{name}"), "w", name))
@@ -1091,7 +1130,8 @@ Before returning, verify that the Note Type describes structural role; Labels ar
 
     #[test]
     fn parse_rejects_unknown_relationship_id() {
-        let body = r#"{"noteType":"claim","labels":[],"annotation":null,"relatedNoteIds":["never-seen"]}"#;
+        let body =
+            r#"{"noteType":"claim","labels":[],"annotation":null,"relatedNoteIds":["never-seen"]}"#;
         match parse_enrichment_response(token(), body, &["a".to_owned()]) {
             EnrichmentOutcome::InvalidSchema { reason, .. } => {
                 assert!(reason.contains("unknown"));
@@ -1102,7 +1142,8 @@ Before returning, verify that the Note Type describes structural role; Labels ar
 
     #[test]
     fn parse_rejects_relationship_duplicate() {
-        let body = r#"{"noteType":"claim","labels":[],"annotation":null,"relatedNoteIds":["a","a"]}"#;
+        let body =
+            r#"{"noteType":"claim","labels":[],"annotation":null,"relatedNoteIds":["a","a"]}"#;
         match parse_enrichment_response(token(), body, &["a".to_owned()]) {
             EnrichmentOutcome::InvalidSchema { reason, .. } => {
                 assert!(reason.contains("duplicat"));
@@ -1237,7 +1278,10 @@ Before returning, verify that the Note Type describes structural role; Labels ar
         let notes = vec![&target, &a, &b, &c, &d, &e];
         let candidates = select_candidates(&notes, "target");
         let ids: Vec<&str> = candidates.iter().map(|c| c.id.as_str()).collect();
-        assert!(ids.contains(&"e"), "diversity filler must include the question-typed Note");
+        assert!(
+            ids.contains(&"e"),
+            "diversity filler must include the question-typed Note"
+        );
         // The four claims remain, plus the diversity filler.
         assert_eq!(candidates.len(), 5);
     }
@@ -1246,7 +1290,16 @@ Before returning, verify that the Note Type describes structural role; Labels ar
     fn select_candidates_caps_at_ten() {
         let target = make_note("target", "2024-01-01T00:00:00Z", "claim", &[], "text", None);
         let mut notes: Vec<Note> = (0..20)
-            .map(|i| make_note(&format!("n{i}"), &format!("2024-12-{i:02}T00:00:00Z"), "claim", &[], "x", None))
+            .map(|i| {
+                make_note(
+                    &format!("n{i}"),
+                    &format!("2024-12-{i:02}T00:00:00Z"),
+                    "claim",
+                    &[],
+                    "x",
+                    None,
+                )
+            })
             .collect();
         let refs: Vec<&Note> = std::iter::once(&target).chain(notes.iter()).collect();
         let candidates = select_candidates(&refs, "target");
