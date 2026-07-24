@@ -198,3 +198,43 @@ Hand to implementation:
 Defer to a follow-up issue: wiring OpenRouter, OpenAI, and z.ai as fallback
 providers, and YouTube embeds, into the Tauri app. Both are provider/product
 expansion and are fenced out of this release slice.
+
+---
+
+## POST-IMPLEMENTATION ADDENDUM
+
+Recorded after `code-review`, because two findings change what this audit
+concluded rather than merely adding detail.
+
+### The sentinel audit repeated the exact failure it was written to fix
+
+This audit's second finding was that the old test "is a name without a body."
+The first replacement written for it **had the same defect in a subtler form**:
+it read the bytes of every prohibited artifact, but nothing in the test ever
+put `SENTINEL_KEY` anywhere. The value was only ever searched for, so every
+assertion was vacuous — no plumbing change could have made it fail. The
+positive control proved the scan could read bytes; it did not prove the secret
+had ever entered the system.
+
+The shipped version plants the sentinel in the keychain the production Cloud
+path reads, drives a real `discover_models` call, and asserts through a
+recording client that the key reached the bearer header — *then* scans. The
+lesson generalises: a negative assertion is only as strong as the proof that
+the thing being searched for was ever present.
+
+### A real secret leak, missed by this audit entirely
+
+Review found that `SecurityCliKeychain::write` passed the bearer key as
+`security add-generic-password … -w <value>`, putting the secret in `argv`
+where `ps` exposes it to any local process. The module's own doc comment
+claimed the opposite — "passed through stdin … so it never appears in the
+process's command line" — and had done since the secret seam was written.
+
+This audit read that comment and believed it. It scored the keychain seam as
+CLEAN without checking the code against its own documentation, and the
+prohibited location "process arguments" was the one item in the issue's list
+that no planned artifact scan could ever have reached. Fixed by writing the
+value to the child's stdin, plus `secrets::process_argument_audit` to pin it.
+
+Both corrections point the same way: **prefer a test that must first make the
+bad thing happen over one that asserts it did not.**

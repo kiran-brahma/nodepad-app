@@ -6,7 +6,8 @@
 //! macOS keychain through the `security` command; the trait it implements
 //! is the seam contract tests use to inject a fake.
 
-use std::process::Command;
+use std::io::Write;
+use std::process::{Command, Stdio};
 
 /// The fixed name the application uses for the one Ollama Cloud credential it
 /// keeps. Sharing one account across multiple consented Workspaces is the
@@ -135,7 +136,14 @@ impl KeychainAdapter for SecurityCliKeychain {
         // an old one is still there. `add` alone would fail on the duplicate;
         // `delete` followed by `add` leaves a window where a read returns
         // nothing; a single `add -U` updates in place.
-        let output = Command::new("security")
+        //
+        // `-w` is passed with no value on purpose. Given a value it would sit
+        // in this process's `argv`, where any local process can read it out of
+        // `ps` for as long as the call runs — the one prohibited location a
+        // keychain write could still leak to. With `-w` bare, `security`
+        // prompts for the password on stdin instead and asks for it twice, so
+        // the key is written down the pipe and never becomes an argument.
+        let spawned = Command::new("security")
             .args([
                 "add-generic-password",
                 "-U",
@@ -144,9 +152,26 @@ impl KeychainAdapter for SecurityCliKeychain {
                 "-a",
                 account,
                 "-w",
-                value,
             ])
-            .output();
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn();
+        let output = spawned.and_then(|mut child| {
+            {
+                let stdin = child.stdin.as_mut().expect("stdin was piped");
+                // The prompt asks for the password and then for a retype; both
+                // reads must see the same value or `security` refuses.
+                stdin.write_all(value.as_bytes())?;
+                stdin.write_all(b"\n")?;
+                stdin.write_all(value.as_bytes())?;
+                stdin.write_all(b"\n")?;
+            }
+            // Dropping the handle closes the pipe, so `security` sees EOF and
+            // does not wait for more input.
+            child.stdin.take();
+            child.wait_with_output()
+        });
         match output {
             Ok(out) if out.status.success() => KeychainOutcome::Ok(()),
             Ok(out) => KeychainOutcome::Failed {
@@ -323,5 +348,59 @@ mod tests {
             write,
             KeychainOutcome::Failed { ref failure } if failure.code == KeychainFailureCode::Refused
         ));
+    }
+}
+
+#[cfg(test)]
+mod process_argument_audit {
+    //! The release forbids a secret appearing in process arguments. That is
+    //! the one prohibited location the durable-state sentinel audit cannot
+    //! reach: a value passed to `Command::args` never touches SQLite, a
+    //! backup, or an export, but it is readable from `ps` by any local
+    //! process for as long as the call runs.
+    //!
+    //! `SecurityCliKeychain::write` got this wrong until V0-18: it passed the
+    //! bearer key as `-w <value>`. This audit pins the fix by reading the
+    //! source of the one module allowed to handle the secret and failing if
+    //! the value is ever handed to the command line again.
+
+    /// The keychain helper may name flags and identifiers on the command
+    /// line. It may never put the secret itself there — that has to travel
+    /// down stdin.
+    #[test]
+    fn the_keychain_helper_never_passes_the_secret_as_an_argument() {
+        let source = include_str!("secrets.rs");
+        // Anchor on the production impl, not the trait declaration above it —
+        // the trait names the same method and would yield an empty body.
+        let production = source
+            .split("impl KeychainAdapter for SecurityCliKeychain")
+            .nth(1)
+            .expect("the production keychain adapter is present");
+        let write_body = production
+            .split("fn write(&self, service: &str, account: &str, value: &str)")
+            .nth(1)
+            .expect("SecurityCliKeychain::write is present");
+        let write_body = &write_body[..write_body.find("fn delete").unwrap_or(write_body.len())];
+        assert!(
+            write_body.contains("add-generic-password"),
+            "the audit did not find the write body it means to check"
+        );
+
+        // `value` may be written to a pipe; it may not be an argument.
+        for forbidden in [
+            "\"-w\",\n                value",
+            "\"-w\", value",
+            ".arg(value)",
+        ] {
+            assert!(
+                !write_body.contains(forbidden),
+                "the bearer key is passed to the command line via `{forbidden}`, where `ps` \
+                 exposes it to every local process; write it to the child's stdin instead"
+            );
+        }
+        assert!(
+            write_body.contains("Stdio::piped()") && write_body.contains("write_all(value"),
+            "the bearer key must reach `security` through stdin"
+        );
     }
 }

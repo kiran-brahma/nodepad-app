@@ -73,6 +73,12 @@ moment of a request, sent as a bearer token, and never written to the database,
 a backup, an archive, an export, a log line, an error message, or a process
 argument.
 
+The process-argument half of that was not true before this release: the
+keychain write passed the key as `security … -w <value>`, which put it in this
+process's `argv` where `ps` exposes it to any local process for the duration of
+the call. It is now written to the child's stdin instead, and an audit fails
+the build if it ever returns to the command line.
+
 ### How these claims are enforced
 
 These are not documentation-only promises. `src-tauri/src/release_audit.rs`
@@ -90,11 +96,27 @@ fails the build when any of them stops being true:
   is `default-src 'self'` with no remote origin admitted.
 - `only_the_reviewed_tauri_plugins_are_registered` — the file dialog is the
   only registered plugin.
-- `no_durable_state_carries_a_sentinel_bearer_key` (in `workspace.rs`) — plants
-  a sentinel and reads the raw bytes of the SQLite file and its write-ahead
-  log, a backup, an exported archive, a Markdown export, the UI snapshot, and
-  an error message. It carries a positive control, so it fails loudly rather
-  than passing vacuously if the scan ever stops reading those bytes.
+- `the_built_front_end_carries_no_forbidden_marker_or_unapproved_origin` —
+  applies the same two rules to the *built* `dist/` bundle, where minification
+  and a dependency's runtime can introduce a string that appears in no source
+  file.
+- `the_embedded_development_url_is_loopback_and_unused_in_release` — pins the
+  one development URL that ships (see below) to a loopback address.
+- `sentinel::a_bearer_key_in_flight_reaches_the_request_and_no_durable_byte` —
+  puts a sentinel key in the keychain the production Cloud path reads, drives a
+  real Cloud discovery, and asserts via a recording client that the key
+  genuinely reached the bearer header. Only then does it read the raw bytes of
+  the SQLite file and its write-ahead log, a backup, an exported archive, a
+  Markdown export, the UI snapshot, the discovery outcome, the recorded
+  keychain calls, and an error message, and require the sentinel in none of
+  them. It also carries a positive control — text the thinker typed, which
+  *must* be found — so it fails loudly rather than passing vacuously if the
+  scan ever stops reading those bytes.
+- `secrets::process_argument_audit` — process arguments are the one prohibited
+  location a durable-byte scan cannot reach, so they are audited next to the
+  code that could leak them. The keychain write passes the key on the child's
+  stdin; the audit fails if it is ever handed to the command line, where `ps`
+  would expose it to any local process.
 
 ---
 

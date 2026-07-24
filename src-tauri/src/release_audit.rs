@@ -56,6 +56,31 @@ const FORBIDDEN_MARKERS: &[(&str, &str)] = &[
     ("api.z.ai", "a non-Ollama provider"),
 ];
 
+/// Origins that appear in the shipped source as *test input* — the addresses a
+/// guard is written to reject, or a schema URL in a config. Nothing here is
+/// ever contacted by a running Nodepad.
+///
+/// This list exists so those addresses are declared in one visible place. The
+/// alternative, exempting any line that looks like a test, silently exempts
+/// real hosts too.
+const TEST_FIXTURE_ORIGINS: &[&str] = &[
+    "http://example.com",
+    "https://example.com",
+    "http://example.org",
+    "https://example.org",
+    "http://127.0.0.1",
+    "http://localhost",
+    "https://localhost",
+    "http://192.168.0.1",
+    "http://10.0.0.1",
+    "http://169.254.169.254",
+    "http://[",
+    "https://[",
+    "https://schema.tauri.app",
+    "https://ui.shadcn.com",
+    "https://user:secret@example.com",
+];
+
 fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
@@ -150,17 +175,38 @@ fn origins_in(line: &str) -> Vec<String> {
     found
 }
 
-/// A line that only *documents* a URL is not a line that contacts one. Doc
-/// comments, ordinary comments, and test assertions about rejected input all
-/// mention URLs by necessity. The audit skips them so it can stay strict about
-/// the lines that remain.
-fn is_prose_or_test(line: &str) -> bool {
+/// A line that only *documents* a URL is not a line that contacts one, and
+/// this codebase documents its network rules heavily in prose. Comments are
+/// therefore skipped.
+///
+/// Nothing else is. An earlier version of this predicate also skipped any line
+/// containing `assert!` or `assert_eq!`, which was a hole wide enough to drive
+/// a provider through: a single assertion mentioning a host exempted that host
+/// from both scans. Test code that legitimately names a rejected address
+/// belongs in [`TEST_FIXTURE_ORIGINS`], where it is visible, rather than
+/// hidden behind a syntactic exemption.
+fn is_comment(line: &str) -> bool {
     let trimmed = line.trim_start();
-    trimmed.starts_with("//")
-        || trimmed.starts_with("*")
-        || trimmed.starts_with("/*")
-        || trimmed.contains("assert!")
-        || trimmed.contains("assert_eq!")
+    trimmed.starts_with("//") || trimmed.starts_with("*") || trimmed.starts_with("/*")
+}
+
+/// Runs one line-level rule over a set of files and returns every hit as
+/// `path:line: detail`. All three source scans share this walk, so the rules
+/// stay one expression each and "which lines are exempt" is decided in exactly
+/// one place ([`is_comment`]).
+fn scan(files: &[(String, String)], rule: impl Fn(&str) -> Vec<String>) -> Vec<String> {
+    let mut offences = Vec::new();
+    for (path, contents) in files {
+        for (number, line) in contents.lines().enumerate() {
+            if is_comment(line) {
+                continue;
+            }
+            for detail in rule(line) {
+                offences.push(format!("{path}:{}: {detail}", number + 1));
+            }
+        }
+    }
+    offences
 }
 
 #[test]
@@ -169,38 +215,18 @@ fn every_outbound_origin_is_on_the_release_allowlist() {
         .iter()
         .map(|(host, _)| *host)
         .collect();
-    // `example.com` and the RFC reserved ranges appear throughout the suite as
-    // the input a guard is supposed to reject; they are never contacted.
-    let test_fixtures = [
-        "http://example.com",
-        "https://example.com",
-        "http://example.org",
-        "https://example.org",
-        "http://127.0.0.1",
-        "http://localhost",
-        "https://localhost",
-        "http://192.168.0.1",
-        "http://10.0.0.1",
-        "http://169.254.169.254",
-        "https://schema.tauri.app",
-        "https://ui.shadcn.com",
-    ];
 
-    let mut offences = Vec::new();
-    for (path, contents) in shipped_sources() {
-        for (number, line) in contents.lines().enumerate() {
-            if is_prose_or_test(line) {
-                continue;
-            }
-            for origin in origins_in(line) {
-                let known = allowed.iter().any(|host| origin.starts_with(host))
-                    || test_fixtures.iter().any(|host| origin.starts_with(host));
-                if !known {
-                    offences.push(format!("{path}:{}: {origin}", number + 1));
-                }
-            }
-        }
-    }
+    let offences = scan(&shipped_sources(), |line| {
+        origins_in(line)
+            .into_iter()
+            .filter(|origin| {
+                !allowed.iter().any(|host| origin.starts_with(host))
+                    && !TEST_FIXTURE_ORIGINS
+                        .iter()
+                        .any(|host| origin.starts_with(host))
+            })
+            .collect()
+    });
 
     assert!(
         offences.is_empty(),
@@ -216,19 +242,13 @@ fn every_outbound_origin_is_on_the_release_allowlist() {
 
 #[test]
 fn no_telemetry_analytics_updater_or_hidden_provider_is_present() {
-    let mut offences = Vec::new();
-    for (path, contents) in shipped_sources() {
-        for (number, line) in contents.lines().enumerate() {
-            if is_prose_or_test(line) {
-                continue;
-            }
-            for (marker, category) in FORBIDDEN_MARKERS {
-                if line.contains(marker) {
-                    offences.push(format!("{path}:{}: {marker} ({category})", number + 1));
-                }
-            }
-        }
-    }
+    let offences = scan(&shipped_sources(), |line| {
+        FORBIDDEN_MARKERS
+            .iter()
+            .filter(|(marker, _)| line.contains(marker))
+            .map(|(marker, category)| format!("{marker} ({category})"))
+            .collect()
+    });
     assert!(
         offences.is_empty(),
         "the release forbids telemetry, analytics, remote logging, background \
@@ -256,8 +276,10 @@ fn no_dependency_introduces_telemetry_or_an_updater() {
 /// about the four network modules and nothing else.
 #[test]
 fn the_webview_makes_no_network_call_of_its_own() {
-    // `fetch(` would also match `prefetch(`; the audit looks for the global.
-    let forbidden = [
+    // `fetch(` matches `prefetch(` and `refetch(` too. That is deliberate: a
+    // wrapper named `refetch` still reaches the network, and a false positive
+    // here costs one line in this list, while a false negative ships.
+    const FORBIDDEN_WEBVIEW_CALLS: &[&str] = &[
         "fetch(",
         "XMLHttpRequest",
         "new WebSocket",
@@ -272,19 +294,13 @@ fn the_webview_makes_no_network_call_of_its_own() {
         files.push(("index.html".to_owned(), contents));
     }
 
-    let mut offences = Vec::new();
-    for (path, contents) in files {
-        for (number, line) in contents.lines().enumerate() {
-            if is_prose_or_test(line) {
-                continue;
-            }
-            for marker in forbidden {
-                if line.contains(marker) {
-                    offences.push(format!("{path}:{}: {marker}", number + 1));
-                }
-            }
-        }
-    }
+    let offences = scan(&files, |line| {
+        FORBIDDEN_WEBVIEW_CALLS
+            .iter()
+            .filter(|marker| line.contains(**marker))
+            .map(|marker| (*marker).to_owned())
+            .collect()
+    });
     assert!(
         offences.is_empty(),
         "the webview must reach the network only through a Tauri command, but found:\n  {}",
@@ -520,4 +536,370 @@ mod fresh_install {
         drop(reopened);
         discard(&path);
     }
+}
+
+/// The release's sentinel-secret audit.
+///
+/// The issue forbids key material in "SQLite, archives, backups, logs, errors,
+/// UI snapshots, process arguments, or generated artifacts". Process arguments
+/// are audited next to the code that could leak them, in
+/// `secrets::process_argument_audit`; everything else is audited here.
+///
+/// The design point of this module is that the sentinel is *actually planted*.
+/// An earlier version of this audit only ever searched for a value nothing had
+/// introduced, so every assertion was vacuous — no plumbing change could have
+/// made it fail. Here the sentinel is put into the keychain the production
+/// Cloud path reads from, a Cloud discovery is driven end to end, and the
+/// recording client asserts the key really did arrive at the bearer header.
+/// Only once the secret is proven to be *in flight* is it meaningful to assert
+/// that it reached no durable byte.
+mod sentinel {
+    use crate::cloud::{
+        CloudDiscoveryFailureCode, CloudHttpResponse, CloudOllamaProvider, CloudTagsClient,
+    };
+    use crate::secrets::fake::FakeKeychain;
+    use crate::secrets::{OLLAMA_CLOUD_KEYCHAIN_ACCOUNT, OLLAMA_CLOUD_KEYCHAIN_SERVICE};
+    use crate::workspace::{ThinkingWorkspaceInterface, WorkspaceStore};
+    use async_trait::async_trait;
+    use std::sync::{Arc, Mutex};
+
+    /// Stands in for the Ollama Cloud bearer key.
+    const SENTINEL_KEY: &str = "SENTINEL-BEARER-KEY-DO-NOT-LEAK";
+    /// Text the thinker types into a Note. It is *expected* in Note-bearing
+    /// artifacts, and is the audit's proof that the byte scan reads them.
+    const CONTROL_TEXT: &str = "SENTINEL-CONTROL-THINKER-TYPED-THIS";
+
+    /// A cloud client that records the `Authorization` value it is handed, so
+    /// the audit can prove the key reached the request rather than assuming it.
+    struct RecordingCloudClient {
+        seen: Mutex<Vec<Option<String>>>,
+    }
+
+    #[async_trait]
+    impl CloudTagsClient for RecordingCloudClient {
+        async fn fetch_tags(
+            &self,
+            _base_url: &str,
+            authorization: Option<&str>,
+        ) -> Result<CloudHttpResponse, CloudDiscoveryFailureCode> {
+            self.seen
+                .lock()
+                .unwrap()
+                .push(authorization.map(str::to_owned));
+            Ok(CloudHttpResponse {
+                status: 200,
+                body: r#"{"models":[{"name":"gpt-oss:120b-cloud"}]}"#.to_owned(),
+            })
+        }
+    }
+
+    fn temporary_path(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "nodepad-sentinel-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    /// Substring search over raw bytes. The artifacts are a mix of UTF-8
+    /// documents and binary SQLite pages, so the scan cannot go through `str`.
+    fn contains(haystack: &[u8], needle: &str) -> bool {
+        haystack
+            .windows(needle.len())
+            .any(|window| window == needle.as_bytes())
+    }
+
+    #[test]
+    fn a_bearer_key_in_flight_reaches_the_request_and_no_durable_byte() {
+        let path = temporary_path("db").with_extension("sqlite");
+        let backups_dir = temporary_path("backups");
+        std::fs::create_dir_all(&backups_dir).unwrap();
+
+        // ── Plant the sentinel where the production Cloud path reads it ─────
+        let keychain = Arc::new(FakeKeychain::default());
+        *keychain.read_result.lock().unwrap() = Ok(SENTINEL_KEY.to_owned());
+        let client = Arc::new(RecordingCloudClient {
+            seen: Mutex::new(Vec::new()),
+        });
+        let provider = CloudOllamaProvider::new(
+            client.clone(),
+            keychain.clone(),
+            OLLAMA_CLOUD_KEYCHAIN_SERVICE,
+            OLLAMA_CLOUD_KEYCHAIN_ACCOUNT,
+        );
+
+        // ── Drive a real Cloud discovery ────────────────────────────────────
+        let outcome = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(provider.discover_models());
+
+        // The secret is genuinely in flight: the provider read it from the
+        // keychain and handed it to the request. Without this, every
+        // assertion below would pass on a value that was never introduced.
+        let seen = client.seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1, "exactly one Cloud request was made");
+        assert_eq!(
+            seen[0].as_deref(),
+            Some(SENTINEL_KEY),
+            "the bearer key must reach the request, or this audit proves nothing"
+        );
+        assert!(
+            matches!(
+                outcome,
+                crate::cloud::CloudDiscoveryOutcome::Committed { .. }
+            ),
+            "the Cloud discovery succeeded: {outcome:?}"
+        );
+
+        // ── Now run a durable session on the same Cloud-consented Workspace ─
+        let mut store = WorkspaceStore::open(&path).unwrap();
+        let workspace_id = store.snapshot().unwrap().active_workspace_id;
+        store
+            .set_assistance_policy(&workspace_id, crate::workspace::AssistancePolicy::CloudAi)
+            .unwrap();
+        store.set_cloud_consent(&workspace_id, true).unwrap();
+        store
+            .set_selected_model(&workspace_id, Some("gpt-oss:120b-cloud"))
+            .unwrap();
+
+        let note = store
+            .create_note(&workspace_id, &format!("# A Note quoting {CONTROL_TEXT}"))
+            .unwrap();
+        let note_id = note.notes[0].id.clone();
+        store.set_note_annotation(&note_id, CONTROL_TEXT).unwrap();
+        store.attach_label(&note_id, CONTROL_TEXT).unwrap();
+
+        // ── Every artifact the issue names, as raw bytes ────────────────────
+        let mut artifacts: Vec<(&str, Vec<u8>)> = Vec::new();
+
+        let snapshot = store.snapshot().unwrap();
+        artifacts.push(("the UI snapshot", serde_json::to_vec(&snapshot).unwrap()));
+
+        let (markdown, _) = store.markdown_export(&workspace_id).unwrap();
+        artifacts.push(("the Markdown export", markdown.into_bytes()));
+
+        let exported = store.archive_export_data(&workspace_id).unwrap();
+        let archive =
+            crate::archive::build_archive(&exported, "0.1.0", "2026-07-24T12:00:00+00:00");
+        artifacts.push((
+            "the exported archive",
+            crate::archive::serialize_archive(&archive)
+                .unwrap()
+                .into_bytes(),
+        ));
+
+        let manifest = store
+            .create_backup(
+                &backups_dir,
+                crate::backup::BackupKind::Automatic,
+                "2026-07-24T12:00:00.000000Z",
+                "0.1.0",
+            )
+            .unwrap();
+        artifacts.push((
+            "the backup file",
+            std::fs::read(backups_dir.join(format!("{}.sqlite", manifest.id))).unwrap(),
+        ));
+        artifacts.push((
+            "the backup manifest",
+            serde_json::to_vec(&manifest).unwrap(),
+        ));
+
+        // The live database including the write-ahead log: a value can sit in
+        // the WAL long before it is checkpointed into the main file.
+        for suffix in ["", "-wal"] {
+            let file = std::path::PathBuf::from(format!("{}{suffix}", path.display()));
+            if let Ok(bytes) = std::fs::read(&file) {
+                artifacts.push(("the SQLite database", bytes));
+            }
+        }
+
+        // Errors and logs: a failure raised while the Cloud path is live must
+        // not echo what it was carrying, and neither must the keychain seam's
+        // own reported outcomes.
+        let failure = store.set_selected_model("no-such-workspace", Some("phi3:latest"));
+        artifacts.push(("a failure message", format!("{failure:?}").into_bytes()));
+        artifacts.push((
+            "the Cloud discovery outcome",
+            format!("{outcome:?}").into_bytes(),
+        ));
+        artifacts.push((
+            "the recorded keychain calls",
+            format!("{:?}", keychain.calls.lock().unwrap()).into_bytes(),
+        ));
+
+        // ── The audit ───────────────────────────────────────────────────────
+        let mut control_sightings = 0;
+        for (name, bytes) in &artifacts {
+            assert!(
+                !contains(bytes, SENTINEL_KEY),
+                "{name} carried the bearer key"
+            );
+            if contains(bytes, CONTROL_TEXT) {
+                control_sightings += 1;
+            }
+        }
+
+        // The scan works: text the thinker typed is found in the snapshot, the
+        // Markdown export, the archive, the backup, and the database.
+        assert!(
+            control_sightings >= 5,
+            "the positive control was found in only {control_sightings} of {} artifacts, \
+             so the scan is not actually reading these bytes",
+            artifacts.len()
+        );
+
+        drop(store);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+        let _ = std::fs::remove_dir_all(&backups_dir);
+    }
+}
+
+/// The scans above read source. This one reads the *built* front end, which is
+/// what actually ships inside the `.app`. Minification, inlining, and any
+/// dependency's runtime can put a string into `dist/` that appears nowhere in
+/// `src/`, so auditing source alone would miss it.
+///
+/// The bundle is a build output, so the test skips when `dist/` is absent
+/// rather than failing — but `npm run check` builds it before the Rust suite
+/// runs, so the release gate always exercises this.
+#[test]
+fn the_built_front_end_carries_no_forbidden_marker_or_unapproved_origin() {
+    let dist = repository_root().join("dist");
+    if !dist.exists() {
+        return;
+    }
+    let root = repository_root();
+    let mut files = Vec::new();
+    collect_any(&dist, &root, &mut files);
+    assert!(
+        !files.is_empty(),
+        "dist/ exists but the audit read nothing out of it"
+    );
+
+    let allowed: Vec<&str> = ALLOWED_OUTBOUND_HOSTS
+        .iter()
+        .map(|(host, _)| *host)
+        .collect();
+
+    let mut offences = Vec::new();
+    for (path, contents) in &files {
+        for (marker, category) in FORBIDDEN_MARKERS {
+            if contents.contains(marker) {
+                offences.push(format!("{path}: {marker} ({category})"));
+            }
+        }
+        // Minified output is one enormous line, so the built assets are
+        // scanned whole rather than line by line.
+        for origin in origins_in(contents) {
+            let known = allowed.iter().any(|host| origin.starts_with(host))
+                || TEST_FIXTURE_ORIGINS
+                    .iter()
+                    .any(|host| origin.starts_with(host))
+                || BUILT_ASSET_ORIGIN_EXEMPTIONS
+                    .iter()
+                    .any(|host| origin.starts_with(host));
+            if !known {
+                offences.push(format!("{path}: {origin}"));
+            }
+        }
+    }
+    assert!(
+        offences.is_empty(),
+        "the built front end must carry no forbidden marker and no unapproved \
+         origin, but found:\n  {}",
+        offences.join("\n  ")
+    );
+}
+
+/// Origins that legitimately appear in third-party bundled code as inert
+/// identifiers rather than as anything the app requests: XML namespaces, and
+/// documentation links embedded in library error messages.
+///
+/// Each was checked by hand against the built bundle:
+///
+/// - `w3.org` / `schema.org` — XML and SVG namespace identifiers, never fetched.
+/// - `github.com` — `hast-util-to-jsx-runtime` and `react-markdown` embed
+///   repository and changelog links in the text of their error messages.
+/// - `radix-ui.com` — a `.../docs/components/${docsSlug}` link inside a Radix
+///   error message.
+/// - `react.dev` — the `react.dev/errors/` link React prints when a minified
+///   error fires.
+///
+/// None is ever passed to a request. The webview's CSP is `default-src 'self'`,
+/// so even a library that tried could not load them.
+const BUILT_ASSET_ORIGIN_EXEMPTIONS: &[&str] = &[
+    "http://www.w3.org",
+    "https://www.w3.org",
+    "http://schema.org",
+    "https://schema.org",
+    "https://github.com",
+    "https://radix-ui.com",
+    "https://react.dev",
+];
+
+/// Like [`collect`] but takes every file, whatever its extension: a built
+/// bundle's contents are not predictable from a suffix list.
+fn collect_any(dir: &Path, root: &Path, out: &mut Vec<(String, String)>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_any(&path, root, out);
+        } else if let Ok(contents) = std::fs::read_to_string(&path) {
+            let relative = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .display()
+                .to_string();
+            out.push((relative, contents));
+        }
+    }
+}
+
+/// The one development URL that genuinely ships.
+///
+/// `tauri.conf.json` carries `build.devUrl` so `npm run dev` works, and Tauri
+/// embeds the whole config in the release binary. The release notes disclose
+/// this rather than leaving it for a reader to find in a strings dump, and
+/// this audit pins the two properties that make it inert: it is a loopback
+/// address, so it is not a remote endpoint, and the release loads its front
+/// end from `frontendDist` instead.
+///
+/// If `devUrl` ever becomes a non-loopback address, this fails.
+#[test]
+fn the_embedded_development_url_is_loopback_and_unused_in_release() {
+    let config = std::fs::read_to_string(manifest_dir().join("tauri.conf.json"))
+        .expect("tauri.conf.json is readable");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&config).expect("tauri.conf.json is valid JSON");
+
+    let dev_url = parsed["build"]["devUrl"]
+        .as_str()
+        .expect("the build declares a devUrl");
+    let host = dev_url
+        .trim_start_matches("http://")
+        .trim_start_matches("https://")
+        .split(['/', ':'])
+        .next()
+        .unwrap_or_default();
+    assert!(
+        matches!(host, "127.0.0.1" | "localhost" | "[::1]"),
+        "devUrl must be loopback so the string embedded in the release binary \
+         cannot name a remote host, but is `{dev_url}`"
+    );
+
+    assert!(
+        parsed["build"]["frontendDist"].as_str().is_some(),
+        "the release must load its front end from frontendDist, not devUrl"
+    );
 }
