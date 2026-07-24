@@ -20,9 +20,10 @@ export function useCloudDiscovery(activeWorkspace: ThinkingWorkspace | undefined
   const latestRequest = useRef(0)
 
   const refreshKeyPresence = useCallback(async () => {
-    const present = await thinkingWorkspace.cloudApiKeyPresent()
+    if (!activeWorkspace) return
+    const present = await thinkingWorkspace.cloudApiKeyPresent(activeWorkspace.cloudProvider ?? "ollama")
     setKeyPresent(present)
-  }, [])
+  }, [activeWorkspace])
 
   const refresh = useCallback(async () => {
     if (!activeWorkspace) return
@@ -49,7 +50,7 @@ export function useCloudDiscovery(activeWorkspace: ThinkingWorkspace | undefined
     } else {
       setState({ kind: "idle" })
     }
-  }, [activeWorkspace?.id, activeWorkspace?.assistancePolicy, activeWorkspace?.cloudConsentAt, refresh, refreshKeyPresence])
+  }, [activeWorkspace?.id, activeWorkspace?.assistancePolicy, activeWorkspace?.cloudConsentAt, activeWorkspace?.cloudProvider, refresh, refreshKeyPresence])
 
   const filteredModels = useMemo(() => {
     if (state.kind !== "ready") return []

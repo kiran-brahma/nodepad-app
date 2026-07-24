@@ -258,11 +258,11 @@ fn an_unsupported_schema_version_is_rejected() {
         let connection = open_database(&db);
         seed(&connection);
         write_note(&connection, "n1", "first");
-        // Pretend a future Nodepad already ran migration 10, so the backup's
+        // Pretend a future Nodepad already ran migration 11, so the backup's
         // schema version is newer than this build can migrate.
         connection
             .execute(
-                "INSERT INTO schema_migrations (version, applied_at) VALUES (10, 'future')",
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (11, 'future')",
                 [],
             )
             .unwrap();
@@ -274,7 +274,7 @@ fn an_unsupported_schema_version_is_rejected() {
             "0.1.0",
         )
         .unwrap();
-        assert_eq!(manifest.schema_version, 10);
+        assert_eq!(manifest.schema_version, 11);
         connection.close().unwrap();
     }
     assert_eq!(

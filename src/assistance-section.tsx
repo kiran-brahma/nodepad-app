@@ -1,10 +1,12 @@
 import type {
   AssistancePolicy,
+  CloudProvider,
   DiscoveryState,
   ThinkingWorkspace,
 } from "./workspace-client"
 import { CloudConsentDialog } from "./cloud-consent-dialog"
 import { CloudKeySection } from "./cloud-key-section"
+import { CLOUD_PROVIDER_LABELS } from "./cloud-provider"
 
 const POLICY_LABELS: Record<AssistancePolicy, string> = {
   manual: "Manual",
@@ -30,6 +32,7 @@ export function AssistanceSection({
   cloudKeyPresent,
   selectedMissing,
   onPolicyChange,
+  onCloudProviderChange,
   onLocalQueryChange,
   onLocalRefresh,
   onCloudQueryChange,
@@ -49,6 +52,7 @@ export function AssistanceSection({
   cloudKeyPresent: boolean
   selectedMissing: boolean
   onPolicyChange: (policy: AssistancePolicy) => void
+  onCloudProviderChange: (provider: CloudProvider) => void
   onLocalQueryChange: (query: string) => void
   onLocalRefresh: () => void
   onCloudQueryChange: (query: string) => void
@@ -62,6 +66,7 @@ export function AssistanceSection({
 
   const policy = activeWorkspace.assistancePolicy
   const consented = activeWorkspace.cloudConsentAt !== null
+  const cloudProvider = activeWorkspace.cloudProvider ?? "ollama"
 
   return (
     <section aria-label="AI Assistance">
@@ -141,6 +146,19 @@ export function AssistanceSection({
 
       {policy === "cloud_ai" && (
         <div className="cloud-ai">
+          <label>
+            Cloud provider
+            <select
+              aria-label="Cloud provider"
+              value={cloudProvider}
+              onChange={(event) => onCloudProviderChange(event.target.value as CloudProvider)}
+            >
+              <option value="ollama">Ollama Cloud</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="openai">OpenAI</option>
+              <option value="zai">Z.ai</option>
+            </select>
+          </label>
           {!consented && (
             <div>
               <p>This Workspace has not consented to Cloud AI yet.</p>
@@ -150,10 +168,14 @@ export function AssistanceSection({
 
           {consented && (
             <>
-              <CloudKeySection keyPresent={cloudKeyPresent} onChange={onCloudKeyChange} />
+              <CloudKeySection
+                keyPresent={cloudKeyPresent}
+                provider={cloudProvider}
+                onChange={onCloudKeyChange}
+              />
 
               {!cloudKeyPresent && (
-                <p>Add your Ollama Cloud key to discover cloud-hosted models.</p>
+                <p>Add your {CLOUD_PROVIDER_LABELS[cloudProvider]} key to discover cloud-hosted models.</p>
               )}
 
               {cloudKeyPresent && (

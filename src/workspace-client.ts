@@ -105,6 +105,7 @@ export interface PendingSynthesis {
 
 /** The per-Workspace choice that governs AI assistance. */
 export type AssistancePolicy = "manual" | "local_ai" | "cloud_ai"
+export type CloudProvider = "ollama" | "openrouter" | "openai" | "zai"
 
 export interface ThinkingWorkspace {
   id: string
@@ -119,6 +120,7 @@ export interface ThinkingWorkspace {
    * bearer key itself is never in this record.
    */
   cloudConsentAt: string | null
+  cloudProvider?: CloudProvider
   createdAt: string
   updatedAt: string
 }
@@ -318,6 +320,8 @@ export const thinkingWorkspace = {
   /** Changes the Assistance Policy of the active Thinking Workspace. */
   setAssistancePolicy: (workspaceId: string, policy: AssistancePolicy) =>
     invoke<WorkspaceOutcome>("set_assistance_policy", { workspaceId, policy }),
+  setCloudProvider: (workspaceId: string, provider: CloudProvider) =>
+    invoke<WorkspaceOutcome>("set_cloud_provider", { workspaceId, provider }),
   /**
    * Records the opaque model identifier chosen for the active Thinking
    * Workspace. Passing `null` clears the selection.
@@ -337,12 +341,14 @@ export const thinkingWorkspace = {
    * Saves the bearer key to the macOS keychain. The key is read on demand
    * for cloud discovery; this command does not echo it back.
    */
-  setCloudApiKey: (apiKey: string) =>
-    invoke<CloudSecretOutcome>("set_cloud_api_key", { apiKey }),
+  setCloudApiKey: (provider: CloudProvider, apiKey: string) =>
+    invoke<CloudSecretOutcome>("set_cloud_api_key", { provider, apiKey }),
   /** Removes the bearer key from the macOS keychain. */
-  deleteCloudApiKey: () => invoke<CloudSecretOutcome>("delete_cloud_api_key"),
+  deleteCloudApiKey: (provider: CloudProvider) =>
+    invoke<CloudSecretOutcome>("delete_cloud_api_key", { provider }),
   /** Whether a key is currently in the keychain. */
-  cloudApiKeyPresent: () => invoke<boolean>("cloud_api_key_present"),
+  cloudApiKeyPresent: (provider: CloudProvider) =>
+    invoke<boolean>("cloud_api_key_present", { provider }),
   /** Discovers models from the fixed Ollama Cloud host. */
   discoverCloudModels: (workspaceId: string) =>
     invoke<DiscoveryOutcome>("discover_cloud_models", { workspaceId }),

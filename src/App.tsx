@@ -26,6 +26,7 @@ import { SearchSection } from "./search-section"
 import { CommittedNotesSection } from "./committed-notes-section"
 import { StorageRecovery } from "./storage-recovery"
 import { AssistanceSection, CloudConsentDialog } from "./assistance-section"
+import { IntroVideo } from "./intro-video"
 import { useLocalDiscovery } from "./use-local-discovery"
 import { useEnrichmentController } from "./enrichment-controller"
 import { useSynthesisController } from "./synthesis-controller"
@@ -55,7 +56,7 @@ export function App() {
   // The Cloud AI disclosure. Visible only while the active Workspace has not
   // given consent and the thinker has asked to use Cloud AI. Recording
   // consent is what flips the policy to cloud_ai; nothing else does.
-  const [consentDialog, setConsentDialog] = useState<{ workspaceId: string; workspaceName: string } | null>(null)
+  const [consentDialog, setConsentDialog] = useState<{ workspaceId: string; workspaceName: string; provider: import("./workspace-client").CloudProvider } | null>(null)
   // Command-K opens the palette; it owns no business rule, only an open flag.
   const [paletteOpen, setPaletteOpen] = useState(false)
 
@@ -241,7 +242,7 @@ export function App() {
   function setAssistancePolicy(policy: AssistancePolicy) {
     if (!activeWorkspace) return
     if (policy === "cloud_ai" && activeWorkspace.cloudConsentAt === null) {
-      setConsentDialog({ workspaceId: activeWorkspace.id, workspaceName: activeWorkspace.name })
+      setConsentDialog({ workspaceId: activeWorkspace.id, workspaceName: activeWorkspace.name, provider: activeWorkspace.cloudProvider ?? "ollama" })
       return
     }
     void submit(thinkingWorkspace.setAssistancePolicy(activeWorkspace.id, policy))
@@ -250,6 +251,11 @@ export function App() {
   function selectModel(modelId: string) {
     if (!activeWorkspace) return
     void submit(thinkingWorkspace.selectModel(activeWorkspace.id, modelId))
+  }
+
+  function setCloudProvider(provider: import("./workspace-client").CloudProvider) {
+    if (!activeWorkspace) return
+    void submit(thinkingWorkspace.setCloudProvider(activeWorkspace.id, provider))
   }
 
   function handleConsentAccepted(outcome: WorkspaceOutcome) {
@@ -312,6 +318,8 @@ export function App() {
         <p>Capture one atomic thought at a time. Every change is committed locally before it appears here.</p>
       </header>
 
+      <IntroVideo />
+
       {failure && <aside role="alert">{failure.message} <button onClick={dismissFailure}>Dismiss</button></aside>}
 
       <WorkspaceSection
@@ -356,6 +364,7 @@ export function App() {
           localDiscovery.selectedMissing || cloudDiscovery.selectedMissing
         }
         onPolicyChange={setAssistancePolicy}
+        onCloudProviderChange={setCloudProvider}
         onLocalQueryChange={localDiscovery.setQuery}
         onLocalRefresh={localDiscovery.refresh}
         onCloudQueryChange={cloudDiscovery.setQuery}
@@ -363,7 +372,7 @@ export function App() {
         onCloudKeyChange={cloudDiscovery.refreshKeyPresence}
         onRequestCloudConsent={() =>
           activeWorkspace &&
-          setConsentDialog({ workspaceId: activeWorkspace.id, workspaceName: activeWorkspace.name })
+          setConsentDialog({ workspaceId: activeWorkspace.id, workspaceName: activeWorkspace.name, provider: activeWorkspace.cloudProvider ?? "ollama" })
         }
         onRevokeCloudConsent={revokeCloudConsent}
         onSelectModel={selectModel}
@@ -414,6 +423,7 @@ export function App() {
         <CloudConsentDialog
           workspaceId={consentDialog.workspaceId}
           workspaceName={consentDialog.workspaceName}
+          provider={consentDialog.provider}
           onAccepted={handleConsentAccepted}
           onClose={() => setConsentDialog(null)}
         />

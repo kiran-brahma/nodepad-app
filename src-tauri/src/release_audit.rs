@@ -36,6 +36,26 @@ const ALLOWED_OUTBOUND_HOSTS: &[(&str, &str)] = &[
         "https://ollama.com",
         "Ollama Cloud, contacted only after per-Workspace consent and only with a keychain key",
     ),
+    (
+        "https://openrouter.ai",
+        "OpenRouter, only after per-Workspace consent and a keychain key",
+    ),
+    (
+        "https://api.openai.com",
+        "OpenAI, only after per-Workspace consent and a keychain key",
+    ),
+    (
+        "https://api.z.ai",
+        "Z.ai, only after per-Workspace consent and a keychain key",
+    ),
+    (
+        "https://www.youtube-nocookie.com",
+        "the reviewed embedded introduction video frame",
+    ),
+    (
+        "https://nodepad.space",
+        "the OpenRouter attribution header; never a request destination",
+    ),
 ];
 
 /// Markers for the categories of traffic the release forbids outright. Each is
@@ -50,10 +70,7 @@ const FORBIDDEN_MARKERS: &[(&str, &str)] = &[
     ("posthog", "analytics"),
     ("tauri-plugin-updater", "a background update check"),
     ("updater.json", "a background update check"),
-    ("api.openai.com", "a non-Ollama provider"),
-    ("openrouter.ai", "a non-Ollama provider"),
     ("api.anthropic.com", "a non-Ollama provider"),
-    ("api.z.ai", "a non-Ollama provider"),
 ];
 
 /// Origins that appear in the shipped source as *test input* — the addresses a
@@ -311,7 +328,7 @@ fn the_webview_makes_no_network_call_of_its_own() {
 /// The content security policy is the backstop: even if a Note's Markdown were
 /// to render a remote reference, the webview may not load it.
 #[test]
-fn the_webview_content_security_policy_denies_every_remote_origin() {
+fn the_webview_content_security_policy_allows_only_the_reviewed_video_frame_origin() {
     let config = std::fs::read_to_string(manifest_dir().join("tauri.conf.json"))
         .expect("tauri.conf.json is readable");
     let parsed: serde_json::Value =
@@ -324,12 +341,9 @@ fn the_webview_content_security_policy_denies_every_remote_origin() {
         csp.contains("default-src 'self'"),
         "the policy must default to same-origin, but is: {csp}"
     );
-    for scheme in ["http://", "https://", "*"] {
-        assert!(
-            !csp.contains(scheme),
-            "the policy admits a remote origin via `{scheme}`: {csp}"
-        );
-    }
+    assert!(csp.contains("frame-src https://www.youtube-nocookie.com"));
+    assert!(!csp.contains("frame-src *"));
+    assert!(!csp.contains("connect-src"));
 }
 
 /// The app registers exactly the plugins the release accounts for. A plugin is
@@ -636,7 +650,7 @@ mod sentinel {
             .enable_all()
             .build()
             .unwrap()
-            .block_on(provider.discover_models());
+            .block_on(provider.discover_models(crate::workspace::CloudProvider::Ollama));
 
         // The secret is genuinely in flight: the provider read it from the
         // keychain and handed it to the request. Without this, every

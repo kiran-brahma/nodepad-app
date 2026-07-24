@@ -43,3 +43,8 @@ _Avoid_: AI mode, autopilot
 **Assistance Policy**:
 The per-Workspace choice that determines whether organization is manual, uses local AI, or may send a bounded set of relevant Notes to cloud AI after explicit consent.
 _Avoid_: Global AI setting, silent cloud processing
+
+**Cloud Provider**:
+The named external AI service a Thinking Workspace may use under its Cloud AI
+policy after explicit consent. Its credential is held separately in the macOS
+keychain.

@@ -14,7 +14,10 @@ mod workspace;
 
 use external_link::open_external_link;
 
-use cloud::{CloudOllamaProvider, CloudTagsClient, HttpCloudTagsClient, OLLAMA_CLOUD_BASE_URL};
+use cloud::{
+    provider_base_url, provider_for_base_url, provider_keychain_account, CloudOllamaProvider,
+    CloudTagsClient, HttpCloudTagsClient, OLLAMA_CLOUD_BASE_URL,
+};
 use enrichment::{
     EnrichmentClient, EnrichmentFailureCode, EnrichmentOutcome, EnrichmentRequest,
     HttpEnrichmentClient, ParsedEnrichmentResult, RequestToken,
@@ -33,9 +36,10 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use url_metadata::{HttpUrlMetadataClient, UrlMetadataClient};
 use workspace::{
-    unavailable_search_outcome, AssistancePolicy, OpenBackupContext, StorageOpenFailure,
-    StorageOpenFailureCategory, ThinkingWorkspaceInterface, WorkspaceCommandResult,
-    WorkspaceFailureCode, WorkspaceSearchOutcome, WorkspaceSnapshot, WorkspaceStore,
+    unavailable_search_outcome, AssistancePolicy, CloudProvider, OpenBackupContext,
+    StorageOpenFailure, StorageOpenFailureCategory, ThinkingWorkspaceInterface,
+    WorkspaceCommandResult, WorkspaceFailureCode, WorkspaceSearchOutcome, WorkspaceSnapshot,
+    WorkspaceStore,
 };
 
 /// Storage may be unavailable at startup; the app stays running so the thinker
@@ -497,16 +501,26 @@ fn set_cloud_consent(
     state.dispatch(|store| store.set_cloud_consent_outcome(&workspace_id, accept))
 }
 
+#[tauri::command]
+fn set_cloud_provider(
+    workspace_id: String,
+    provider: CloudProvider,
+    state: State<'_, AppState>,
+) -> WorkspaceCommandResult {
+    state.dispatch(|store| store.set_cloud_provider_outcome(&workspace_id, provider))
+}
+
 /// Saves the bearer key to the macOS keychain. The key never leaves the
 /// keychain after this call; only its presence is read back.
 #[tauri::command]
 fn set_cloud_api_key(
+    provider: CloudProvider,
     api_key: String,
     state: State<'_, AppState>,
 ) -> Result<CloudSecretOutcome, String> {
     Ok(secret_outcome(state.keychain.write(
         OLLAMA_CLOUD_KEYCHAIN_SERVICE,
-        OLLAMA_CLOUD_KEYCHAIN_ACCOUNT,
+        provider_keychain_account(provider),
         &api_key,
     )))
 }
@@ -515,18 +529,21 @@ fn set_cloud_api_key(
 /// surface the absence through the typed discovery failure the next time
 /// they try to discover cloud models.
 #[tauri::command]
-fn delete_cloud_api_key(state: State<'_, AppState>) -> Result<CloudSecretOutcome, String> {
+fn delete_cloud_api_key(
+    provider: CloudProvider,
+    state: State<'_, AppState>,
+) -> Result<CloudSecretOutcome, String> {
     Ok(secret_outcome(state.keychain.delete(
         OLLAMA_CLOUD_KEYCHAIN_SERVICE,
-        OLLAMA_CLOUD_KEYCHAIN_ACCOUNT,
+        provider_keychain_account(provider),
     )))
 }
 
 /// Whether a key is currently in the keychain. The key itself is never
 /// returned over this seam; only a presence flag.
 #[tauri::command]
-fn cloud_api_key_present(state: State<'_, AppState>) -> bool {
-    state.cloud.has_key()
+fn cloud_api_key_present(provider: CloudProvider, state: State<'_, AppState>) -> bool {
+    state.cloud.has_key(provider)
 }
 
 /// Discovers models from the fixed Ollama Cloud host. The call requires both
@@ -546,7 +563,7 @@ async fn discover_cloud_models(
             .cloned(),
         _ => None,
     };
-    if let Some(workspace) = workspace {
+    let provider = if let Some(workspace) = workspace {
         if workspace.cloud_consent_at().is_none() {
             return Ok(DiscoveryOutcome::Failed {
                 failure: ollama::DiscoveryFailure {
@@ -555,6 +572,7 @@ async fn discover_cloud_models(
                 },
             });
         }
+        workspace.cloud_provider()
     } else {
         return Ok(DiscoveryOutcome::Failed {
             failure: ollama::DiscoveryFailure {
@@ -562,8 +580,8 @@ async fn discover_cloud_models(
                 message: "The active Thinking Workspace could not be found.".into(),
             },
         });
-    }
-    let outcome = state.cloud.discover_models().await;
+    };
+    let outcome = state.cloud.discover_models(provider).await;
     Ok(DiscoveryOutcome::from(outcome))
 }
 
@@ -692,11 +710,14 @@ async fn enrich_note(
                         snapshot,
                     });
                 }
-                match state
-                    .keychain
-                    .read(OLLAMA_CLOUD_KEYCHAIN_SERVICE, OLLAMA_CLOUD_KEYCHAIN_ACCOUNT)
-                {
-                    KeychainOutcome::Ok(value) => (OLLAMA_CLOUD_BASE_URL.to_owned(), Some(value)),
+                match state.keychain.read(
+                    OLLAMA_CLOUD_KEYCHAIN_SERVICE,
+                    provider_keychain_account(workspace.cloud_provider()),
+                ) {
+                    KeychainOutcome::Ok(value) => (
+                        provider_base_url(workspace.cloud_provider()).to_owned(),
+                        Some(value),
+                    ),
                     KeychainOutcome::Failed { failure } => {
                         return Ok(EnrichmentCommandOutcome::Unavailable {
                             reason: failure.message,
@@ -769,10 +790,12 @@ async fn enrich_note(
                 )
                 .await
         }
-        OLLAMA_CLOUD_BASE_URL => {
-            let key = state
-                .keychain
-                .read(OLLAMA_CLOUD_KEYCHAIN_SERVICE, OLLAMA_CLOUD_KEYCHAIN_ACCOUNT);
+        endpoint if provider_for_base_url(endpoint).is_some() => {
+            let provider = provider_for_base_url(endpoint).expect("checked above");
+            let key = state.keychain.read(
+                OLLAMA_CLOUD_KEYCHAIN_SERVICE,
+                provider_keychain_account(provider),
+            );
             let key = match key {
                 KeychainOutcome::Ok(value) => value,
                 KeychainOutcome::Failed { failure } => {
@@ -783,16 +806,29 @@ async fn enrich_note(
                     });
                 }
             };
-            let outcome = state
-                .cloud_enrichment
-                .chat(
-                    &request.token.endpoint,
-                    &request.token.model,
-                    enrichment::SYSTEM_PROMPT,
-                    &user_message,
-                    &format,
-                )
-                .await;
+            let outcome = if provider == CloudProvider::Ollama {
+                HttpEnrichmentClient::new(state.cloud_enrichment.client.clone(), Some(key.clone()))
+                    .chat(
+                        &request.token.endpoint,
+                        &request.token.model,
+                        enrichment::SYSTEM_PROMPT,
+                        &user_message,
+                        &format,
+                    )
+                    .await
+            } else {
+                state
+                    .cloud_enrichment
+                    .chat_compatible(
+                        &request.token.endpoint,
+                        &key,
+                        &request.token.model,
+                        enrichment::SYSTEM_PROMPT,
+                        &user_message,
+                        &format,
+                    )
+                    .await
+            };
             drop(key);
             outcome
         }
@@ -1584,6 +1620,7 @@ pub fn run() {
             export_workspace_archive,
             import_workspace_archive,
             set_assistance_policy,
+            set_cloud_provider,
             set_cloud_consent,
             select_model,
             discover_local_models,
