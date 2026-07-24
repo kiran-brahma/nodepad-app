@@ -67,6 +67,50 @@ main { max-width: 760px; margin: 0 auto; padding: 4rem 1.5rem; }
   padding: 0.75rem 1.5rem;
 }
 
+/* Persistent capture bar: a single-line-growing textarea pinned to the
+   footer. Enter commits, Shift+Enter inserts a newline, Escape blurs. */
+.capture-bar { display: flex; gap: 0; width: 100%; }
+.capture-bar-input {
+  border: 1px solid #cdbfb0;
+  border-radius: 8px;
+  font: inherit;
+  padding: 0.65rem 0.85rem;
+  width: 100%;
+  resize: none;
+  overflow-y: auto;
+  min-height: 2.6rem;
+  max-height: 160px;
+  line-height: 1.5;
+  background: #fffdf8;
+  color: #29201d;
+}
+.capture-bar-input:disabled {
+  background: #f1e8dc;
+  color: #6f625a;
+  cursor: not-allowed;
+}
+.capture-bar-input::placeholder {
+  color: #9a8f84;
+}
+.capture-bar-input:disabled::placeholder {
+  color: #6f625a;
+}
+
+/* Empty workspace prompt shown when the active Workspace has zero Notes. */
+.empty-workspace {
+  text-align: center;
+  padding: 3rem 1rem;
+  color: #5d4f47;
+}
+.empty-workspace h2 {
+  font-weight: 500;
+  margin: 0 0 0.5rem;
+}
+.empty-workspace p {
+  margin: 0;
+  font-size: 0.95em;
+}
+
 /* Narrow windows: rail collapses to a narrower width so the main pane
    keeps enough space for Notes. Below 640px the rail becomes icon-like. */
 @media (max-width: 640px) {

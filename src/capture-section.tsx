@@ -18,22 +18,20 @@ function EscapeForm({
 }
 
 /**
- * The active Thinking Workspace's own controls — rename, delete, and the one
- * form that captures an atomic Note into it.
+ * The active Thinking Workspace's admin controls — rename, delete, export,
+ * and import. Rendered in the top bar of the main pane. The note capture
+ * form has moved to the persistent CaptureBar in the footer.
  */
 export function CaptureSection({
   activeWorkspace,
   renameDraft,
   pendingDelete,
-  noteMarkdown,
   onStartRename,
   onRenameDraftChange,
   onRename,
   onCancelRename,
   onRequestDelete,
   onAnswerDelete,
-  onNoteMarkdownChange,
-  onCreateNote,
   onExport,
   onExportArchive,
   onImportArchive,
@@ -41,15 +39,12 @@ export function CaptureSection({
   activeWorkspace: ThinkingWorkspace | undefined
   renameDraft: { id: string; name: string } | null
   pendingDelete: PendingDelete
-  noteMarkdown: string
   onStartRename: (workspace: ThinkingWorkspace) => void
   onRenameDraftChange: (name: string) => void
   onRename: (event: FormEvent) => void
   onCancelRename: () => void
   onRequestDelete: (workspace: ThinkingWorkspace) => void
   onAnswerDelete: (answer: "confirm" | "cancel") => void
-  onNoteMarkdownChange: (markdown: string) => void
-  onCreateNote: (event: FormEvent) => void
   onExport: () => void
   onExportArchive: () => void
   onImportArchive: () => void
@@ -96,12 +91,6 @@ export function CaptureSection({
           </div>
         </div>
       )}
-
-      <form onSubmit={onCreateNote}>
-        <label htmlFor="note">New Note</label>
-        <textarea id="note" value={noteMarkdown} onChange={(event) => onNoteMarkdownChange(event.target.value)} placeholder="Write an atomic Markdown Note…" rows={5} />
-        <button type="submit" disabled={!activeWorkspace}>Commit Note</button>
-      </form>
     </section>
   )
 }

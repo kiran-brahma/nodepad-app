@@ -70,7 +70,14 @@ export function CommittedNotesSection({
       {view === "graph" ? (
         <GraphView graph={graph} focus={focus} card={card} pendingSyntheses={pendingSyntheses} />
       ) : notes.length === 0 ? (
-        <p>{searching ? "No Notes match this search." : "No Notes yet."}</p>
+        searching ? (
+          <p>No Notes match this search.</p>
+        ) : (
+          <div className="empty-workspace">
+            <h2>Capture your first thought</h2>
+            <p>Type a thought below and press Enter. Nodepad commits it locally before it appears.</p>
+          </div>
+        )
       ) : view === "tiling" ? (
         <TilingView notes={notes} card={card} />
       ) : (

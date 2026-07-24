@@ -379,15 +379,90 @@ beforeEach(() => {
 afterEach(cleanup)
 
 async function captureNote(user: ReturnType<typeof userEvent.setup>, markdown: string) {
-  await user.click(screen.getByLabelText("New Note"))
+  const bar = screen.getByLabelText("New Note")
+  await user.click(bar)
   await user.paste(markdown)
-  await user.click(screen.getByRole("button", { name: "Commit Note" }))
+  await user.keyboard("{Enter}")
   await screen.findAllByRole("article")
 }
 
 function noteCards() {
   return screen.getAllByRole("article")
 }
+
+describe("persistent capture bar", () => {
+  it("commits a Note on Enter and clears the draft", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    const bar = screen.getByLabelText("New Note")
+    await user.click(bar)
+    await user.keyboard("A captured thought{Enter}")
+
+    expect(await screen.findByText("A captured thought")).toBeDefined()
+    expect((bar as HTMLTextAreaElement).value).toBe("")
+  })
+
+  it("inserts a newline on Shift+Enter and does not commit", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    const bar = screen.getByLabelText("New Note") as HTMLTextAreaElement
+    await user.click(bar)
+    await user.keyboard("Line one{Shift>}{Enter}{/Shift}Line two")
+
+    // The textarea holds the multi-line text; no Note is committed.
+    expect(bar.value).toContain("Line one")
+    expect(bar.value).toContain("Line two")
+    expect(screen.queryByText("Line one")).toBeNull()
+  })
+
+  it("does nothing on empty Enter", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    const bar = screen.getByLabelText("New Note")
+    await user.click(bar)
+    await user.keyboard("{Enter}")
+
+    // No Note was committed, so the empty state prompt is still visible.
+    expect(await screen.findByText("Capture your first thought")).toBeDefined()
+    expect((bar as HTMLTextAreaElement).value).toBe("")
+  })
+
+  it("shows the first-Note prompt when the Workspace is empty", async () => {
+    render(<App />)
+
+    expect(await screen.findByText("Capture your first thought")).toBeDefined()
+    expect(
+      screen.getByText(
+        "Type a thought below and press Enter. Nodepad commits it locally before it appears.",
+      ),
+    ).toBeDefined()
+  })
+
+  it("hides the first-Note prompt when the Workspace has Notes", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await captureNote(user, "A thought")
+
+    expect(screen.queryByText("Capture your first thought")).toBeNull()
+  })
+
+  it("disables the capture bar when there is no active Workspace", async () => {
+    // Set the active Workspace to undefined by clearing the activeWorkspaceId.
+    snapshot = {
+      ...snapshot,
+      activeWorkspaceId: "",
+    }
+    render(<App />)
+
+    const bar = screen.getByLabelText("New Note") as HTMLTextAreaElement
+    expect(bar.disabled).toBe(true)
+    expect(bar.placeholder).toBe("Select a Workspace to capture")
+  })
+})
 
 describe("manual Note controls", () => {
   it("exports the active Thinking Workspace through the native adapter", async () => {
@@ -879,9 +954,9 @@ describe("tiling and kanban over one committed projection", () => {
   it("renders an empty, a one-Note, and a many-Note Workspace safely in both views", async () => {
     const user = userEvent.setup()
     render(<App />)
-    expect(await screen.findByText("No Notes yet.")).toBeDefined()
+    expect(await screen.findByText("Capture your first thought")).toBeDefined()
     await switchTo(user, "Kanban")
-    expect(screen.getByText("No Notes yet.")).toBeDefined()
+    expect(screen.getByText("Capture your first thought")).toBeDefined()
 
     await switchTo(user, "Tiling")
     await captureNote(user, "The only thought")
@@ -1110,10 +1185,14 @@ describe("the graph view and Relationship focus", () => {
     render(<App />)
     await screen.findByRole("button", { name: "Undo" })
     await switchTo(user, "Graph")
+    // The Graph view has its own empty state.
     expect(screen.getByText("No Notes yet.")).toBeDefined()
     expect(screen.queryByRole("group", { name: "Thinking Graph" })).toBeNull()
 
     await switchTo(user, "Tiling")
+    // The Tiling view shows the first-Note prompt.
+    expect(screen.getByText("Capture your first thought")).toBeDefined()
+
     await captureNote(user, "The only thought")
     await switchTo(user, "Graph")
     expect(within(graph()).getAllByRole("button")).toHaveLength(1)
@@ -1587,7 +1666,7 @@ describe("V0-17 macOS keyboard, accessibility, and external links", () => {
     expect(screen.getByText("Original thought")).toBeDefined()
   })
 
-  it("Return submits the single-line search field and inserts a newline in the Note textarea", async () => {
+  it("Return submits the single-line search field and Shift+Enter inserts a newline in the capture bar", async () => {
     const user = userEvent.setup()
     render(<App />)
 
@@ -1597,10 +1676,10 @@ describe("V0-17 macOS keyboard, accessibility, and external links", () => {
     await user.keyboard("{Enter}")
     await screen.findByText(/0 of 0 Notes match this search/)
 
-    // A multi-line Note textarea treats Return as a newline, not a submit.
+    // The capture bar commits on Enter; Shift+Enter inserts a newline.
     const noteTextarea = screen.getByLabelText("New Note") as HTMLTextAreaElement
     await user.type(noteTextarea, "first")
-    await user.keyboard("{Enter}")
+    await user.keyboard("{Shift>}{Enter}{/Shift}")
     await user.type(noteTextarea, "second")
     expect(noteTextarea.value).toBe("first\nsecond")
     expect(screen.queryAllByRole("article")).toHaveLength(0)
