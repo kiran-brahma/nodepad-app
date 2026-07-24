@@ -22,6 +22,7 @@ import { useModalFocus } from "./modal-focus"
 import { CommandPalette, useCommandPaletteShortcut, type PaletteAction } from "./command-palette"
 import { WorkspaceSection } from "./workspace-section"
 import { CaptureSection } from "./capture-section"
+import { CaptureBar } from "./capture-bar"
 import { SearchSection } from "./search-section"
 import { CommittedNotesSection } from "./committed-notes-section"
 import { StorageRecovery } from "./storage-recovery"
@@ -175,6 +176,7 @@ export function App() {
   function createNote(event: FormEvent) {
     event.preventDefault()
     if (!activeWorkspace) return
+    if (noteMarkdown.trim() === "") return
     void submit(thinkingWorkspace.createNote(activeWorkspace.id, noteMarkdown)).then((result) => {
       if (!result.committed || !result.snapshot) return
       setNoteMarkdown("")
@@ -326,6 +328,23 @@ export function App() {
       }
       main={
         <>
+          <CaptureSection
+            activeWorkspace={activeWorkspace}
+            renameDraft={renameDraft}
+            pendingDelete={pendingDelete}
+            onStartRename={(workspace: ThinkingWorkspace) =>
+              setRenameDraft({ id: workspace.id, name: workspace.name })
+            }
+            onRenameDraftChange={(name) => setRenameDraft((draft) => (draft ? { ...draft, name } : draft))}
+            onRename={renameWorkspace}
+            onCancelRename={() => setRenameDraft(null)}
+            onRequestDelete={(workspace) => setPendingDelete(requestDelete(workspace))}
+            onAnswerDelete={answerDeleteConfirmation}
+            onExport={exportWorkspace}
+            onExportArchive={exportWorkspaceArchive}
+            onImportArchive={importWorkspaceArchive}
+          />
+
           <header>
             <p className="eyebrow">Nodepad</p>
             <h1>Thinking Workspace</h1>
@@ -398,24 +417,11 @@ export function App() {
         </>
       }
       footer={
-        <CaptureSection
+        <CaptureBar
           activeWorkspace={activeWorkspace}
-          renameDraft={renameDraft}
-          pendingDelete={pendingDelete}
           noteMarkdown={noteMarkdown}
-          onStartRename={(workspace: ThinkingWorkspace) =>
-            setRenameDraft({ id: workspace.id, name: workspace.name })
-          }
-          onRenameDraftChange={(name) => setRenameDraft((draft) => (draft ? { ...draft, name } : draft))}
-          onRename={renameWorkspace}
-          onCancelRename={() => setRenameDraft(null)}
-          onRequestDelete={(workspace) => setPendingDelete(requestDelete(workspace))}
-          onAnswerDelete={answerDeleteConfirmation}
           onNoteMarkdownChange={setNoteMarkdown}
           onCreateNote={createNote}
-          onExport={exportWorkspace}
-          onExportArchive={exportWorkspaceArchive}
-          onImportArchive={importWorkspaceArchive}
         />
       }
     />
