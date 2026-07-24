@@ -1662,3 +1662,44 @@ describe("V0-17 macOS keyboard, accessibility, and external links", () => {
     }
   })
 })
+
+describe("three-pane app shell", () => {
+  it("renders three regions: rail, main content, and footer capture bar", async () => {
+    render(<App />)
+
+    // The rail is a navigation region labelled Workspaces.
+    expect(await screen.findByRole("navigation", { name: "Workspaces" })).toBeDefined()
+
+    // The main content area contains the committed Notes section.
+    expect(await screen.findByRole("region", { name: "Committed Notes" })).toBeDefined()
+
+    // The footer capture bar contains the capture form.
+    expect(await screen.findByRole("textbox", { name: "New Note" })).toBeDefined()
+  })
+
+  it("places the Workspace list in the rail and Notes in the main pane", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    // The rail contains the workspace buttons.
+    const rail = await screen.findByRole("navigation", { name: "Workspaces" })
+    expect(rail.textContent).toContain("Research")
+    expect(rail.textContent).toContain("Reading")
+
+    // Capture a Note and verify it appears in the main pane, not the rail.
+    await captureNote(user, "A thought in the main pane")
+    const mainContent = screen.getByRole("region", { name: "Committed Notes" })
+    expect(mainContent.textContent).toContain("A thought in the main pane")
+    expect(rail.textContent).not.toContain("A thought in the main pane")
+  })
+
+  it("places the capture form in the footer, separate from the rail", async () => {
+    render(<App />)
+
+    const rail = screen.getByRole("navigation", { name: "Workspaces" })
+    const captureInput = screen.getByRole("textbox", { name: "New Note" })
+
+    // The capture input is not inside the rail.
+    expect(rail.contains(captureInput)).toBe(false)
+  })
+})
