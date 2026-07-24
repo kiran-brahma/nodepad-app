@@ -1,6 +1,7 @@
 import { FormEvent, useState } from "react"
 
-import { thinkingWorkspace, type CloudSecretOutcome } from "./workspace-client"
+import { thinkingWorkspace, type CloudProvider, type CloudSecretOutcome } from "./workspace-client"
+import { CLOUD_PROVIDER_LABELS } from "./cloud-provider"
 
 /**
  * The Cloud AI key section. The thinker pastes a key here once, Nodepad
@@ -11,9 +12,11 @@ import { thinkingWorkspace, type CloudSecretOutcome } from "./workspace-client"
  */
 export function CloudKeySection({
   keyPresent,
+  provider,
   onChange,
 }: {
   keyPresent: boolean
+  provider: CloudProvider
   onChange: () => void
 }) {
   const [editing, setEditing] = useState(!keyPresent)
@@ -24,12 +27,12 @@ export function CloudKeySection({
   async function saveKey(event: FormEvent) {
     event.preventDefault()
     if (draft.trim() === "") {
-      setFailure("The Ollama Cloud key may not be blank.")
+      setFailure("The cloud provider key may not be blank.")
       return
     }
     setSubmitting(true)
     setFailure(null)
-    const outcome: CloudSecretOutcome = await thinkingWorkspace.setCloudApiKey(draft)
+    const outcome: CloudSecretOutcome = await thinkingWorkspace.setCloudApiKey(provider, draft)
     // Drop the value from React state as soon as the call resolves.
     setDraft("")
     setSubmitting(false)
@@ -44,7 +47,7 @@ export function CloudKeySection({
   async function deleteKey() {
     setSubmitting(true)
     setFailure(null)
-    const outcome = await thinkingWorkspace.deleteCloudApiKey()
+    const outcome = await thinkingWorkspace.deleteCloudApiKey(provider)
     setSubmitting(false)
     if (outcome.status === "failed") {
       setFailure(outcome.failure.message)
@@ -73,13 +76,13 @@ export function CloudKeySection({
 
   return (
     <form className="cloud-key" onSubmit={saveKey}>
-      <label htmlFor="cloud-api-key">Ollama Cloud key</label>
+      <label htmlFor="cloud-api-key">{CLOUD_PROVIDER_LABELS[provider]} key</label>
       <input
         id="cloud-api-key"
         type="password"
         autoComplete="off"
         spellCheck={false}
-        placeholder="Paste your Ollama Cloud key"
+        placeholder="Paste your provider key"
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
         disabled={submitting}

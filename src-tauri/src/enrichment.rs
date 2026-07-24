@@ -21,6 +21,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::cloud::OPENROUTER_BASE_URL;
 use crate::thinking_graph::RelationshipProvenance;
 use crate::workspace::Note;
 
@@ -644,6 +645,73 @@ pub struct HttpEnrichmentClient {
 impl HttpEnrichmentClient {
     pub fn new(client: reqwest::Client, api_key: Option<String>) -> Self {
         Self { client, api_key }
+    }
+
+    /// OpenAI-compatible cloud providers use `/chat/completions` rather than
+    /// Ollama's `/api/chat`. The key is supplied by the caller for exactly one
+    /// request, so this reusable client never owns a credential.
+    pub async fn chat_compatible(
+        &self,
+        endpoint: &str,
+        api_key: &str,
+        model: &str,
+        system_prompt: &str,
+        user_message: &str,
+        format: &Value,
+    ) -> Result<String, EnrichmentFailureCode> {
+        let url = format!("{endpoint}/chat/completions");
+        let body = serde_json::json!({
+            "model": model,
+            "messages": [
+                { "role": "system", "content": system_prompt },
+                { "role": "user", "content": user_message }
+            ],
+            "response_format": { "type": "json_schema", "json_schema": {
+                "name": "nodepad_enrichment", "strict": true, "schema": format
+            } }
+        });
+        let body_text =
+            serde_json::to_string(&body).map_err(|_| EnrichmentFailureCode::MalformedResponse)?;
+        let mut request = self
+            .client
+            .post(url)
+            .bearer_auth(api_key)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body_text);
+        if endpoint == OPENROUTER_BASE_URL {
+            request = request
+                .header("HTTP-Referer", "https://nodepad.space")
+                .header("X-Title", "nodepad");
+        }
+        let response = request.send().await.map_err(|error| {
+            if error.is_timeout() {
+                EnrichmentFailureCode::Timeout
+            } else {
+                EnrichmentFailureCode::Unavailable
+            }
+        })?;
+        match response.status().as_u16() {
+            401 | 403 => return Err(EnrichmentFailureCode::AuthenticationFailed),
+            404 => return Err(EnrichmentFailureCode::MissingModel),
+            429 => return Err(EnrichmentFailureCode::RateLimited),
+            200..=299 => {}
+            _ => return Err(EnrichmentFailureCode::Unavailable),
+        }
+        let payload_text = response
+            .text()
+            .await
+            .map_err(|_| EnrichmentFailureCode::MalformedResponse)?;
+        let payload: Value = serde_json::from_str(&payload_text)
+            .map_err(|_| EnrichmentFailureCode::MalformedResponse)?;
+        payload
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|choices| choices.first())
+            .and_then(|choice| choice.get("message"))
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or(EnrichmentFailureCode::MalformedResponse)
     }
 }
 

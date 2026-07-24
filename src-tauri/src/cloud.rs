@@ -14,8 +14,51 @@ use serde::Deserialize;
 
 use crate::ollama::{DiscoveryFailure, DiscoveryOutcome};
 use crate::secrets::KeychainAdapter;
+use crate::workspace::CloudProvider;
 
 pub const OLLAMA_CLOUD_BASE_URL: &str = "https://ollama.com";
+
+pub const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
+pub const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+pub const ZAI_BASE_URL: &str = "https://api.z.ai/api/paas/v4";
+
+pub fn provider_base_url(provider: CloudProvider) -> &'static str {
+    match provider {
+        CloudProvider::Ollama => OLLAMA_CLOUD_BASE_URL,
+        CloudProvider::OpenRouter => OPENROUTER_BASE_URL,
+        CloudProvider::OpenAi => OPENAI_BASE_URL,
+        CloudProvider::Zai => ZAI_BASE_URL,
+    }
+}
+
+pub fn provider_for_base_url(base_url: &str) -> Option<CloudProvider> {
+    [
+        CloudProvider::Ollama,
+        CloudProvider::OpenRouter,
+        CloudProvider::OpenAi,
+        CloudProvider::Zai,
+    ]
+    .into_iter()
+    .find(|provider| provider_base_url(*provider) == base_url)
+}
+
+pub fn provider_keychain_account(provider: CloudProvider) -> &'static str {
+    match provider {
+        CloudProvider::Ollama => "ollama-cloud-bearer",
+        CloudProvider::OpenRouter => "openrouter-bearer",
+        CloudProvider::OpenAi => "openai-bearer",
+        CloudProvider::Zai => "zai-bearer",
+    }
+}
+
+pub fn provider_label(provider: CloudProvider) -> &'static str {
+    match provider {
+        CloudProvider::Ollama => "Ollama Cloud",
+        CloudProvider::OpenRouter => "OpenRouter",
+        CloudProvider::OpenAi => "OpenAI",
+        CloudProvider::Zai => "Z.ai",
+    }
+}
 
 /// The full set of failure codes a discovery attempt may surface. Every
 /// kind is distinct so the UI can act differently on each.
@@ -55,6 +98,16 @@ pub struct CloudDiscoveryFailure {
 #[derive(Debug, Deserialize)]
 struct TagsResponse {
     models: Vec<ModelEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompatibleModelsResponse {
+    data: Vec<CompatibleModelEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompatibleModelEntry {
+    id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -109,6 +162,11 @@ impl CloudTagsClient for HttpCloudTagsClient {
         if let Some(token) = authorization {
             request = request.bearer_auth(token);
         }
+        if base_url == OPENROUTER_BASE_URL {
+            request = request
+                .header("HTTP-Referer", "https://nodepad.space")
+                .header("X-Title", "nodepad");
+        }
         let response = match request.send().await {
             Ok(response) => response,
             Err(error) => {
@@ -135,7 +193,6 @@ pub struct CloudOllamaProvider {
     client: Arc<dyn CloudTagsClient>,
     keychain: Arc<dyn KeychainAdapter>,
     service: &'static str,
-    account: &'static str,
 }
 
 impl CloudOllamaProvider {
@@ -143,40 +200,46 @@ impl CloudOllamaProvider {
         client: Arc<dyn CloudTagsClient>,
         keychain: Arc<dyn KeychainAdapter>,
         service: &'static str,
-        account: &'static str,
+        _account: &'static str,
     ) -> Self {
         Self {
             client,
             keychain,
             service,
-            account,
         }
     }
 
     /// Whether the keychain currently holds a key. Used to render the
     /// "Add a key" affordance before the thinker tries to discover models.
-    pub fn has_key(&self) -> bool {
+    pub fn has_key(&self, provider: CloudProvider) -> bool {
         matches!(
-            self.keychain.read(self.service, self.account),
+            self.keychain
+                .read(self.service, provider_keychain_account(provider)),
             crate::secrets::KeychainOutcome::Ok(_)
         )
     }
 
-    pub async fn discover_models(&self) -> CloudDiscoveryOutcome {
-        let key = match self.keychain.read(self.service, self.account) {
+    pub async fn discover_models(&self, provider: CloudProvider) -> CloudDiscoveryOutcome {
+        let key = match self
+            .keychain
+            .read(self.service, provider_keychain_account(provider))
+        {
             crate::secrets::KeychainOutcome::Ok(value) => value,
             crate::secrets::KeychainOutcome::Failed { .. } => {
                 return CloudDiscoveryOutcome::Failed {
                     failure: failure_from_code(
                         CloudDiscoveryFailureCode::Unauthenticated,
-                        "Add your Ollama Cloud key to enable Cloud AI.".to_owned(),
+                        format!(
+                            "Add your {} key to enable Cloud AI.",
+                            provider_label(provider)
+                        ),
                     ),
                 };
             }
         };
         let response = match self
             .client
-            .fetch_tags(OLLAMA_CLOUD_BASE_URL, Some(&key))
+            .fetch_tags(provider_base_url(provider), Some(&key))
             .await
         {
             Ok(response) => response,
@@ -189,7 +252,7 @@ impl CloudOllamaProvider {
         // Drop the key from this scope as soon as the response is in hand.
         drop(key);
         match classify_http_response(response) {
-            Ok(body) => match parse_tags_response(&body) {
+            Ok(body) => match parse_models_response(provider, &body) {
                 Ok(models) => CloudDiscoveryOutcome::Committed { models },
                 Err(code) => CloudDiscoveryOutcome::Failed {
                     failure: failure_from_code(code, default_message(code)),
@@ -200,6 +263,33 @@ impl CloudOllamaProvider {
             },
         }
     }
+}
+
+fn parse_models_response(
+    provider: CloudProvider,
+    body: &str,
+) -> Result<Vec<String>, CloudDiscoveryFailureCode> {
+    if provider == CloudProvider::Ollama {
+        return parse_tags_response(body);
+    }
+    let parsed: CompatibleModelsResponse =
+        serde_json::from_str(body).map_err(|_| CloudDiscoveryFailureCode::MalformedResponse)?;
+    let mut models: Vec<String> = parsed
+        .data
+        .into_iter()
+        .filter_map(|entry| {
+            entry
+                .id
+                .map(|id| id.trim().to_owned())
+                .filter(|id| !id.is_empty())
+        })
+        .collect();
+    models.sort();
+    models.dedup();
+    if models.is_empty() {
+        return Err(CloudDiscoveryFailureCode::EmptyList);
+    }
+    Ok(models)
 }
 
 /// Maps an HTTP response to either a body the parser can read or a typed
@@ -367,7 +457,9 @@ mod tests {
             status: 200,
             body: body.into(),
         })));
-        let outcome = provider_with(keychain, client).discover_models().await;
+        let outcome = provider_with(keychain, client)
+            .discover_models(CloudProvider::Ollama)
+            .await;
         assert_eq!(
             outcome,
             CloudDiscoveryOutcome::Committed {
@@ -382,7 +474,9 @@ mod tests {
         let client = Arc::new(FakeCloudClient::new(Err(
             CloudDiscoveryFailureCode::Unavailable,
         )));
-        let outcome = provider_with(keychain, client).discover_models().await;
+        let outcome = provider_with(keychain, client)
+            .discover_models(CloudProvider::Ollama)
+            .await;
         assert!(
             matches!(outcome, CloudDiscoveryOutcome::Failed { ref failure } if failure.code == CloudDiscoveryFailureCode::Unauthenticated)
         );
@@ -395,7 +489,9 @@ mod tests {
             status: 401,
             body: String::new(),
         })));
-        let outcome = provider_with(keychain, client).discover_models().await;
+        let outcome = provider_with(keychain, client)
+            .discover_models(CloudProvider::Ollama)
+            .await;
         assert!(
             matches!(outcome, CloudDiscoveryOutcome::Failed { ref failure } if failure.code == CloudDiscoveryFailureCode::AuthenticationFailed)
         );
@@ -408,7 +504,9 @@ mod tests {
             status: 429,
             body: String::new(),
         })));
-        let outcome = provider_with(keychain, client).discover_models().await;
+        let outcome = provider_with(keychain, client)
+            .discover_models(CloudProvider::Ollama)
+            .await;
         assert!(
             matches!(outcome, CloudDiscoveryOutcome::Failed { ref failure } if failure.code == CloudDiscoveryFailureCode::RateLimited)
         );
@@ -421,7 +519,9 @@ mod tests {
             status: 503,
             body: String::new(),
         })));
-        let outcome = provider_with(keychain, client).discover_models().await;
+        let outcome = provider_with(keychain, client)
+            .discover_models(CloudProvider::Ollama)
+            .await;
         assert!(
             matches!(outcome, CloudDiscoveryOutcome::Failed { ref failure } if failure.code == CloudDiscoveryFailureCode::Unavailable)
         );
@@ -433,7 +533,9 @@ mod tests {
         let client = Arc::new(FakeCloudClient::new(Err(
             CloudDiscoveryFailureCode::Timeout,
         )));
-        let outcome = provider_with(keychain, client).discover_models().await;
+        let outcome = provider_with(keychain, client)
+            .discover_models(CloudProvider::Ollama)
+            .await;
         assert!(
             matches!(outcome, CloudDiscoveryOutcome::Failed { ref failure } if failure.code == CloudDiscoveryFailureCode::Timeout)
         );
@@ -446,7 +548,9 @@ mod tests {
             status: 200,
             body: "not json".into(),
         })));
-        let outcome = provider_with(keychain, client).discover_models().await;
+        let outcome = provider_with(keychain, client)
+            .discover_models(CloudProvider::Ollama)
+            .await;
         assert!(
             matches!(outcome, CloudDiscoveryOutcome::Failed { ref failure } if failure.code == CloudDiscoveryFailureCode::MalformedResponse)
         );
@@ -459,7 +563,9 @@ mod tests {
             status: 200,
             body: r#"{"models":[]}"#.into(),
         })));
-        let outcome = provider_with(keychain, client).discover_models().await;
+        let outcome = provider_with(keychain, client)
+            .discover_models(CloudProvider::Ollama)
+            .await;
         assert!(
             matches!(outcome, CloudDiscoveryOutcome::Failed { ref failure } if failure.code == CloudDiscoveryFailureCode::EmptyList)
         );
@@ -473,7 +579,9 @@ mod tests {
             status: 200,
             body: body.into(),
         })));
-        let outcome = provider_with(keychain, client).discover_models().await;
+        let outcome = provider_with(keychain, client)
+            .discover_models(CloudProvider::Ollama)
+            .await;
         assert_eq!(
             outcome,
             CloudDiscoveryOutcome::Committed {
@@ -494,7 +602,7 @@ mod tests {
             "svc",
             "acct",
         );
-        assert!(provider.has_key());
+        assert!(provider.has_key(CloudProvider::Ollama));
 
         let fake = FakeKeychain::default();
         let provider = CloudOllamaProvider::new(
@@ -505,7 +613,7 @@ mod tests {
             "svc",
             "acct",
         );
-        assert!(!provider.has_key());
+        assert!(!provider.has_key(CloudProvider::Ollama));
     }
 
     #[test]

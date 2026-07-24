@@ -48,12 +48,14 @@ and external links opened in the default browser.
 
 ## Privacy and network behaviour
 
-Nodepad V0 contacts exactly three kinds of destination, and nothing else:
+Nodepad V0 contacts these destinations, and nothing else:
 
 | Destination | When |
 | --- | --- |
 | `http://localhost:11434` | Only under the Local AI policy — the thinker's own Ollama host |
 | `https://ollama.com` | Only under the Cloud AI policy, and only after explicit per-Workspace consent |
+| `https://openrouter.ai`, `https://api.openai.com`, `https://api.z.ai` | Only under the Cloud AI policy, for the named provider, and only after explicit per-Workspace consent |
+| `https://www.youtube-nocookie.com` | Only as the narrowly scoped, embedded introduction video frame |
 | A URL written in a Note | Only for metadata on an explicit HTTP(S) link, and only after the address resolves to a public host |
 
 Links a thinker clicks are handed to the macOS opener and open in the default
@@ -62,8 +64,9 @@ accepted — `mailto`, `tel`, `file`, `javascript`, and custom app schemes are
 refused.
 
 **Nodepad V0 has no telemetry, no analytics, no crash or error reporting, no
-cloud sync, no account system, and no background update check.** There is no
-non-Ollama AI provider in this build.
+cloud sync, no account system, and no background update check.** Cloud AI may
+use Ollama Cloud, OpenRouter, OpenAI, or Z.ai after the thinker chooses that
+provider and accepts the per-Workspace disclosure.
 
 **Manual mode is fully offline.** With the network disabled and no credential
 in the keychain, every feature above except AI Assistance works normally.
@@ -92,8 +95,8 @@ fails the build when any of them stops being true:
   the Rust dependency list.
 - `the_webview_makes_no_network_call_of_its_own` — the webview reaches the
   network only through a typed Tauri command.
-- `the_webview_content_security_policy_denies_every_remote_origin` — the CSP
-  is `default-src 'self'` with no remote origin admitted.
+- `the_webview_content_security_policy_allows_only_the_reviewed_video_frame_origin` — the CSP
+  remains same-origin by default and admits only the YouTube privacy frame.
 - `only_the_reviewed_tauri_plugins_are_registered` — the file dialog is the
   only registered plugin.
 - `the_built_front_end_carries_no_forbidden_marker_or_unapproved_origin` —

@@ -1,6 +1,7 @@
 import { FormEvent, useState } from "react"
 
-import { thinkingWorkspace, type WorkspaceOutcome } from "./workspace-client"
+import { thinkingWorkspace, type CloudProvider, type WorkspaceOutcome } from "./workspace-client"
+import { CLOUD_PROVIDER_LABELS } from "./cloud-provider"
 import { useEscape, ESCAPE_PRIORITY } from "./escape-stack"
 import { useModalFocus } from "./modal-focus"
 
@@ -17,11 +18,13 @@ import { useModalFocus } from "./modal-focus"
 export function CloudConsentDialog({
   workspaceId,
   workspaceName,
+  provider,
   onAccepted,
   onClose,
 }: {
   workspaceId: string
   workspaceName: string
+  provider: CloudProvider
   onAccepted: (outcome: WorkspaceOutcome) => void
   onClose: () => void
 }) {
@@ -60,11 +63,11 @@ export function CloudConsentDialog({
         aria-modal="true"
         aria-label="Cloud AI disclosure"
       >
-        <h2>Use Ollama Cloud for "{workspaceName}"?</h2>
+        <h2>Use {CLOUD_PROVIDER_LABELS[provider]} for "{workspaceName}"?</h2>
         <p>
           When this Thinking Workspace uses Cloud AI, the active Note and a
           bounded set of relevant Notes may leave your Mac and be sent to
-          Ollama Cloud for inference. The bearer key is held in the macOS
+          {CLOUD_PROVIDER_LABELS[provider]} for inference. The bearer key is held in the macOS
           keychain; Nodepad does not log or store the key anywhere else.
         </p>
         <p>

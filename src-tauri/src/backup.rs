@@ -28,7 +28,7 @@ use uuid::Uuid;
 /// The newest schema version this build of Nodepad understands. A backup
 /// whose manifest names a higher version is rejected before restore so an
 /// older app never silently downgrades data it cannot migrate.
-pub const SUPPORTED_SCHEMA_VERSION: i64 = 9;
+pub const SUPPORTED_SCHEMA_VERSION: i64 = 10;
 
 /// Keep the latest seven valid automatic backups. The cap is enforced on
 /// every automatic backup; older automatic backups beyond seven are deleted.

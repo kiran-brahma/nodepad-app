@@ -11,7 +11,7 @@
   },
   "app": {
     "windows": [{ "title": "Nodepad", "width": 900, "height": 700, "resizable": true }],
-    "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'" }
+    "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-src https://www.youtube-nocookie.com" }
   },
   "bundle": {
     "active": true,

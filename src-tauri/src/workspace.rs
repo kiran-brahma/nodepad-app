@@ -57,6 +57,7 @@ pub struct ThinkingWorkspace {
     /// Workspace may use Ollama Cloud; absence is "not yet asked" or
     /// "asked and declined". The bearer key itself is never stored here.
     pub(crate) cloud_consent_at: Option<String>,
+    pub(crate) cloud_provider: CloudProvider,
     pub(crate) created_at: String,
     pub(crate) updated_at: String,
 }
@@ -72,6 +73,10 @@ impl ThinkingWorkspace {
     /// Cloud. The actual bearer key lives in the macOS keychain, not here.
     pub fn cloud_consent_at(&self) -> Option<&str> {
         self.cloud_consent_at.as_deref()
+    }
+
+    pub fn cloud_provider(&self) -> CloudProvider {
+        self.cloud_provider
     }
 
     /// The Assistance Policy the Workspace is currently using. The Tauri
@@ -97,6 +102,37 @@ pub enum AssistancePolicy {
     Manual,
     LocalAi,
     CloudAi,
+}
+
+/// A cloud destination selected by a Thinking Workspace. It identifies a
+/// provider only; API keys stay in the macOS keychain and models stay opaque.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudProvider {
+    Ollama,
+    OpenRouter,
+    OpenAi,
+    Zai,
+}
+
+impl CloudProvider {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Ollama => "ollama",
+            Self::OpenRouter => "openrouter",
+            Self::OpenAi => "openai",
+            Self::Zai => "zai",
+        }
+    }
+
+    pub(crate) fn from_str(value: &str) -> Self {
+        match value {
+            "openrouter" => Self::OpenRouter,
+            "openai" => Self::OpenAi,
+            "zai" => Self::Zai,
+            _ => Self::Ollama,
+        }
+    }
 }
 
 impl AssistancePolicy {
@@ -1028,6 +1064,12 @@ pub trait ThinkingWorkspaceInterface {
         model_id: Option<&str>,
     ) -> Result<WorkspaceSnapshot, WorkspaceError>;
 
+    fn set_cloud_provider(
+        &mut self,
+        workspace_id: &str,
+        provider: CloudProvider,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError>;
+
     /// Records or clears the Workspace's affirmative consent to use Ollama
     /// Cloud. `accept` true records the moment of first consent; false clears
     /// it. The bearer key is never stored in the database — this row only
@@ -1073,6 +1115,13 @@ pub trait ThinkingWorkspaceInterface {
         model_id: Option<&str>,
     ) -> WorkspaceCommandResult {
         outcome(self.set_selected_model(workspace_id, model_id))
+    }
+    fn set_cloud_provider_outcome(
+        &mut self,
+        workspace_id: &str,
+        provider: CloudProvider,
+    ) -> WorkspaceCommandResult {
+        outcome(self.set_cloud_provider(workspace_id, provider))
     }
     fn set_cloud_consent_outcome(
         &mut self,
@@ -1315,7 +1364,7 @@ impl WorkspaceStore {
             .map_err(WorkspaceError::Storage)?;
         transaction
             .execute(
-                "INSERT INTO thinking_workspaces (id, name, assistance_policy, selected_model, cloud_consent_at, created_at, updated_at) VALUES (?1, ?2, 'manual', NULL, NULL, ?3, ?4)",
+                "INSERT INTO thinking_workspaces (id, name, assistance_policy, selected_model, cloud_consent_at, cloud_provider, created_at, updated_at) VALUES (?1, ?2, 'manual', NULL, NULL, 'ollama', ?3, ?4)",
                 params![
                     workspace_id,
                     name,
@@ -1974,6 +2023,26 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
             .execute(
                 "UPDATE thinking_workspaces SET selected_model = ?2, updated_at = ?3 WHERE id = ?1",
                 params![workspace_id, model_id, timestamp()],
+            )
+            .map_err(WorkspaceError::Storage)?;
+        transaction.commit().map_err(WorkspaceError::Storage)?;
+        self.snapshot()
+    }
+
+    fn set_cloud_provider(
+        &mut self,
+        workspace_id: &str,
+        provider: CloudProvider,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        require_workspace(&read_workspaces(&self.connection)?, workspace_id)?;
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(WorkspaceError::Storage)?;
+        transaction
+            .execute(
+                "UPDATE thinking_workspaces SET cloud_provider = ?2, selected_model = NULL, cloud_consent_at = NULL, updated_at = ?3 WHERE id = ?1",
+                params![workspace_id, provider.as_str(), timestamp()],
             )
             .map_err(WorkspaceError::Storage)?;
         transaction.commit().map_err(WorkspaceError::Storage)?;
@@ -2845,6 +2914,10 @@ fn migrations() -> &'static [(i64, &'static str)] {
             include_str!("../migrations/0008_note_enrichment.sql"),
         ),
         (9_i64, include_str!("../migrations/0009_synthesis.sql")),
+        (
+            10_i64,
+            include_str!("../migrations/0010_cloud_provider.sql"),
+        ),
     ]
 }
 
@@ -2971,7 +3044,7 @@ fn day_of(now: &str) -> String {
 fn read_workspaces(connection: &Connection) -> Result<Vec<ThinkingWorkspace>, WorkspaceError> {
     connection
         .prepare(
-            "SELECT id, name, assistance_policy, selected_model, cloud_consent_at, created_at, updated_at FROM thinking_workspaces ORDER BY created_at",
+            "SELECT id, name, assistance_policy, selected_model, cloud_consent_at, cloud_provider, created_at, updated_at FROM thinking_workspaces ORDER BY created_at",
         )
         .map_err(WorkspaceError::Storage)?
         .query_map([], |row| {
@@ -2981,8 +3054,9 @@ fn read_workspaces(connection: &Connection) -> Result<Vec<ThinkingWorkspace>, Wo
                 assistance_policy: AssistancePolicy::from_str(&row.get::<_, String>(2)?),
                 selected_model: row.get(3)?,
                 cloud_consent_at: row.get(4)?,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
+                cloud_provider: CloudProvider::from_str(&row.get::<_, String>(5)?),
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
             })
         })
         .map_err(WorkspaceError::Storage)?
@@ -3370,6 +3444,7 @@ mod tests {
                 assistance_policy: AssistancePolicy::Manual,
                 selected_model: None,
                 cloud_consent_at: None,
+                cloud_provider: CloudProvider::Ollama,
                 created_at: now.clone(),
                 updated_at: now,
             };
@@ -3402,6 +3477,23 @@ mod tests {
             for workspace in self.workspaces.iter_mut() {
                 if workspace.id == workspace_id {
                     workspace.selected_model = model_id.map(|s| s.to_owned());
+                    workspace.updated_at = timestamp();
+                }
+            }
+            self.snapshot()
+        }
+
+        fn set_cloud_provider(
+            &mut self,
+            workspace_id: &str,
+            provider: CloudProvider,
+        ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+            require_workspace(&self.workspaces, workspace_id)?;
+            for workspace in self.workspaces.iter_mut() {
+                if workspace.id == workspace_id {
+                    workspace.cloud_provider = provider;
+                    workspace.selected_model = None;
+                    workspace.cloud_consent_at = None;
                     workspace.updated_at = timestamp();
                 }
             }
