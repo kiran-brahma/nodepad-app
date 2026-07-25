@@ -1,4 +1,4 @@
-import type { FormEvent } from "react"
+import { useState, type FormEvent, type KeyboardEvent } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import {
@@ -19,6 +19,7 @@ import {
 import { nodeDegree, relatableNotes, relatedNotes, type ThinkingGraph } from "./thinking-graph"
 import { ExternalLink } from "./external-link"
 import { EscapeDismiss } from "./escape-dismiss"
+import { useEscape, ESCAPE_PRIORITY } from "./escape-stack"
 import {
   copyExplanation,
   moveExplanation,
@@ -312,46 +313,6 @@ function NoteRelationships({
   )
 }
 
-function NoteActions({
-  note,
-  drafts,
-  intents,
-}: {
-  note: Note
-  drafts: NoteDrafts
-  intents: NoteIntents
-}) {
-  return (
-    <div className="row">
-      <label htmlFor={`note-type-${note.id}`}>Note Type</label>
-      <select
-        id={`note-type-${note.id}`}
-        value={note.noteType}
-        onChange={(event) => intents.setNoteType(note, event.target.value as NoteType)}
-      >
-        {NOTE_TYPES.map((noteType) => (
-          <option key={noteType} value={noteType}>
-            {noteTypeLabel(noteType)}
-          </option>
-        ))}
-      </select>
-      <button onClick={() => intents.startEdit(note)} disabled={drafts.noteDraft?.id === note.id}>
-        Edit Note
-      </button>
-      <button
-        onClick={() => intents.startAnnotation(note)}
-        disabled={drafts.annotationDraft?.id === note.id}
-      >
-        {note.annotation ? "Edit Annotation" : "Add Annotation"}
-      </button>
-      <button aria-pressed={note.pinned} onClick={() => intents.togglePinned(note)}>
-        {note.pinned ? "Unpin" : "Pin"}
-      </button>
-      <button onClick={() => intents.requestDelete(note)}>Delete Note</button>
-    </div>
-  )
-}
-
 /**
  * The one visible piece of the Enrichment Workflow. A small badge
  * carries the debounce, the in-flight state, the failure reason, and
@@ -440,9 +401,142 @@ function failureBadgeLabel(reason: "stale" | "invalid_schema" | "provider" | "un
 }
 
 /**
+ * The hover action row: compact icon buttons at the card's top-right.
+ * Revealed on card hover and reachable via the ⌘· menu.
+ */
+function ActionRow({
+  note,
+  intents,
+  onOpenMenu,
+}: {
+  note: Note
+  intents: NoteIntents
+  onOpenMenu: () => void
+}) {
+  return (
+    <div className="action-row" aria-label="Note actions">
+      <button
+        className="action-btn"
+        onClick={() => intents.startEdit(note)}
+        aria-label="Edit text"
+        title="Edit text"
+      >
+        ✏️
+      </button>
+      <button
+        className="action-btn"
+        onClick={() => intents.startRelate(note)}
+        aria-label="Relate"
+        title="Relate"
+      >
+        🔗
+      </button>
+      <button
+        className="action-btn"
+        onClick={() => intents.togglePinned(note)}
+        aria-label={note.pinned ? "Unpin" : "Pin"}
+        title={note.pinned ? "Unpin" : "Pin"}
+      >
+        {note.pinned ? "📌" : "📍"}
+      </button>
+      <button
+        className="action-btn"
+        onClick={onOpenMenu}
+        aria-label="More actions"
+        title="More actions (⌘·)"
+      >
+        ⋯
+      </button>
+    </div>
+  )
+}
+
+/**
+ * The ⌘· menu: exposes the full action set. Opened by clicking "⋯" in the
+ * action row or pressing ⌘· with the card focused.
+ */
+function CommandMenu({
+  note,
+  intents,
+  onClose,
+}: {
+  note: Note
+  intents: NoteIntents
+  onClose: () => void
+}) {
+  useEscape(onClose, ESCAPE_PRIORITY.dialog)
+
+  return (
+    <div className="command-menu" role="menu" aria-label="Note command menu">
+      <EscapeDismiss onEscape={onClose} />
+      <button
+        role="menuitem"
+        onClick={() => { intents.startEdit(note); onClose() }}
+      >
+        Edit text
+      </button>
+      <div className="command-menu-item" role="menuitem">
+        <label htmlFor={`menu-type-${note.id}`}>Set Type</label>
+        <select
+          id={`menu-type-${note.id}`}
+          value={note.noteType}
+          onChange={(event) => { intents.setNoteType(note, event.target.value as NoteType); onClose() }}
+        >
+          {NOTE_TYPES.map((noteType) => (
+            <option key={noteType} value={noteType}>
+              {noteTypeLabel(noteType)}
+            </option>
+          ))}
+        </select>
+      </div>
+      <button
+        role="menuitem"
+        onClick={() => { intents.startAnnotation(note); onClose() }}
+      >
+        {note.annotation ? "Edit Annotation" : "Add Annotation"}
+      </button>
+      <button
+        role="menuitem"
+        onClick={() => { intents.togglePinned(note); onClose() }}
+      >
+        {note.pinned ? "Unpin" : "Pin"}
+      </button>
+      <button
+        role="menuitem"
+        onClick={() => { intents.startLabel(note); onClose() }}
+      >
+        Add Label
+      </button>
+      <button
+        role="menuitem"
+        onClick={() => { intents.startRelate(note); onClose() }}
+      >
+        Relate
+      </button>
+      <button
+        role="menuitem"
+        onClick={() => { intents.startTransfer(note); onClose() }}
+      >
+        Move/Copy
+      </button>
+      <button
+        role="menuitem"
+        onClick={() => { intents.requestDelete(note); onClose() }}
+      >
+        Delete
+      </button>
+    </div>
+  )
+}
+
+/**
  * One Note, drawn the same way wherever it appears. The card holds no state
  * and commits nothing itself: drafts arrive as props and every change leaves
  * through the one intents object, so no view can grow its own mutation rules.
+ *
+ * At rest the card shows only the Note Type tag, the rendered thought, a
+ * quiet Annotation aside, and a small meta line. Secondary actions move
+ * behind a hover action row and a ⌘· menu, both reachable by keyboard.
  */
 export function NoteCard({
   note,
@@ -466,9 +560,26 @@ export function NoteCard({
    *  the active Workspace's policy does not permit AI assistance. */
   enrichment?: EnrichmentStatus
 }) {
+  const [commandMenuOpen, setCommandMenuOpen] = useState(false)
+
   // The badge counts the same links the graph draws and the chips below list,
   // because all three read one projection.
   const relatedCount = nodeDegree(context.graph, note.id)
+  const firstLabel = note.labels[0]?.name
+
+  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    // ⌘· (Command+Period) opens or closes the command menu
+    if (event.metaKey && event.key === ".") {
+      event.preventDefault()
+      event.stopPropagation()
+      setCommandMenuOpen((prev) => !prev)
+    }
+  }
+
+  function closeMenu() {
+    setCommandMenuOpen(false)
+  }
+
   return (
     <div
       className={["note", note.pinned ? "pinned" : "", focused ? "focused" : "", dimmed ? "dimmed" : ""]
@@ -482,14 +593,44 @@ export function NoteCard({
       tabIndex={-1}
       aria-current={focused ? "true" : undefined}
       ref={registerElement}
+      onKeyDown={handleKeyDown}
     >
-      <div className="row">
-        <span className="badge">{noteTypeLabel(note.noteType)}</span>
-        {note.noteTypeProvenance === "ai" && (
-          <span className="badge" aria-label="Note Type organized by AI">AI</span>
+      {/* ── Resting layout ────────────────────────────────────────────── */}
+      <div className="note-top">
+        <div className="note-top-left">
+          <span className="tag">{noteTypeLabel(note.noteType)}</span>
+          {note.noteTypeProvenance === "ai" && (
+            <span className="badge" aria-label="Note Type organized by AI">AI</span>
+          )}
+        </div>
+
+        {/* Hover action row — visible on card hover */}
+        <ActionRow note={note} intents={intents} onOpenMenu={() => setCommandMenuOpen(true)} />
+
+        {/* ⌘· menu — opened by clicking ⋯ or pressing ⌘· */}
+        {commandMenuOpen && (
+          <CommandMenu note={note} intents={intents} onClose={closeMenu} />
         )}
-        {note.pinned && <span className="badge">Pinned</span>}
-        {relatedCount > 0 && <span className="badge">{relatedCount} related</span>}
+      </div>
+
+      {/* Rendered thought */}
+      <NoteText note={note} drafts={drafts} intents={intents} />
+
+      {/* Annotation as quiet left-ruled aside (only when not editing) */}
+      {note.annotation && drafts.annotationDraft?.id !== note.id && (
+        <div className="annotation-aside">
+          <p>{note.annotation}</p>
+          {note.annotationProvenance === "ai" && (
+            <span className="badge" aria-label="Annotation organized by AI">AI</span>
+          )}
+        </div>
+      )}
+
+      {/* Meta line: linked count, first label, enrichment status */}
+      <div className="meta">
+        {relatedCount > 0 && <span>{relatedCount} linked</span>}
+        {relatedCount > 0 && firstLabel && <span className="meta-sep">·</span>}
+        {firstLabel && <span>{firstLabel}</span>}
         <NoteEnrichmentBadge
           note={note}
           status={enrichment}
@@ -500,33 +641,36 @@ export function NoteCard({
         />
       </div>
 
-      <NoteText note={note} drafts={drafts} intents={intents} />
-      <NoteAnnotation note={note} drafts={drafts} intents={intents} />
-      <NoteLabels note={note} drafts={drafts} intents={intents} />
-      <NoteRelationships note={note} context={context} drafts={drafts} intents={intents} />
+      {/* ── Draft editors (shown when active) ─────────────────────────── */}
 
-      {/* Moving and copying are the only two ways a Note reaches
-          another Thinking Workspace, and each says what it does. */}
-      <div className="row" aria-label="Move or copy Note">
-        {drafts.pendingTransfer?.noteId === note.id ? (
+      {/* Annotation editor */}
+      {drafts.annotationDraft?.id === note.id && (
+        <NoteAnnotation note={note} drafts={drafts} intents={intents} />
+      )}
+
+      {/* Label editor */}
+      {drafts.labelDraft?.noteId === note.id && (
+        <NoteLabels note={note} drafts={drafts} intents={intents} />
+      )}
+
+      {/* Relate editor */}
+      {drafts.relateDraft?.noteId === note.id && (
+        <NoteRelationships note={note} context={context} drafts={drafts} intents={intents} />
+      )}
+
+      {/* Transfer editor */}
+      {drafts.pendingTransfer?.noteId === note.id && (
+        <div className="row" aria-label="Move or copy Note">
           <NoteTransfer
             note={note}
             workspaces={context.workspaces}
             pending={drafts.pendingTransfer}
             intents={intents}
           />
-        ) : (
-          <button
-            disabled={transferDestinations(context.workspaces, note).length === 0}
-            onClick={() => intents.startTransfer(note)}
-          >
-            Move or Copy Note
-          </button>
-        )}
-      </div>
+        </div>
+      )}
 
-      <NoteActions note={note} drafts={drafts} intents={intents} />
-
+      {/* Delete confirmation */}
       {drafts.pendingNoteDelete?.noteId === note.id && (
         <div className="confirm" role="alertdialog" aria-label="Confirm delete Note">
           <EscapeDismiss onEscape={() => intents.answerDelete("cancel")} />
