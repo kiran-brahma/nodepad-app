@@ -362,6 +362,7 @@ export function App() {
             canUndo={canUndo}
             onChooseView={setView}
             onUndo={undoLastChange}
+            onSetPosition={(noteId, x, y) => submit(thinkingWorkspace.setNotePosition(noteId, x, y))}
             card={noteCard}
             pendingSyntheses={synthesis.pending}
           />
@@ -515,6 +516,7 @@ function buildPaletteActions(input: {
     { id: "export-archive", label: "Export Archive", group: "Workspace", run: input.exportArchive },
     { id: "import-archive", label: "Import Archive", group: "Workspace", run: input.importArchive },
     { id: "view-tiling", label: "Tiling view", group: "View", run: () => input.setView("tiling") },
+    { id: "view-canvas", label: "Canvas view", group: "View", run: () => input.setView("canvas") },
     { id: "view-kanban", label: "Kanban view", group: "View", run: () => input.setView("kanban") },
     { id: "view-graph", label: "Graph view", group: "View", run: () => input.setView("graph") },
     { id: "policy-manual", label: "Assistance: Manual", group: "Assistance", run: () => input.setAssistancePolicy("manual") },

@@ -181,6 +181,16 @@ fn set_note_pinned(
 }
 
 #[tauri::command]
+fn set_note_position(
+    note_id: String,
+    x: f64,
+    y: f64,
+    state: State<'_, AppState>,
+) -> WorkspaceCommandResult {
+    state.dispatch(|store| store.set_note_position_outcome(&note_id, x, y))
+}
+
+#[tauri::command]
 fn delete_note(note_id: String, state: State<'_, AppState>) -> WorkspaceCommandResult {
     state.dispatch(|store| store.delete_note_outcome(&note_id))
 }
@@ -1605,6 +1615,7 @@ pub fn run() {
             set_note_type,
             set_note_annotation,
             set_note_pinned,
+            set_note_position,
             delete_note,
             move_note,
             copy_note,

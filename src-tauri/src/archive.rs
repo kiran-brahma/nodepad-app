@@ -59,6 +59,8 @@ pub(crate) enum ArchiveError {
     DuplicateRelationshipPair,
     /// Two Labels canonicalized to the same Workspace-local identity.
     DuplicateLabelNormalization,
+    /// A Note position was incomplete or not finite.
+    InvalidCanvasPosition,
 }
 
 impl ArchiveError {
@@ -79,6 +81,7 @@ impl ArchiveError {
                 "The archive repeats a Relationship between the same two Notes.".to_owned()
             }
             Self::DuplicateLabelNormalization => "The archive repeats a Label by name.".to_owned(),
+            Self::InvalidCanvasPosition => "A Note position in the archive is invalid.".to_owned(),
         }
     }
 }
@@ -150,6 +153,10 @@ pub(crate) struct ArchiveNote {
     pub(crate) created_at: String,
     pub(crate) updated_at: String,
     pub(crate) pinned: bool,
+    #[serde(default)]
+    pub(crate) canvas_x: Option<f64>,
+    #[serde(default)]
+    pub(crate) canvas_y: Option<f64>,
     pub(crate) enrichment_revision: u64,
     pub(crate) last_enriched_at: Option<String>,
     pub(crate) label_ids: Vec<String>,
@@ -218,6 +225,8 @@ pub(crate) fn build_archive(
             created_at: note.created_at.clone(),
             updated_at: note.updated_at.clone(),
             pinned: note.pinned,
+            canvas_x: note.canvas_x,
+            canvas_y: note.canvas_y,
             enrichment_revision: note.enrichment_revision,
             last_enriched_at: note.last_enriched_at.clone(),
             label_ids: note.labels.iter().map(|label| label.id.clone()).collect(),
@@ -393,6 +402,11 @@ fn validate_workspace(workspace: &ArchiveWorkspace) -> Result<(), ArchiveError> 
             if annotation.trim().is_empty() {
                 return Err(ArchiveError::MissingField("note annotation"));
             }
+        }
+        match (note.canvas_x, note.canvas_y) {
+            (None, None) => {}
+            (Some(x), Some(y)) if x.is_finite() && y.is_finite() => {}
+            _ => return Err(ArchiveError::InvalidCanvasPosition),
         }
         require_timestamp(&note.created_at, "note createdAt")?;
         require_timestamp(&note.updated_at, "note updatedAt")?;
@@ -581,6 +595,8 @@ mod tests {
             created_at: "2026-07-22T09:00:00+00:00".into(),
             updated_at: "2026-07-22T09:00:00+00:00".into(),
             pinned: false,
+            canvas_x: None,
+            canvas_y: None,
             enrichment_revision: 0,
             last_enriched_at: None,
             label_ids: vec![],
@@ -621,6 +637,8 @@ mod tests {
             created_at: "2026-07-22T09:00:00+00:00".into(),
             updated_at: "2026-07-22T09:00:00+00:00".into(),
             pinned: false,
+            canvas_x: None,
+            canvas_y: None,
             enrichment_revision: 0,
             last_enriched_at: None,
             label_ids: vec![],
@@ -635,6 +653,8 @@ mod tests {
             created_at: "2026-07-22T09:01:00+00:00".into(),
             updated_at: "2026-07-22T09:01:00+00:00".into(),
             pinned: false,
+            canvas_x: None,
+            canvas_y: None,
             enrichment_revision: 0,
             last_enriched_at: None,
             label_ids: vec![],
@@ -672,6 +692,8 @@ mod tests {
             created_at: "2026-07-22T09:00:00+00:00".into(),
             updated_at: "2026-07-22T09:00:00+00:00".into(),
             pinned: false,
+            canvas_x: None,
+            canvas_y: None,
             enrichment_revision: 0,
             last_enriched_at: None,
             label_ids: vec!["no-such-label".into()],

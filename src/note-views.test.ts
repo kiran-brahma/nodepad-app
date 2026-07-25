@@ -25,6 +25,8 @@ function note(
     annotationProvenance: "default",
     updatedAt: fields.createdAt,
     pinned: false,
+    canvasX: null,
+    canvasY: null,
     labels: [],
     enrichmentRevision: 0,
     lastEnrichedAt: null,

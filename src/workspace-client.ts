@@ -38,6 +38,9 @@ export interface Note {
   createdAt: string
   updatedAt: string
   pinned: boolean
+  /** Optional durable position in the canvas projection. */
+  canvasX: number | null
+  canvasY: number | null
   /** Bumped on every commit that touches this Note. The Enrichment
    *  Workflow captures it into the request token and rejects any
    *  response that names a different revision, so an edit during
@@ -279,6 +282,8 @@ export const thinkingWorkspace = {
     invoke<WorkspaceOutcome>("set_note_annotation", { noteId, annotation }),
   setNotePinned: (noteId: string, pinned: boolean) =>
     invoke<WorkspaceOutcome>("set_note_pinned", { noteId, pinned }),
+  setNotePosition: (noteId: string, x: number, y: number) =>
+    invoke<WorkspaceOutcome>("set_note_position", { noteId, x, y }),
   deleteNote: (noteId: string) => invoke<WorkspaceOutcome>("delete_note", { noteId }),
   /**
    * Moves a Note into another Thinking Workspace: same identity and authored
