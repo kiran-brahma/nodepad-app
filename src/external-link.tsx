@@ -38,6 +38,7 @@ export function ExternalLink({
       onClick={(event) => {
         // The webview never handles the URL itself.
         event.preventDefault()
+        event.stopPropagation()
         void thinkingWorkspace.openExternalLink(href!)
       }}
       {...rest}

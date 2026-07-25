@@ -146,85 +146,108 @@ function NoteText({
   const draft = drafts.noteDraft
   if (draft?.id !== note.id) {
     // Markdown renders without raw HTML, so nothing in a Note executes.
+    // Click the thought to edit it in place.
     return (
-      <div className="markdown">
+      <div
+        className="markdown"
+        onClick={() => intents.startEdit(note)}
+        role="button"
+        tabIndex={0}
+        aria-label="Edit note text"
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault()
+            intents.startEdit(note)
+          }
+        }}
+      >
         <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ExternalLink }}>
           {note.markdown}
         </ReactMarkdown>
       </div>
     )
   }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault()
+      intents.cancelEdit()
+      return
+    }
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault()
+      intents.saveText({ preventDefault: () => {} } as FormEvent)
+      return
+    }
+    // Shift+Enter inserts a newline (native textarea behavior)
+  }
+
   return (
-    <form onSubmit={intents.saveText}>
-      <EscapeDismiss onEscape={intents.cancelEdit} />
-      <label htmlFor={`note-text-${note.id}`}>Note text</label>
-      <textarea
-        autoFocus
-        id={`note-text-${note.id}`}
-        rows={5}
-        value={draft.markdown}
-        onChange={(event) => intents.editTextDraft(event.target.value)}
-      />
-      <div className="row">
-        <button type="submit">Save Note text</button>
-        <button type="button" onClick={intents.cancelEdit}>
-          Cancel
-        </button>
-      </div>
-    </form>
+    <textarea
+      autoFocus
+      className="inline-editor"
+      aria-label="Edit note text"
+      value={draft.markdown}
+      onChange={(event) => intents.editTextDraft(event.target.value)}
+      onBlur={() => intents.saveText({ preventDefault: () => {} } as FormEvent)}
+      onKeyDown={handleKeyDown}
+      rows={5}
+    />
   )
 }
 
 function NoteAnnotation({
-  note,
   drafts,
   intents,
 }: {
-  note: Note
   drafts: NoteDrafts
   intents: NoteIntents
 }) {
-  const draft = drafts.annotationDraft
-  if (draft?.id !== note.id) {
-    if (!note.annotation) return null
-    return (
-      <p className="annotation">
-        {note.annotation}
-        {note.annotationProvenance === "ai" && (
-          <span className="badge" aria-label="Annotation organized by AI"> AI</span>
-        )}
-      </p>
-    )
+  // This component is only rendered when editing is active (draft matches note).
+  const editingDraft = drafts.annotationDraft!
+
+  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault()
+      intents.cancelAnnotation()
+      return
+    }
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault()
+      if (!isAnnotationTooLong(editingDraft.text)) {
+        intents.saveAnnotation({ preventDefault: () => {} } as FormEvent)
+      }
+      return
+    }
+    // Shift+Enter inserts a newline (native textarea behavior)
   }
+
   return (
-    <form onSubmit={intents.saveAnnotation}>
-      <EscapeDismiss onEscape={intents.cancelAnnotation} />
-      <label htmlFor={`annotation-${note.id}`}>Annotation</label>
+    <div className="annotation-editor">
       <textarea
         autoFocus
-        id={`annotation-${note.id}`}
-        rows={3}
-        value={draft.text}
+        className="inline-editor"
+        aria-label="Edit annotation"
+        value={editingDraft.text}
         placeholder="Plain-text commentary; leave empty to clear it"
         onChange={(event) => intents.editAnnotationDraft(event.target.value)}
+        onBlur={() => {
+          if (!isAnnotationTooLong(editingDraft.text)) {
+            intents.saveAnnotation({ preventDefault: () => {} } as FormEvent)
+          }
+        }}
+        onKeyDown={handleKeyDown}
+        rows={3}
       />
       <p
-        className={isAnnotationTooLong(draft.text) ? "over-limit" : ""}
-        role={isAnnotationTooLong(draft.text) ? "alert" : undefined}
+        className={isAnnotationTooLong(editingDraft.text) ? "over-limit" : "annotation-count"}
+        role={isAnnotationTooLong(editingDraft.text) ? "alert" : undefined}
       >
-        {isAnnotationTooLong(draft.text)
-          ? `Over the limit: ${annotationLength(draft.text)} / ${MAX_ANNOTATION_SCALARS} characters`
-          : `${annotationLength(draft.text)} / ${MAX_ANNOTATION_SCALARS} characters`}
+        {isAnnotationTooLong(editingDraft.text)
+          ? `Over the limit: ${annotationLength(editingDraft.text)} / ${MAX_ANNOTATION_SCALARS} characters`
+          : `${annotationLength(editingDraft.text)} / ${MAX_ANNOTATION_SCALARS} characters`}
       </p>
-      <div className="row">
-        <button type="submit" disabled={isAnnotationTooLong(draft.text)}>
-          Save Annotation
-        </button>
-        <button type="button" onClick={intents.cancelAnnotation}>
-          Cancel
-        </button>
-      </div>
-    </form>
+    </div>
   )
 }
 
@@ -417,14 +440,6 @@ function ActionRow({
     <div className="action-row" aria-label="Note actions">
       <button
         className="action-btn"
-        onClick={() => intents.startEdit(note)}
-        aria-label="Edit text"
-        title="Edit text"
-      >
-        ✏️
-      </button>
-      <button
-        className="action-btn"
         onClick={() => intents.startRelate(note)}
         aria-label="Relate"
         title="Relate"
@@ -471,36 +486,11 @@ function CommandMenu({
       <EscapeDismiss onEscape={onClose} />
       <button
         role="menuitem"
-        onClick={() => { intents.startEdit(note); onClose() }}
-      >
-        Edit text
-      </button>
-      <div className="command-menu-item" role="menuitem">
-        <label htmlFor={`menu-type-${note.id}`}>Set Type</label>
-        <select
-          id={`menu-type-${note.id}`}
-          value={note.noteType}
-          onChange={(event) => { intents.setNoteType(note, event.target.value as NoteType); onClose() }}
-        >
-          {NOTE_TYPES.map((noteType) => (
-            <option key={noteType} value={noteType}>
-              {noteTypeLabel(noteType)}
-            </option>
-          ))}
-        </select>
-      </div>
-      <button
-        role="menuitem"
-        onClick={() => { intents.startAnnotation(note); onClose() }}
-      >
-        {note.annotation ? "Edit Annotation" : "Add Annotation"}
-      </button>
-      <button
-        role="menuitem"
         onClick={() => { intents.togglePinned(note); onClose() }}
       >
         {note.pinned ? "Unpin" : "Pin"}
       </button>
+
       <button
         role="menuitem"
         onClick={() => { intents.startLabel(note); onClose() }}
@@ -561,6 +551,7 @@ export function NoteCard({
   enrichment?: EnrichmentStatus
 }) {
   const [commandMenuOpen, setCommandMenuOpen] = useState(false)
+  const [typePopoverOpen, setTypePopoverOpen] = useState(false)
 
   // The badge counts the same links the graph draws and the chips below list,
   // because all three read one projection.
@@ -598,9 +589,47 @@ export function NoteCard({
       {/* ── Resting layout ────────────────────────────────────────────── */}
       <div className="note-top">
         <div className="note-top-left">
-          <span className="tag">{noteTypeLabel(note.noteType)}</span>
+          <span
+            className="tag type-tag"
+            onClick={() => setTypePopoverOpen((prev) => !prev)}
+            role="button"
+            tabIndex={0}
+            aria-label="Change Note Type"
+            aria-haspopup="listbox"
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault()
+                setTypePopoverOpen((prev) => !prev)
+              }
+            }}
+          >
+            {noteTypeLabel(note.noteType)}
+          </span>
           {note.noteTypeProvenance === "ai" && (
             <span className="badge" aria-label="Note Type organized by AI">AI</span>
+          )}
+          {typePopoverOpen && (
+            <div
+              className="type-popover"
+              role="listbox"
+              aria-label="Note Types"
+              onClick={(event) => event.stopPropagation()}
+            >
+              {NOTE_TYPES.map((noteType) => (
+                <button
+                  key={noteType}
+                  className={noteType === note.noteType ? "type-option selected" : "type-option"}
+                  role="option"
+                  aria-selected={noteType === note.noteType}
+                  onClick={() => {
+                    intents.setNoteType(note, noteType)
+                    setTypePopoverOpen(false)
+                  }}
+                >
+                  {noteTypeLabel(noteType)}
+                </button>
+              ))}
+            </div>
           )}
         </div>
 
@@ -617,13 +646,47 @@ export function NoteCard({
       <NoteText note={note} drafts={drafts} intents={intents} />
 
       {/* Annotation as quiet left-ruled aside (only when not editing) */}
-      {note.annotation && drafts.annotationDraft?.id !== note.id && (
-        <div className="annotation-aside">
-          <p>{note.annotation}</p>
-          {note.annotationProvenance === "ai" && (
-            <span className="badge" aria-label="Annotation organized by AI">AI</span>
+      {drafts.annotationDraft?.id !== note.id && (
+        <>
+          {note.annotation ? (
+            <div className="annotation-aside">
+              <p
+                onClick={() => intents.startAnnotation(note)}
+                role="button"
+                tabIndex={0}
+                aria-label="Edit annotation"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault()
+                    intents.startAnnotation(note)
+                  }
+                }}
+              >
+                {note.annotation}
+              </p>
+              {note.annotationProvenance === "ai" && (
+                <span className="badge" aria-label="Annotation organized by AI">AI</span>
+              )}
+            </div>
+          ) : (
+            <div className="annotation-aside annotation-add">
+              <span
+                onClick={() => intents.startAnnotation(note)}
+                role="button"
+                tabIndex={0}
+                aria-label="Add annotation"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault()
+                    intents.startAnnotation(note)
+                  }
+                }}
+              >
+                Add annotation
+              </span>
+            </div>
           )}
-        </div>
+        </>
       )}
 
       {/* Meta line: linked count, first label, enrichment status */}
@@ -645,7 +708,7 @@ export function NoteCard({
 
       {/* Annotation editor */}
       {drafts.annotationDraft?.id === note.id && (
-        <NoteAnnotation note={note} drafts={drafts} intents={intents} />
+        <NoteAnnotation drafts={drafts} intents={intents} />
       )}
 
       {/* Label editor */}
