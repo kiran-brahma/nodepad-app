@@ -390,6 +390,33 @@ function noteCards() {
   return screen.getAllByRole("article")
 }
 
+/** Clicks the Edit button in the hover action row of the given card. */
+async function editNote(user: ReturnType<typeof userEvent.setup>, card: HTMLElement) {
+  await user.click(within(card).getByRole("button", { name: "Edit text" }))
+}
+
+/** Opens the ⌘· command menu by clicking the ⋯ button in the action row. */
+async function openCommandMenu(user: ReturnType<typeof userEvent.setup>, card: HTMLElement) {
+  await user.click(within(card).getByRole("button", { name: "More actions" }))
+}
+
+/** Clicks a menu item in the ⌘· command menu of the given card. */
+async function clickMenuItem(user: ReturnType<typeof userEvent.setup>, card: HTMLElement, name: string) {
+  await openCommandMenu(user, card)
+  await user.click(within(card).getByRole("menuitem", { name }))
+}
+
+/** Clicks the Pin/Unpin button in the hover action row of the given card. */
+async function pinNote(user: ReturnType<typeof userEvent.setup>, card: HTMLElement) {
+  const btn = within(card).getByRole("button", { name: /^(Pin|Unpin)$/ })
+  await user.click(btn)
+}
+
+/** Clicks the Relate button in the hover action row of the given card. */
+async function relateNote(user: ReturnType<typeof userEvent.setup>, card: HTMLElement) {
+  await user.click(within(card).getByRole("button", { name: "Relate" }))
+}
+
 /** Opens the Workspace settings sheet from the rail. */
 async function openSettings(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "Workspace settings" }))
@@ -553,7 +580,7 @@ describe("manual Note controls", () => {
     render(<App />)
     await captureNote(user, "First thought")
 
-    await user.click(screen.getByRole("button", { name: "Edit Note" }))
+    await editNote(user, noteCards()[0])
     const editor = screen.getByLabelText("Note text")
     await user.clear(editor)
     await user.paste("Revised thought")
@@ -568,10 +595,12 @@ describe("manual Note controls", () => {
     render(<App />)
     await captureNote(user, "Is this true?")
 
-    await user.selectOptions(screen.getByLabelText("Note Type"), "question")
+    // Open the ⌘· menu and use the Set Type select
+    await openCommandMenu(user, noteCards()[0])
+    await user.selectOptions(within(noteCards()[0]).getByLabelText("Set Type"), "question")
     // The badge, not the picker's own option, reports the committed Note Type.
     await waitFor(() =>
-      expect(within(noteCards()[0]).getByText("Question", { selector: ".badge" })).toBeDefined(),
+      expect(within(noteCards()[0]).getByText("Question", { selector: ".tag" })).toBeDefined(),
     )
   })
 
@@ -580,14 +609,14 @@ describe("manual Note controls", () => {
     render(<App />)
     await captureNote(user, "A thought worth a footnote")
 
-    await user.click(screen.getByRole("button", { name: "Add Annotation" }))
+    await clickMenuItem(user, noteCards()[0], "Add Annotation")
     await user.click(screen.getByLabelText("Annotation"))
     await user.paste("Where this came from")
     await user.click(screen.getByRole("button", { name: "Save Annotation" }))
     expect(await screen.findByText("Where this came from")).toBeDefined()
     expect(screen.getByText("A thought worth a footnote")).toBeDefined()
 
-    await user.click(screen.getByRole("button", { name: "Edit Annotation" }))
+    await clickMenuItem(user, noteCards()[0], "Edit Annotation")
     await user.clear(screen.getByLabelText("Annotation"))
     await user.click(screen.getByRole("button", { name: "Save Annotation" }))
     await waitFor(() => expect(screen.queryByText("Where this came from")).toBeNull())
@@ -599,7 +628,7 @@ describe("manual Note controls", () => {
     render(<App />)
     await captureNote(user, "Bounded")
 
-    await user.click(screen.getByRole("button", { name: "Add Annotation" }))
+    await clickMenuItem(user, noteCards()[0], "Add Annotation")
     await user.click(screen.getByLabelText("Annotation"))
     await user.paste("🧠".repeat(2001))
     expect(screen.getByRole("button", { name: "Save Annotation" }).getAttribute("disabled")).not.toBeNull()
@@ -613,11 +642,12 @@ describe("manual Note controls", () => {
 
     const cards = noteCards()
     expect(cards[0].textContent).toContain("Older thought")
-    await user.click(within(cards[1]).getByRole("button", { name: "Pin" }))
+    await pinNote(user, cards[1])
 
     await waitFor(() => expect(noteCards()[0].textContent).toContain("Newer thought"))
-    expect(noteCards()[0].textContent).toContain("Pinned")
-    await user.click(within(noteCards()[0]).getByRole("button", { name: "Unpin" }))
+    // Pinned Notes carry a 2px accent left edge; the pinned class is present
+    expect(noteCards()[0].className).toContain("pinned")
+    await pinNote(user, noteCards()[0])
     await waitFor(() => expect(noteCards()[0].textContent).toContain("Older thought"))
   })
 
@@ -626,13 +656,13 @@ describe("manual Note controls", () => {
     render(<App />)
     await captureNote(user, "Deletable thought")
 
-    await user.click(screen.getByRole("button", { name: "Delete Note" }))
+    await clickMenuItem(user, noteCards()[0], "Delete")
     const confirmation = screen.getByRole("alertdialog", { name: "Confirm delete Note" })
     expect(confirmation.textContent).toContain("Deletable thought")
     await user.click(within(confirmation).getByRole("button", { name: "Keep it" }))
     expect(screen.getByText("Deletable thought")).toBeDefined()
 
-    await user.click(screen.getByRole("button", { name: "Delete Note" }))
+    await clickMenuItem(user, noteCards()[0], "Delete")
     await user.click(
       within(screen.getByRole("alertdialog", { name: "Confirm delete Note" })).getByRole("button", {
         name: "Delete Note",
@@ -655,7 +685,7 @@ describe("manual Note controls", () => {
     render(<App />)
     await captureNote(user, "A thought to recover")
     await captureNote(user, "An unrelated thought")
-    await user.click(within(noteCards()[0]).getByRole("button", { name: "Add Label" }))
+    await clickMenuItem(user, noteCards()[0], "Add Label")
     await user.type(screen.getByLabelText("Label"), "Rêverie")
     await user.click(screen.getByRole("button", { name: "Save Label" }))
     expect(await screen.findByText("Rêverie")).toBeDefined()
@@ -676,7 +706,7 @@ describe("moving and copying a Note between Thinking Workspaces", () => {
     render(<App />)
     await captureNote(user, "A thought that travels")
 
-    await user.click(screen.getByRole("button", { name: "Move or Copy Note" }))
+    await clickMenuItem(user, noteCards()[0], "Move/Copy")
     // The destination is named, and the two outcomes are told apart in words.
     const chooser = screen.getByLabelText("Thinking Workspace to move or copy into")
     expect((chooser as HTMLSelectElement).value).toBe(otherWorkspaceId)
@@ -696,7 +726,7 @@ describe("moving and copying a Note between Thinking Workspaces", () => {
     render(<App />)
     await captureNote(user, "A thought worth repeating")
 
-    await user.click(screen.getByRole("button", { name: "Move or Copy Note" }))
+    await clickMenuItem(user, noteCards()[0], "Move/Copy")
     await user.click(screen.getByRole("button", { name: "Copy Note" }))
 
     // The copy lives in the other Workspace, so this one still shows one Note.
@@ -710,15 +740,15 @@ describe("moving and copying a Note between Thinking Workspaces", () => {
     render(<App />)
     await captureNote(user, "Cities grew around rivers")
     await captureNote(user, "Trade follows water")
-    await user.click(within(noteCards()[0]).getByRole("button", { name: "Relate Note" }))
+    await relateNote(user, noteCards()[0])
     await user.click(within(noteCards()[0]).getByRole("button", { name: "Trade follows water" }))
-    await waitFor(() => expect(within(noteCards()[0]).getByText("1 related")).toBeDefined())
+    await waitFor(() => expect(within(noteCards()[0]).getByText("1 linked")).toBeDefined())
 
-    await user.click(within(noteCards()[1]).getByRole("button", { name: "Move or Copy Note" }))
+    await clickMenuItem(user, noteCards()[1], "Move/Copy")
     await user.click(within(noteCards()[1]).getByRole("button", { name: "Move Note" }))
 
     await waitFor(() => expect(noteCards()).toHaveLength(1))
-    expect(within(noteCards()[0]).queryByText("1 related")).toBeNull()
+    expect(within(noteCards()[0]).queryByText("1 linked")).toBeNull()
   })
 
   it("offers no destination when this is the only Thinking Workspace", async () => {
@@ -727,9 +757,12 @@ describe("moving and copying a Note between Thinking Workspaces", () => {
     render(<App />)
     await captureNote(user, "Nowhere to go")
 
-    expect(
-      screen.getByRole("button", { name: "Move or Copy Note" }).getAttribute("disabled"),
-    ).not.toBeNull()
+    // Open the ⌘· menu; the Move/Copy item should be present but the
+    // transfer destinations are empty, so the transfer UI shows nothing.
+    await openCommandMenu(user, noteCards()[0])
+    await user.click(within(noteCards()[0]).getByRole("menuitem", { name: "Move/Copy" }))
+    // No destination means no transfer UI is rendered.
+    expect(screen.queryByLabelText("Thinking Workspace to move or copy into")).toBeNull()
   })
 })
 
@@ -740,7 +773,7 @@ describe("Relationships on the Note detail surface", () => {
     query: string,
     preview: string,
   ) {
-    await user.click(within(noteCards()[0]).getByRole("button", { name: "Relate Note" }))
+    await relateNote(user, noteCards()[0])
     await user.type(screen.getByLabelText("Relate to Note"), query)
     await user.click(within(noteCards()[0]).getByRole("button", { name: preview }))
   }
@@ -753,21 +786,24 @@ describe("Relationships on the Note detail surface", () => {
 
     await relateFirstNote(user, "Trade", "Trade follows water")
 
-    // Either endpoint lists the other, from one committed Relationship.
+    // Open the relate editor on the first card to see the related note
+    await relateNote(user, noteCards()[0])
     await waitFor(() =>
       expect(
-        within(within(noteCards()[0]).getByLabelText("Related Notes")).getByText(
-          "Trade follows water",
-        ),
+        within(noteCards()[0]).getByText("Trade follows water"),
       ).toBeDefined(),
     )
-    expect(
-      within(within(noteCards()[1]).getByLabelText("Related Notes")).getByText(
-        "Cities grew around rivers",
-      ),
-    ).toBeDefined()
-    expect(within(noteCards()[0]).getByText("1 related")).toBeDefined()
+    // Cancel the relate editor on the first card
+    await user.click(within(noteCards()[0]).getByRole("button", { name: "Cancel" }))
 
+    // Open the relate editor on the second card to see the related note
+    await relateNote(user, noteCards()[1])
+    expect(
+      within(noteCards()[1]).getByText("Cities grew around rivers"),
+    ).toBeDefined()
+    expect(within(noteCards()[0]).getByText("1 linked")).toBeDefined()
+
+    // Remove the relationship from the second card's relate editor
     await user.click(
       within(noteCards()[1]).getByRole("button", {
         name: "Remove Relationship to Cities grew around rivers",
@@ -775,12 +811,12 @@ describe("Relationships on the Note detail surface", () => {
     )
     await waitFor(() =>
       expect(
-        within(within(noteCards()[0]).getByLabelText("Related Notes")).queryByText(
-          "Trade follows water",
-        ),
+        within(noteCards()[1]).queryByRole("button", {
+          name: "Remove Relationship to Cities grew around rivers",
+        }),
       ).toBeNull(),
     )
-    expect(within(noteCards()[1]).queryByText("1 related")).toBeNull()
+    await waitFor(() => expect(within(noteCards()[1]).queryByText("1 linked")).toBeNull())
   })
 
   it("offers only Notes that are neither this one nor already related", async () => {
@@ -789,7 +825,7 @@ describe("Relationships on the Note detail surface", () => {
     await captureNote(user, "Cities grew around rivers")
     await captureNote(user, "Trade follows water")
 
-    await user.click(within(noteCards()[0]).getByRole("button", { name: "Relate Note" }))
+    await relateNote(user, noteCards()[0])
     const editor = within(noteCards()[0])
     // A Note can never be offered itself.
     expect(editor.queryByRole("button", { name: "Cities grew around rivers" })).toBeNull()
@@ -800,10 +836,10 @@ describe("Relationships on the Note detail surface", () => {
 
     await user.clear(screen.getByLabelText("Relate to Note"))
     await user.click(editor.getByRole("button", { name: "Trade follows water" }))
-    await waitFor(() => expect(within(noteCards()[0]).getByText("1 related")).toBeDefined())
+    await waitFor(() => expect(within(noteCards()[0]).getByText("1 linked")).toBeDefined())
 
     // An already-related Note is not offered a second time.
-    await user.click(within(noteCards()[0]).getByRole("button", { name: "Relate Note" }))
+    await relateNote(user, noteCards()[0])
     expect(
       within(noteCards()[0]).queryByRole("button", { name: "Trade follows water" }),
     ).toBeNull()
@@ -815,8 +851,10 @@ describe("Relationships on the Note detail surface", () => {
     await captureNote(user, "Cities grew around rivers")
     await captureNote(user, "Trade follows water")
     await relateFirstNote(user, "Trade", "Trade follows water")
-    await waitFor(() => expect(within(noteCards()[0]).getByText("1 related")).toBeDefined())
+    await waitFor(() => expect(within(noteCards()[0]).getByText("1 linked")).toBeDefined())
 
+    // Open the relate editor to access the Go to button
+    await relateNote(user, noteCards()[0])
     await user.click(
       within(noteCards()[0]).getByRole("button", { name: "Go to Trade follows water" }),
     )
@@ -824,8 +862,8 @@ describe("Relationships on the Note detail surface", () => {
     await waitFor(() => expect(noteCards()[1].getAttribute("aria-current")).toBe("true"))
     expect(document.activeElement).toBe(noteCards()[1])
     // Focus is transient UI state: the Relationship is untouched on both ends.
-    expect(within(noteCards()[0]).getByText("1 related")).toBeDefined()
-    expect(within(noteCards()[1]).getByText("1 related")).toBeDefined()
+    expect(within(noteCards()[0]).getByText("1 linked")).toBeDefined()
+    expect(within(noteCards()[1]).getByText("1 linked")).toBeDefined()
   })
 
   it("drops the Relationship when either Note is deleted", async () => {
@@ -834,9 +872,9 @@ describe("Relationships on the Note detail surface", () => {
     await captureNote(user, "Cities grew around rivers")
     await captureNote(user, "Trade follows water")
     await relateFirstNote(user, "Trade", "Trade follows water")
-    await waitFor(() => expect(within(noteCards()[0]).getByText("1 related")).toBeDefined())
+    await waitFor(() => expect(within(noteCards()[0]).getByText("1 linked")).toBeDefined())
 
-    await user.click(within(noteCards()[1]).getByRole("button", { name: "Delete Note" }))
+    await clickMenuItem(user, noteCards()[1], "Delete")
     await user.click(
       within(screen.getByRole("alertdialog", { name: "Confirm delete Note" })).getByRole("button", {
         name: "Delete Note",
@@ -844,9 +882,11 @@ describe("Relationships on the Note detail surface", () => {
     )
 
     await waitFor(() => expect(screen.queryByText("Trade follows water")).toBeNull())
-    expect(within(noteCards()[0]).queryByText("1 related")).toBeNull()
+    expect(within(noteCards()[0]).queryByText("1 linked")).toBeNull()
+    // Open the relate editor to verify no related notes remain
+    await relateNote(user, noteCards()[0])
     expect(
-      within(within(noteCards()[0]).getByLabelText("Related Notes")).queryByRole("button", {
+      within(noteCards()[0]).queryByRole("button", {
         name: /^Go to/,
       }),
     ).toBeNull()
@@ -883,7 +923,7 @@ describe("tiling and kanban over one committed projection", () => {
     await captureNote(user, "First thought")
 
     await switchTo(user, "Kanban")
-    await user.click(screen.getByRole("button", { name: "Edit Note" }))
+    await editNote(user, noteCards()[0])
     await user.clear(screen.getByLabelText("Note text"))
     await user.paste("Revised in kanban")
     await user.click(screen.getByRole("button", { name: "Save Note text" }))
@@ -899,9 +939,10 @@ describe("tiling and kanban over one committed projection", () => {
     render(<App />)
     await captureNote(user, "Is this true?")
     await captureNote(user, "Rivers shaped trade")
-    await user.selectOptions(within(noteCards()[0]).getByLabelText("Note Type"), "question")
+    await openCommandMenu(user, noteCards()[0])
+    await user.selectOptions(within(noteCards()[0]).getByLabelText("Set Type"), "question")
     await waitFor(() =>
-      expect(within(noteCards()[0]).getByText("Question", { selector: ".badge" })).toBeDefined(),
+      expect(within(noteCards()[0]).getByText("Question", { selector: ".tag" })).toBeDefined(),
     )
 
     await switchTo(user, "Kanban")
@@ -919,8 +960,10 @@ describe("tiling and kanban over one committed projection", () => {
     render(<App />)
     await captureNote(user, "Cities grew around rivers")
     await captureNote(user, "Trade follows water")
-    await user.click(within(noteCards()[0]).getByRole("button", { name: "Relate Note" }))
+    await relateNote(user, noteCards()[0])
     await user.click(within(noteCards()[0]).getByRole("button", { name: "Trade follows water" }))
+    // Open the relate editor to access the Go to button
+    await relateNote(user, noteCards()[0])
     await user.click(
       within(noteCards()[0]).getByRole("button", { name: "Go to Trade follows water" }),
     )
@@ -945,7 +988,7 @@ describe("tiling and kanban over one committed projection", () => {
     await captureNote(user, "Older thought about rivers")
     await captureNote(user, "Newer thought about rivers")
     await captureNote(user, "A thought about something else")
-    await user.click(within(noteCards()[1]).getByRole("button", { name: "Pin" }))
+    await pinNote(user, noteCards()[1])
     await waitFor(() => expect(noteCards()[0].textContent).toContain("Newer thought"))
 
     await user.click(screen.getByLabelText("Search this Thinking Workspace"))
@@ -985,7 +1028,7 @@ describe("tiling and kanban over one committed projection", () => {
     render(<App />)
     await captureNote(user, "Older thought")
     await captureNote(user, "Newer thought")
-    await user.click(within(noteCards()[1]).getByRole("button", { name: "Pin" }))
+    await pinNote(user, noteCards()[1])
     await waitFor(() => expect(noteCards()[0].textContent).toContain("Newer thought"))
 
     // A restart keeps only what SQLite holds: no view choice, no layout.
@@ -1042,9 +1085,9 @@ describe("the graph view and Relationship focus", () => {
     await captureNote(user, "Cities grew around rivers")
     await captureNote(user, "Trade follows water")
     await captureNote(user, "An unrelated thought")
-    await user.click(within(cards()[0]).getByRole("button", { name: "Relate Note" }))
+    await relateNote(user, cards()[0])
     await user.click(within(cards()[0]).getByRole("button", { name: "Trade follows water" }))
-    await waitFor(() => expect(within(cards()[0]).getByText("1 related")).toBeDefined())
+    await waitFor(() => expect(within(cards()[0]).getByText("1 linked")).toBeDefined())
   }
 
   it("shows every Note of the Workspace once and every Relationship once", async () => {
@@ -1140,7 +1183,7 @@ describe("the graph view and Relationship focus", () => {
     await user.click(node("Trade follows water"))
     await waitFor(() => expect(cards()).toHaveLength(1))
 
-    await user.click(within(cards()[0]).getByRole("button", { name: "Delete Note" }))
+    await clickMenuItem(user, cards()[0], "Delete")
     await user.click(
       within(screen.getByRole("alertdialog", { name: "Confirm delete Note" })).getByRole("button", {
         name: "Delete Note",
@@ -1163,6 +1206,8 @@ describe("the graph view and Relationship focus", () => {
 
     await user.click(node("Cities grew around rivers"))
     await waitFor(() => expect(cards()).toHaveLength(1))
+    // Open the relate editor to access the Remove Relationship button
+    await relateNote(user, cards()[0])
     await user.click(
       within(cards()[0]).getByRole("button", {
         name: "Remove Relationship to Trade follows water",
@@ -1171,7 +1216,7 @@ describe("the graph view and Relationship focus", () => {
 
     await waitFor(() => expect(graph().querySelectorAll("line")).toHaveLength(0))
     // Degree and the related set agree, because both read the one projection.
-    expect(within(cards()[0]).queryByText("1 related")).toBeNull()
+    expect(within(cards()[0]).queryByText("1 linked")).toBeNull()
     expect(nodeClass("Trade follows water")).toContain("dimmed")
   })
 
@@ -1181,7 +1226,7 @@ describe("the graph view and Relationship focus", () => {
     await threeNotes(user)
 
     // Moving a Note takes it and its Relationships out of this Workspace.
-    await user.click(within(cards()[1]).getByRole("button", { name: "Move or Copy Note" }))
+    await clickMenuItem(user, cards()[1], "Move/Copy")
     await user.click(within(cards()[1]).getByRole("button", { name: "Move Note" }))
     await waitFor(() => expect(cards()).toHaveLength(2))
 
@@ -1686,7 +1731,7 @@ describe("V0-17 macOS keyboard, accessibility, and external links", () => {
     const undo = screen.getByRole("button", { name: "Undo" })
     expect(undo.getAttribute("disabled")).toBeNull()
 
-    await user.click(screen.getByRole("button", { name: "Edit Note" }))
+    await editNote(user, noteCards()[0])
     const textarea = screen.getByLabelText("Note text") as HTMLTextAreaElement
     await user.type(textarea, " typed more")
     await user.keyboard("{Meta>}z{/Meta}")
@@ -1722,7 +1767,7 @@ describe("V0-17 macOS keyboard, accessibility, and external links", () => {
     const user = userEvent.setup()
     render(<App />)
     await captureNote(user, "Annotated thought")
-    await user.click(screen.getByRole("button", { name: "Add Annotation" }))
+    await clickMenuItem(user, noteCards()[0], "Add Annotation")
     const textarea = screen.getByLabelText("Annotation") as HTMLTextAreaElement
     await user.click(textarea)
     await user.paste("x".repeat(2001))
@@ -1736,7 +1781,7 @@ describe("V0-17 macOS keyboard, accessibility, and external links", () => {
     const user = userEvent.setup()
     render(<App />)
     await captureNote(user, "Editable thought")
-    await user.click(screen.getByRole("button", { name: "Edit Note" }))
+    await editNote(user, noteCards()[0])
     const textarea = screen.getByLabelText("Note text")
     await user.type(textarea, " changed")
     await user.keyboard("{Escape}")
