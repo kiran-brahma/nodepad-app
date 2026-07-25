@@ -390,9 +390,9 @@ function noteCards() {
   return screen.getAllByRole("article")
 }
 
-/** Clicks the Edit button in the hover action row of the given card. */
+/** Clicks the thought text to edit it inline. */
 async function editNote(user: ReturnType<typeof userEvent.setup>, card: HTMLElement) {
-  await user.click(within(card).getByRole("button", { name: "Edit text" }))
+  await user.click(within(card).getByRole("button", { name: "Edit note text" }))
 }
 
 /** Opens the ⌘· command menu by clicking the ⋯ button in the action row. */
@@ -581,24 +581,25 @@ describe("manual Note controls", () => {
     await captureNote(user, "First thought")
 
     await editNote(user, noteCards()[0])
-    const editor = screen.getByLabelText("Note text")
+    const editor = screen.getByRole("textbox", { name: "Edit note text" })
     await user.clear(editor)
     await user.paste("Revised thought")
-    await user.click(screen.getByRole("button", { name: "Save Note text" }))
+    // Blur commits the edit
+    await user.click(screen.getByText("Revised thought").closest(".note")!)
 
     expect(await screen.findByText("Revised thought")).toBeDefined()
     expect(screen.queryByText("First thought")).toBeNull()
   })
 
-  it("assigns a fixed Note Type from the picker", async () => {
+  it("assigns a fixed Note Type from the inline Type popover", async () => {
     const user = userEvent.setup()
     render(<App />)
     await captureNote(user, "Is this true?")
 
-    // Open the ⌘· menu and use the Set Type select
-    await openCommandMenu(user, noteCards()[0])
-    await user.selectOptions(within(noteCards()[0]).getByLabelText("Set Type"), "question")
-    // The badge, not the picker's own option, reports the committed Note Type.
+    // Click the Type tag to open the inline popover
+    await user.click(within(noteCards()[0]).getByRole("button", { name: "Change Note Type" }))
+    await user.click(within(noteCards()[0]).getByRole("option", { name: "Question" }))
+    // The tag reports the committed Note Type.
     await waitFor(() =>
       expect(within(noteCards()[0]).getByText("Question", { selector: ".tag" })).toBeDefined(),
     )
@@ -609,16 +610,21 @@ describe("manual Note controls", () => {
     render(<App />)
     await captureNote(user, "A thought worth a footnote")
 
-    await clickMenuItem(user, noteCards()[0], "Add Annotation")
-    await user.click(screen.getByLabelText("Annotation"))
+    // Click the "Add annotation" affordance
+    await user.click(within(noteCards()[0]).getByRole("button", { name: "Add annotation" }))
+    const editor = screen.getByRole("textbox", { name: "Edit annotation" })
+    await user.click(editor)
     await user.paste("Where this came from")
-    await user.click(screen.getByRole("button", { name: "Save Annotation" }))
+    // Blur commits the annotation
+    await user.click(screen.getByText("A thought worth a footnote").closest(".note")!)
     expect(await screen.findByText("Where this came from")).toBeDefined()
     expect(screen.getByText("A thought worth a footnote")).toBeDefined()
 
-    await clickMenuItem(user, noteCards()[0], "Edit Annotation")
-    await user.clear(screen.getByLabelText("Annotation"))
-    await user.click(screen.getByRole("button", { name: "Save Annotation" }))
+    // Click the annotation to edit it
+    await user.click(within(noteCards()[0]).getByRole("button", { name: "Edit annotation" }))
+    await user.clear(screen.getByRole("textbox", { name: "Edit annotation" }))
+    // Blur commits the cleared annotation
+    await user.click(screen.getByText("A thought worth a footnote").closest(".note")!)
     await waitFor(() => expect(screen.queryByText("Where this came from")).toBeNull())
     expect(screen.getByText("A thought worth a footnote")).toBeDefined()
   })
@@ -628,10 +634,13 @@ describe("manual Note controls", () => {
     render(<App />)
     await captureNote(user, "Bounded")
 
-    await clickMenuItem(user, noteCards()[0], "Add Annotation")
-    await user.click(screen.getByLabelText("Annotation"))
+    // Click the "Add annotation" affordance
+    await user.click(within(noteCards()[0]).getByRole("button", { name: "Add annotation" }))
+    const editor = screen.getByRole("textbox", { name: "Edit annotation" })
+    await user.click(editor)
     await user.paste("🧠".repeat(2001))
-    expect(screen.getByRole("button", { name: "Save Annotation" }).getAttribute("disabled")).not.toBeNull()
+    // The over-limit message is shown; pressing Enter does not commit
+    expect(screen.getByText(/Over the limit/)).toBeDefined()
   })
 
   it("pins a Note ahead of unpinned Notes and unpins it again", async () => {
@@ -924,9 +933,11 @@ describe("tiling and kanban over one committed projection", () => {
 
     await switchTo(user, "Kanban")
     await editNote(user, noteCards()[0])
-    await user.clear(screen.getByLabelText("Note text"))
+    const editor = screen.getByRole("textbox", { name: "Edit note text" })
+    await user.clear(editor)
     await user.paste("Revised in kanban")
-    await user.click(screen.getByRole("button", { name: "Save Note text" }))
+    // Blur commits the edit
+    await user.click(screen.getByText("Revised in kanban").closest(".note")!)
     expect(await screen.findByText("Revised in kanban")).toBeDefined()
 
     await switchTo(user, "Tiling")
@@ -939,8 +950,9 @@ describe("tiling and kanban over one committed projection", () => {
     render(<App />)
     await captureNote(user, "Is this true?")
     await captureNote(user, "Rivers shaped trade")
-    await openCommandMenu(user, noteCards()[0])
-    await user.selectOptions(within(noteCards()[0]).getByLabelText("Set Type"), "question")
+    // Click the Type tag to open the inline popover
+    await user.click(within(noteCards()[0]).getByRole("button", { name: "Change Note Type" }))
+    await user.click(within(noteCards()[0]).getByRole("option", { name: "Question" }))
     await waitFor(() =>
       expect(within(noteCards()[0]).getByText("Question", { selector: ".tag" })).toBeDefined(),
     )
@@ -1732,15 +1744,15 @@ describe("V0-17 macOS keyboard, accessibility, and external links", () => {
     expect(undo.getAttribute("disabled")).toBeNull()
 
     await editNote(user, noteCards()[0])
-    const textarea = screen.getByLabelText("Note text") as HTMLTextAreaElement
+    const textarea = screen.getByRole("textbox", { name: "Edit note text" }) as HTMLTextAreaElement
     await user.type(textarea, " typed more")
     await user.keyboard("{Meta>}z{/Meta}")
 
     // The textarea's own undo ran; the Workspace undo did not, so the one
     // committed change is still undoable afterwards.
     expect(undo.getAttribute("disabled")).toBeNull()
-    // Cancel the edit; the committed Note is unchanged.
-    await user.click(screen.getByRole("button", { name: "Cancel" }))
+    // Cancel the edit with Escape; the committed Note is unchanged.
+    await user.keyboard("{Escape}")
     expect(screen.getByText("Original thought")).toBeDefined()
   })
 
@@ -1767,14 +1779,13 @@ describe("V0-17 macOS keyboard, accessibility, and external links", () => {
     const user = userEvent.setup()
     render(<App />)
     await captureNote(user, "Annotated thought")
-    await clickMenuItem(user, noteCards()[0], "Add Annotation")
-    const textarea = screen.getByLabelText("Annotation") as HTMLTextAreaElement
-    await user.click(textarea)
+    // Click the "Add annotation" affordance
+    await user.click(within(noteCards()[0]).getByRole("button", { name: "Add annotation" }))
+    const editor = screen.getByRole("textbox", { name: "Edit annotation" })
+    await user.click(editor)
     await user.paste("x".repeat(2001))
 
     expect(screen.getByText(/Over the limit/)).toBeDefined()
-    const save = screen.getByRole("button", { name: "Save Annotation" })
-    expect(save.getAttribute("disabled")).not.toBeNull()
   })
 
   it("Escape cancels an inline Note edit on the Note detail surface", async () => {
@@ -1782,11 +1793,11 @@ describe("V0-17 macOS keyboard, accessibility, and external links", () => {
     render(<App />)
     await captureNote(user, "Editable thought")
     await editNote(user, noteCards()[0])
-    const textarea = screen.getByLabelText("Note text")
+    const textarea = screen.getByRole("textbox", { name: "Edit note text" })
     await user.type(textarea, " changed")
     await user.keyboard("{Escape}")
     // The edit form is gone and the committed Note is unchanged.
-    expect(screen.queryByLabelText("Note text")).toBeNull()
+    expect(screen.queryByRole("textbox", { name: "Edit note text" })).toBeNull()
     expect(screen.getByText("Editable thought")).toBeDefined()
   })
 

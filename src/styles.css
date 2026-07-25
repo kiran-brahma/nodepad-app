@@ -183,8 +183,6 @@ select { border: 1px solid #bcae9d; border-radius: 6px; font: inherit; padding: 
 .markdown > :first-child { margin-top: 0; }
 .markdown > :last-child { margin-bottom: 0; }
 .annotation { border-left: 3px solid #cdbfb0; color: #5d4f47; margin: .6rem 0; padding-left: .7rem; }
-.over-limit { color: #b0412f; }
-
 /* Modals and the command palette sit above the workspace on a scrim. They
    are true focus-trapping surfaces; the rest of the UI keeps its inline
    style. */
@@ -263,6 +261,59 @@ select { border: 1px solid #bcae9d; border-radius: 6px; font: inherit; padding: 
   line-height: 1.4;
 }
 
+/* Type tag is clickable for the inline Type popover */
+.note .type-tag {
+  cursor: pointer;
+  position: relative;
+}
+
+.note .type-tag:hover {
+  background: #e4d9c9;
+}
+
+/* Inline Type popover: appears below the tag */
+.note .type-popover {
+  position: absolute;
+  top: 1.6rem;
+  left: 0;
+  z-index: 40;
+  background: #fffdf8;
+  border: 1px solid #bcae9d;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(41, 32, 29, 0.15);
+  padding: 0.3rem;
+  min-width: 10rem;
+  max-height: 18rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.note .type-popover .type-option {
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font: inherit;
+  padding: 0.35rem 0.5rem;
+  text-align: left;
+  width: 100%;
+  color: #29201d;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.note .type-popover .type-option:hover {
+  background: #f1e8dc;
+}
+
+.note .type-popover .type-option.selected {
+  background: #e4d9c9;
+  font-weight: 600;
+}
+
 /* Hover action row: hidden by default, revealed on card hover */
 .note .action-row {
   display: flex;
@@ -309,11 +360,69 @@ select { border: 1px solid #bcae9d; border-radius: 6px; font: inherit; padding: 
   line-height: 1.5;
 }
 
+.note .annotation-aside p[role="button"] {
+  cursor: pointer;
+}
+
+.note .annotation-aside p[role="button"]:hover {
+  color: #29201d;
+}
+
 .note .annotation-aside .badge {
   font-size: 0.6rem;
   padding: 0.15rem 0.4rem;
   margin-top: 0.25rem;
   display: inline-block;
+}
+
+/* Add annotation affordance */
+.note .annotation-aside.annotation-add span[role="button"] {
+  color: #9a8f84;
+  font-size: 0.8rem;
+  cursor: pointer;
+  font-style: italic;
+}
+
+.note .annotation-aside.annotation-add span[role="button"]:hover {
+  color: #6f625a;
+}
+
+/* Inline editor textarea */
+.note .inline-editor {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  padding: 0.4rem;
+  border: 1px solid #bcae9d;
+  border-radius: 6px;
+  background: #fffdf8;
+  color: #29201d;
+  resize: vertical;
+  min-height: 4rem;
+}
+
+.note .inline-editor:focus {
+  outline: none;
+  border-color: #8a7a6a;
+  box-shadow: 0 0 0 2px rgba(138, 122, 106, 0.2);
+}
+
+/* Annotation editor wrapper */
+.note .annotation-editor {
+  margin: 0.5rem 0;
+}
+
+.note .annotation-count {
+  font-size: 0.7rem;
+  color: #9a8f84;
+  margin: 0.25rem 0 0;
+}
+
+.note .over-limit {
+  color: #c0392b;
+  font-weight: 600;
 }
 
 /* Meta line: linked count, first label, enrichment status */
@@ -369,23 +478,4 @@ select { border: 1px solid #bcae9d; border-radius: 6px; font: inherit; padding: 
 
 .note .command-menu button[role="menuitem"]:hover {
   background: #f1e8dc;
-}
-
-.note .command-menu .command-menu-item {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.45rem 0.6rem;
-  font-size: 0.85rem;
-}
-
-.note .command-menu .command-menu-item label {
-  white-space: nowrap;
-  color: #29201d;
-}
-
-.note .command-menu .command-menu-item select {
-  flex: 1;
-  font-size: 0.8rem;
-  padding: 0.2rem 0.4rem;
 }
