@@ -4,6 +4,7 @@ import { noteViewLabel, NOTE_VIEWS, type NoteView } from "./note-views"
 import { TilingView } from "./tiling-view"
 import { KanbanView } from "./kanban-view"
 import { GraphView } from "./graph-view"
+import { CanvasView } from "./canvas-view"
 import type { ThinkingGraph } from "./thinking-graph"
 import type { NoteFocus } from "./note-focus"
 
@@ -21,6 +22,7 @@ export function CommittedNotesSection({
   canUndo,
   onChooseView,
   onUndo,
+  onSetPosition,
   card,
   pendingSyntheses,
 }: {
@@ -33,6 +35,7 @@ export function CommittedNotesSection({
   canUndo: boolean
   onChooseView: (view: NoteView) => void
   onUndo: () => void
+  onSetPosition: (noteId: string, x: number, y: number) => void
   card: (note: Note) => ReactNode
   /** Undecided Syntheses, drawn provisionally by the graph and by nothing
    *  else. They are not Notes, so no other view arranges them. */
@@ -80,6 +83,8 @@ export function CommittedNotesSection({
         )
       ) : view === "tiling" ? (
         <TilingView notes={notes} card={card} />
+      ) : view === "canvas" ? (
+        <CanvasView notes={notes} card={card} onSetPosition={onSetPosition} />
       ) : (
         <KanbanView notes={notes} card={card} />
       )}

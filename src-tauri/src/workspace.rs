@@ -204,6 +204,8 @@ pub struct Note {
     pub(crate) created_at: String,
     pub(crate) updated_at: String,
     pub(crate) pinned: bool,
+    pub(crate) canvas_x: Option<f64>,
+    pub(crate) canvas_y: Option<f64>,
     /// Bumped on every commit that touches this Note. The Enrichment
     /// Workflow captures the value at request time and refuses to apply a
     /// result that names a different revision, so an edit made during
@@ -326,6 +328,8 @@ impl Note {
             created_at: updated_at.to_owned(),
             updated_at: updated_at.to_owned(),
             pinned: false,
+            canvas_x: None,
+            canvas_y: None,
             enrichment_revision: 0,
             last_enriched_at: None,
             labels,
@@ -599,6 +603,8 @@ pub(crate) enum WorkspaceError {
     UnknownNoteType,
     #[error("That is not an Assistance Policy Nodepad recognizes.")]
     UnknownAssistancePolicy,
+    #[error("A canvas position must be a finite coordinate.")]
+    InvalidCanvasPosition,
     #[error(
         "A Label needs one to four words and may not exceed {MAX_LABEL_NAME_SCALARS} characters."
     )]
@@ -638,6 +644,7 @@ impl WorkspaceError {
             | Self::AnnotationTooLong
             | Self::UnknownNoteType
             | Self::UnknownAssistancePolicy
+            | Self::InvalidCanvasPosition
             | Self::InvalidLabelName
             | Self::SelfRelationship
             | Self::CrossWorkspaceRelationship
@@ -758,6 +765,8 @@ pub trait ThinkingWorkspaceInterface {
             created_at: now.clone(),
             updated_at: now,
             pinned: false,
+            canvas_x: None,
+            canvas_y: None,
             enrichment_revision: 0,
             last_enriched_at: None,
             labels: vec![],
@@ -832,6 +841,27 @@ pub trait ThinkingWorkspaceInterface {
         repinned.enrichment_revision = previous.enrichment_revision + 1;
         self.commit_note(
             NoteMutation::Replace(repinned),
+            NoteMutation::Replace(previous),
+        )
+    }
+
+    fn set_note_position(
+        &mut self,
+        note_id: &str,
+        x: f64,
+        y: f64,
+    ) -> Result<WorkspaceSnapshot, WorkspaceError> {
+        if !x.is_finite() || !y.is_finite() {
+            return Err(WorkspaceError::InvalidCanvasPosition);
+        }
+        let previous = self.note(note_id)?;
+        let mut positioned = previous.clone();
+        positioned.canvas_x = Some(x);
+        positioned.canvas_y = Some(y);
+        positioned.updated_at = timestamp();
+        positioned.enrichment_revision = previous.enrichment_revision + 1;
+        self.commit_note(
+            NoteMutation::Replace(positioned),
             NoteMutation::Replace(previous),
         )
     }
@@ -1156,6 +1186,14 @@ pub trait ThinkingWorkspaceInterface {
     fn set_note_pinned_outcome(&mut self, note_id: &str, pinned: bool) -> WorkspaceCommandResult {
         outcome(self.set_note_pinned(note_id, pinned))
     }
+    fn set_note_position_outcome(
+        &mut self,
+        note_id: &str,
+        x: f64,
+        y: f64,
+    ) -> WorkspaceCommandResult {
+        outcome(self.set_note_position(note_id, x, y))
+    }
     fn delete_note_outcome(&mut self, note_id: &str) -> WorkspaceCommandResult {
         outcome(self.delete_note(note_id))
     }
@@ -1402,7 +1440,7 @@ impl WorkspaceStore {
             note_revision_map.insert(note.id.clone(), note.enrichment_revision);
             transaction
                 .execute(
-                    "INSERT INTO notes (id, workspace_id, markdown, note_type, note_type_provenance, annotation, annotation_provenance, created_at, updated_at, pinned, enrichment_revision, last_enriched_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                "INSERT INTO notes (id, workspace_id, markdown, note_type, note_type_provenance, annotation, annotation_provenance, created_at, updated_at, pinned, canvas_x, canvas_y, enrichment_revision, last_enriched_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                     params![
                         fresh,
                         workspace_id,
@@ -1413,8 +1451,10 @@ impl WorkspaceStore {
                         note.annotation_provenance.as_str(),
                         note.created_at,
                         note.updated_at,
-                        i64::from(note.pinned),
-                        note.enrichment_revision as i64,
+                   i64::from(note.pinned),
+                    note.canvas_x,
+                    note.canvas_y,
+                   note.enrichment_revision as i64,
                         note.last_enriched_at,
                     ],
                 )
@@ -1816,6 +1856,8 @@ impl WorkspaceStore {
             created_at: now.clone(),
             updated_at: now.clone(),
             pinned: false,
+            canvas_x: None,
+            canvas_y: None,
             enrichment_revision: 0,
             last_enriched_at: None,
             labels: vec![],
@@ -1828,7 +1870,7 @@ impl WorkspaceStore {
             .map_err(WorkspaceError::Storage)?;
         transaction
             .execute(
-                "INSERT INTO notes (id, workspace_id, markdown, note_type, note_type_provenance, annotation, annotation_provenance, created_at, updated_at, pinned, enrichment_revision, last_enriched_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                "INSERT INTO notes (id, workspace_id, markdown, note_type, note_type_provenance, annotation, annotation_provenance, created_at, updated_at, pinned, canvas_x, canvas_y, enrichment_revision, last_enriched_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     note.id,
                     note.workspace_id,
@@ -1839,8 +1881,10 @@ impl WorkspaceStore {
                     note.annotation_provenance.as_str(),
                     note.created_at,
                     note.updated_at,
-                    i64::from(note.pinned),
-                    note.enrichment_revision as i64,
+                        i64::from(note.pinned),
+                        note.canvas_x,
+                        note.canvas_y,
+                        note.enrichment_revision as i64,
                     note.last_enriched_at,
                 ],
             )
@@ -2157,7 +2201,7 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
             .map_err(WorkspaceError::Storage)?;
         let changed = match mutation {
             NoteMutation::Insert(note) => transaction.execute(
-                "INSERT INTO notes (id, workspace_id, markdown, note_type, note_type_provenance, annotation, annotation_provenance, created_at, updated_at, pinned, enrichment_revision, last_enriched_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                "INSERT INTO notes (id, workspace_id, markdown, note_type, note_type_provenance, annotation, annotation_provenance, created_at, updated_at, pinned, canvas_x, canvas_y, enrichment_revision, last_enriched_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     note.id,
                     note.workspace_id,
@@ -2169,12 +2213,14 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
                     note.created_at,
                     note.updated_at,
                     i64::from(note.pinned),
+                    note.canvas_x,
+                    note.canvas_y,
                     note.enrichment_revision as i64,
                     note.last_enriched_at,
                 ],
             ),
             NoteMutation::Replace(note) => transaction.execute(
-                "UPDATE notes SET markdown = ?2, note_type = ?3, note_type_provenance = ?4, annotation = ?5, annotation_provenance = ?6, updated_at = ?7, pinned = ?8, enrichment_revision = ?9 WHERE id = ?1",
+                "UPDATE notes SET markdown = ?2, note_type = ?3, note_type_provenance = ?4, annotation = ?5, annotation_provenance = ?6, updated_at = ?7, pinned = ?8, canvas_x = ?9, canvas_y = ?10, enrichment_revision = ?11 WHERE id = ?1",
                 params![
                     note.id,
                     note.markdown,
@@ -2184,6 +2230,8 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
                     note.annotation_provenance.as_str(),
                     note.updated_at,
                     i64::from(note.pinned),
+                    note.canvas_x,
+                    note.canvas_y,
                     note.enrichment_revision as i64,
                 ],
             ),
@@ -2918,6 +2966,10 @@ fn migrations() -> &'static [(i64, &'static str)] {
             10_i64,
             include_str!("../migrations/0010_cloud_provider.sql"),
         ),
+        (
+            11_i64,
+            include_str!("../migrations/0011_canvas_positions.sql"),
+        ),
     ]
 }
 
@@ -3214,7 +3266,7 @@ fn read_relationships(connection: &Connection) -> Result<Vec<Relationship>, Work
 
 fn read_snapshot(connection: &Connection) -> Result<WorkspaceSnapshot, WorkspaceError> {
     let workspaces = read_workspaces(connection)?;
-    let mut notes = connection.prepare("SELECT id, workspace_id, markdown, note_type, note_type_provenance, annotation, annotation_provenance, created_at, updated_at, pinned, enrichment_revision, last_enriched_at FROM notes")
+    let mut notes = connection.prepare("SELECT id, workspace_id, markdown, note_type, note_type_provenance, annotation, annotation_provenance, created_at, updated_at, pinned, canvas_x, canvas_y, enrichment_revision, last_enriched_at FROM notes")
         .map_err(WorkspaceError::Storage)?
         .query_map([], |row| Ok(Note {
             id: row.get(0)?,
@@ -3227,8 +3279,10 @@ fn read_snapshot(connection: &Connection) -> Result<WorkspaceSnapshot, Workspace
             created_at: row.get(7)?,
             updated_at: row.get(8)?,
             pinned: row.get::<_, i64>(9)? != 0,
-            enrichment_revision: row.get::<_, i64>(10)? as u64,
-            last_enriched_at: row.get(11)?,
+            canvas_x: row.get(10)?,
+            canvas_y: row.get(11)?,
+            enrichment_revision: row.get::<_, i64>(12)? as u64,
+            last_enriched_at: row.get(13)?,
             labels: vec![],
         }))
         .map_err(WorkspaceError::Storage)?.collect::<Result<Vec<_>, _>>().map_err(WorkspaceError::Storage)?;
@@ -4118,6 +4172,25 @@ mod tests {
             vec![note_id.to_owned(), second_id.clone()]
         );
 
+        // Canvas placement is one ordinary Note mutation: durable, reversible,
+        // and never a second storage path.
+        let positioned = committed(workspace.set_note_position_outcome(note_id, 42.5, 64.0));
+        let placed = note_in(&positioned, note_id);
+        assert_eq!((placed.canvas_x, placed.canvas_y), (Some(42.5), Some(64.0)));
+        assert!(is_validation_failure(&workspace.set_note_position_outcome(
+            note_id,
+            f64::NAN,
+            0.0
+        )));
+        let unpositioned = committed(workspace.undo_outcome(workspace_id));
+        assert_eq!(
+            (
+                note_in(&unpositioned, note_id).canvas_x,
+                note_in(&unpositioned, note_id).canvas_y
+            ),
+            (None, None)
+        );
+
         // Deleting a Note is reversible with the same identity and fields.
         let before_delete = note_in(&committed(workspace.snapshot_outcome()), &second_id);
         let after_delete = committed(workspace.delete_note_outcome(&second_id));
@@ -4674,6 +4747,28 @@ mod tests {
     }
 
     #[test]
+    fn canvas_position_survives_reopen() {
+        let path = temporary_path();
+        let (workspace_id, note_id) = {
+            let mut store = WorkspaceStore::open(&path).unwrap();
+            let workspace_id = store.snapshot().unwrap().active_workspace_id;
+            let note = store.create_note(&workspace_id, "Place me").unwrap();
+            let note_id = note.notes[0].id.clone();
+            store.set_note_position(&note_id, 128.0, 256.0).unwrap();
+            (workspace_id, note_id)
+        };
+        let reopened = WorkspaceStore::open(&path).unwrap().snapshot().unwrap();
+        let note = reopened
+            .notes
+            .iter()
+            .find(|note| note.id == note_id)
+            .unwrap();
+        assert_eq!(note.workspace_id, workspace_id);
+        assert_eq!((note.canvas_x, note.canvas_y), (Some(128.0), Some(256.0)));
+        remove_database(&path);
+    }
+
+    #[test]
     fn sqlite_recovers_labels_and_fts_search_after_reopen() {
         let path = temporary_path();
         let workspace_id = {
@@ -5130,6 +5225,32 @@ mod tests {
         assert_eq!(note.annotation, None);
         assert_eq!(note.annotation_provenance, Provenance::Default);
         assert!(note.pinned);
+        remove_database(&path);
+    }
+
+    #[test]
+    fn the_canvas_position_migration_preserves_existing_notes_with_null_positions() {
+        let path = temporary_path();
+        {
+            let connection = Connection::open(&path).unwrap();
+            for (_, sql) in migrations().iter().take(10) {
+                connection.execute_batch(sql).unwrap();
+            }
+            connection.execute_batch("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY NOT NULL, applied_at TEXT NOT NULL);").unwrap();
+            for version in 1..=10 {
+                connection
+                    .execute(
+                        "INSERT INTO schema_migrations VALUES (?1, 'then')",
+                        [version],
+                    )
+                    .unwrap();
+            }
+            connection.execute("INSERT INTO thinking_workspaces (id, name, assistance_policy, selected_model, cloud_consent_at, cloud_provider, created_at, updated_at) VALUES ('w', 'Earlier', 'manual', NULL, NULL, 'ollama', 'then', 'then')", []).unwrap();
+            connection.execute("INSERT INTO notes (id, workspace_id, markdown, note_type, note_type_provenance, annotation, annotation_provenance, created_at, updated_at, pinned, enrichment_revision, last_enriched_at) VALUES ('n', 'w', 'Written before canvas placement', 'general', 'default', NULL, 'default', 'then', 'then', 0, 0, NULL)", []).unwrap();
+        }
+        let snapshot = WorkspaceStore::open(&path).unwrap().snapshot().unwrap();
+        let note = snapshot.notes.iter().find(|note| note.id == "n").unwrap();
+        assert_eq!((note.canvas_x, note.canvas_y), (None, None));
         remove_database(&path);
     }
 

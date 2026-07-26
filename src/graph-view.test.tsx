@@ -17,6 +17,8 @@ function note(id: string, markdown: string): Note {
     createdAt: "2026-07-22T10:00:00+00:00",
     updatedAt: "2026-07-22T10:00:00+00:00",
     pinned: false,
+    canvasX: null,
+    canvasY: null,
     enrichmentRevision: 0,
     lastEnrichedAt: null,
     labels: [],
