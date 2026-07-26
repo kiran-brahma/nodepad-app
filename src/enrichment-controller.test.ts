@@ -177,6 +177,36 @@ describe("the enrichment controller", () => {
     expect(result.current.status.kind).toBe("applied")
   })
 
+  it("keeps suggested Relationships transient and does not restore a dismissed unchanged pair", async () => {
+    const withRelatedNote = {
+      ...snapshot,
+      notes: [...snapshot.notes, { ...snapshot.notes[0], id: "m", markdown: "related" }],
+    }
+    enrichNote.mockResolvedValue({
+      status: "applied",
+      result: { noteType: "claim", labels: [], annotation: null, relatedNoteIds: ["m"] },
+      snapshot: withRelatedNote,
+    })
+    const { result } = renderHook(() =>
+      useEnrichmentController({ workspaceId: "w", snapshot: withRelatedNote, enabled: true }),
+    )
+    act(() => {
+      result.current.schedule("n")
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(debounce + 10)
+    })
+    expect(result.current.suggestions).toEqual([{ noteId: "n", otherNoteId: "m", revision: 0 }])
+    act(() => {
+      result.current.dismissSuggestion("n", "m")
+      result.current.retry()
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(result.current.suggestions).toEqual([])
+  })
+
   it("maps a stale response to a failure with the stale reason", async () => {
     enrichNote.mockResolvedValue({
       status: "rejected",

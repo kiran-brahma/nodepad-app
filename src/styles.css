@@ -540,6 +540,11 @@ select { border: 1px solid #bcae9d; border-radius: 6px; font: inherit; padding: 
   font-size: .65rem;
   padding: .15rem .4rem;
 }
+.relationship-suggestion { align-items: center; display: flex; gap: .3rem; width: 100%; }
+.relationship-suggestion button { font-size: .65rem; padding: .12rem .35rem; }
+.tag-outline { background: transparent; border: 1px solid #bcae9d; color: #6f625a; }
+.tag-neutral { background: #f3eee6; border: 1px solid #dfd5c8; color: #6f625a; }
+.canvas-relationship.suggested { cursor: default; pointer-events: none; stroke-dasharray: 5 4; stroke: #8f3d27; }
 
 /* ⌘· menu: dropdown at the card's top-right */
 .note .command-menu {

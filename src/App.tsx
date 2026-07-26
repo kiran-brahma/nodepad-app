@@ -166,6 +166,15 @@ export function App() {
         registerElement={(element) => focus.registerNoteElement(note.id, element)}
         enrichment={enrichmentStatus}
         enrichmentEnabled={aiEnabled}
+        suggestedNotes={aiEnabled ? enrichment.suggestions
+          .filter((suggestion) => suggestion.noteId === note.id)
+          .flatMap((suggestion) => notes.filter((other) => other.id === suggestion.otherNoteId)) : []}
+        onAcceptSuggestion={(otherNoteId) => {
+          void submit(thinkingWorkspace.relateNotes(note.id, otherNoteId)).then((result) => {
+            if (result.committed) enrichment.dismissSuggestion(note.id, otherNoteId)
+          })
+        }}
+        onDismissSuggestion={(otherNoteId) => enrichment.dismissSuggestion(note.id, otherNoteId)}
       />
     )
   }
@@ -410,6 +419,7 @@ export function App() {
               onUnrelate={(noteId, otherNoteId) => submit(thinkingWorkspace.unrelateNotes(noteId, otherNoteId))}
               card={noteCard}
               pendingSyntheses={synthesis.pending}
+              suggestedRelationships={enrichment.suggestions}
             />
           </div>
 

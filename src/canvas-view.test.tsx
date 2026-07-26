@@ -130,4 +130,21 @@ describe("canvas placement", () => {
     fireEvent.keyDown(line, { key: "Enter" })
     expect(remove).toHaveBeenCalledWith("1", "2")
   })
+
+  it("renders an uncommitted suggested Relationship as a dashed canvas line", () => {
+    const notes = [note("1", 10, 10), note("2", 300, 10)]
+    const { getByLabelText } = render(
+      <CanvasView
+        notes={notes}
+        graph={thinkingGraph(notes, [])}
+        focus={noFocus()}
+        card={() => <div />}
+        onSetPosition={vi.fn()}
+        onRelate={vi.fn()}
+        onUnrelate={vi.fn()}
+        suggestedRelationships={[{ noteId: "1", otherNoteId: "2" }]}
+      />,
+    )
+    expect(getByLabelText("Suggested Relationship").getAttribute("class")).toContain("suggested")
+  })
 })

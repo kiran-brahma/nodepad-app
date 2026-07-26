@@ -1022,9 +1022,9 @@ pub trait ThinkingWorkspaceInterface {
     }
 
     /// The transactional commit. Implementations open a single transaction,
-    /// update the Note row, attach the suggested Labels, insert the new
-    /// Relationships with `Ai` provenance, refresh the FTS index, and
-    /// commit. A failure leaves nothing behind.
+    /// update the Note row, attach the suggested Labels, refresh the FTS
+    /// index, and commit. Suggested Relationships stay transient until the
+    /// thinker explicitly accepts one. A failure leaves nothing behind.
     fn persist_enrichment(
         &mut self,
         workspace_id: &str,
@@ -2481,19 +2481,9 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
         if applied.note_type.is_none()
             && applied.annotation.is_none()
             && applied.add_labels.is_empty()
-            && applied.add_relationships.is_empty()
         {
             return self.snapshot();
         }
-        // Capture the candidate set before the transaction so the borrow
-        // checker is happy and the relationship inserts see a stable view.
-        let existing_relationships = self.snapshot()?.relationships;
-        let note_ids: std::collections::HashSet<String> = self
-            .snapshot()?
-            .notes
-            .into_iter()
-            .map(|note| note.id)
-            .collect();
         let now = timestamp();
         let mut next = previous.clone();
         if let Some(note_type) = &applied.note_type {
@@ -2533,30 +2523,6 @@ impl ThinkingWorkspaceInterface for WorkspaceStore {
                 .execute(
                     "INSERT OR IGNORE INTO note_labels (note_id, label_id) VALUES (?1, ?2)",
                     params![note_id, label_id],
-                )
-                .map_err(WorkspaceError::Storage)?;
-        }
-        for other_id in &applied.add_relationships {
-            // A candidate that disappeared is silently dropped rather than
-            // a partial Relationship committed.
-            if !note_ids.contains(other_id) {
-                continue;
-            }
-            if is_related(&existing_relationships, note_id, other_id) {
-                continue;
-            }
-            let (first, second) = canonical_pair(note_id, other_id);
-            transaction
-                .execute(
-                    "INSERT INTO relationships (id, workspace_id, note_id_a, note_id_b, provenance, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(note_id_a, note_id_b) DO NOTHING",
-                    params![
-                        id(),
-                        workspace_id,
-                        first,
-                        second,
-                        RelationshipProvenance::Ai.as_str(),
-                        timestamp()
-                    ],
                 )
                 .map_err(WorkspaceError::Storage)?;
         }
@@ -3863,7 +3829,6 @@ mod tests {
             if applied.note_type.is_none()
                 && applied.annotation.is_none()
                 && applied.add_labels.is_empty()
-                && applied.add_relationships.is_empty()
             {
                 return self.snapshot();
             }
@@ -3910,23 +3875,6 @@ mod tests {
                         next.labels.push(stored);
                     }
                 }
-            }
-            for other_id in &applied.add_relationships {
-                if !self.notes.iter().any(|candidate| candidate.id == *other_id) {
-                    continue;
-                }
-                if is_related(&self.relationships, note_id, other_id) {
-                    continue;
-                }
-                let (first, second) = canonical_pair(note_id, other_id);
-                self.relationships.push(Relationship {
-                    id: id(),
-                    workspace_id: workspace_id.to_owned(),
-                    note_id_a: first.to_owned(),
-                    note_id_b: second.to_owned(),
-                    provenance: RelationshipProvenance::Ai,
-                    created_at: timestamp(),
-                });
             }
             self.notes[position] = next;
             self.snapshot()
@@ -6065,7 +6013,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_enrichment_adds_relationships_with_ai_provenance() {
+    fn apply_enrichment_leaves_suggested_relationships_uncommitted() {
         let mut store = MemoryStore::new();
         let workspace_id =
             workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
@@ -6075,7 +6023,6 @@ mod tests {
         let target_id = target.notes[0].id.clone();
         let other_id = other.notes[0].id.clone();
         let before_target = note_in(&committed(store.snapshot_outcome()), &target_id);
-        let before_other = note_in(&committed(store.snapshot_outcome()), &other_id);
         let mut parsed = parsed_enrichment();
         parsed.related_note_ids = vec![other_id.clone()];
         let outcome = committed(store.apply_enrichment_outcome(
@@ -6090,15 +6037,7 @@ mod tests {
             false,
         ));
         let after = &outcome;
-        assert_eq!(after.relationships.len(), 1);
-        assert_eq!(
-            after.relationships[0].provenance,
-            RelationshipProvenance::Ai
-        );
-        // The other endpoint's enrichment revision was bumped by the gate,
-        // so a later manual edit can invalidate in-flight AI against it.
-        let after_other = note_in(after, &other_id);
-        assert!(after_other.enrichment_revision() > before_other.enrichment_revision());
+        assert!(after.relationships.is_empty());
     }
 
     #[test]
@@ -6721,9 +6660,9 @@ mod tests {
             .id
             .clone();
 
-        // An AI Relationship and AI provenance on the first Note, by running
-        // one enrichment organization under a non-Manual policy. The policy is
-        // CloudAi; enrichment is admitted for any non-Manual policy.
+        // AI provenance on the first Note, by running one enrichment
+        // organization under a non-Manual policy. Suggested Relationships
+        // remain transient until the thinker explicitly accepts one.
         let token = crate::enrichment::RequestToken {
             workspace_id: workspace_id.clone(),
             note_id: first_id.clone(),
@@ -6742,8 +6681,7 @@ mod tests {
             .apply_enrichment(&workspace_id, &first_id, &enrichment, &token, false)
             .unwrap();
 
-        // A manual Relationship between the second and third Notes, so both
-        // provenances travel and neither pair overlaps the other.
+        // A manual Relationship between the second and third Notes.
         store.relate_notes(&second_id, &third_id).unwrap();
 
         // A manual Note Type and Annotation on the second Note, so manual
@@ -6857,7 +6795,7 @@ mod tests {
             assert_eq!(imported.last_enriched_at, source.last_enriched_at);
         }
 
-        // Relationships travel with fresh ids and preserved provenance.
+        // Accepted Relationships travel with fresh ids and manual provenance.
         let source_relationships: Vec<&Relationship> = source_snapshot
             .relationships
             .iter()
@@ -6874,7 +6812,6 @@ mod tests {
             .map(|relationship| &relationship.provenance)
             .collect();
         assert!(provenance.contains(&&RelationshipProvenance::Manual));
-        assert!(provenance.contains(&&RelationshipProvenance::Ai));
         for relationship in &imported_relationships {
             assert!(
                 !source_relationships

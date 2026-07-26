@@ -69,6 +69,15 @@ export interface EnrichmentController {
   clear: () => void
   /** The id of the Note whose status is currently shown. */
   activeNoteId: string | null
+  /** Validated link proposals that remain transient until the thinker links or dismisses them. */
+  suggestions: SuggestedRelationship[]
+  dismissSuggestion: (noteId: string, otherNoteId: string) => void
+}
+
+export interface SuggestedRelationship {
+  noteId: string
+  otherNoteId: string
+  revision: number
 }
 
 interface ScheduleOptions {
@@ -89,8 +98,10 @@ export function useEnrichmentController(options: ScheduleOptions): EnrichmentCon
   const { workspaceId, snapshot, enabled } = options
   const [status, setStatus] = useState<EnrichmentStatus>({ kind: "idle" })
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null)
+  const [suggestions, setSuggestions] = useState<SuggestedRelationship[]>([])
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const activeNoteIdRef = useRef<string | null>(null)
+  const dismissedSuggestions = useRef(new Set<string>())
   const attempts = useRequestGeneration()
 
   const clearTimer = useCallback(() => {
@@ -142,6 +153,24 @@ export function useEnrichmentController(options: ScheduleOptions): EnrichmentCon
         return
       }
       if (!attempts.isCurrent(generation)) return
+      if (outcome.status === "applied") {
+        const existing = new Set(
+          outcome.snapshot.relationships.flatMap((relationship) =>
+            relationship.noteIdA === noteId
+              ? [relationship.noteIdB]
+              : relationship.noteIdB === noteId
+                ? [relationship.noteIdA]
+                : [],
+          ),
+        )
+        setSuggestions((current) => [
+          ...current.filter((suggestion) => suggestion.noteId !== noteId),
+          ...outcome.result.relatedNoteIds
+            .filter((otherNoteId) => !existing.has(otherNoteId))
+            .filter((otherNoteId) => !dismissedSuggestions.current.has(suggestionKey(noteId, otherNoteId, token.revision)))
+            .map((otherNoteId) => ({ noteId, otherNoteId, revision: token.revision })),
+        ])
+      }
       applyOutcome(outcome, setStatus)
     },
     [attempts, buildToken, workspaceId],
@@ -214,8 +243,21 @@ export function useEnrichmentController(options: ScheduleOptions): EnrichmentCon
     attempts.supersede()
     activeNoteIdRef.current = null
     setActiveNoteId(null)
+    setSuggestions([])
     setStatus({ kind: "idle" })
   }, [attempts, clearTimer])
+
+  const dismissSuggestion = useCallback((noteId: string, otherNoteId: string) => {
+    setSuggestions((current) => {
+      const suggestion = current.find(
+        (candidate) => candidate.noteId === noteId && candidate.otherNoteId === otherNoteId,
+      )
+      if (suggestion) dismissedSuggestions.current.add(suggestionKey(noteId, otherNoteId, suggestion.revision))
+      return current.filter(
+        (candidate) => candidate.noteId !== noteId || candidate.otherNoteId !== otherNoteId,
+      )
+    })
+  }, [])
 
   // A controller instance survives an active Workspace or Assistance Policy
   // change. Abandon the old request before either surface can project it into
@@ -241,7 +283,13 @@ export function useEnrichmentController(options: ScheduleOptions): EnrichmentCon
     cancel,
     clear,
     activeNoteId,
+    suggestions,
+    dismissSuggestion,
   }
+}
+
+function suggestionKey(noteId: string, otherNoteId: string, revision: number): string {
+  return `${noteId}\u0000${otherNoteId}\u0000${revision}`
 }
 
 function hasEligiblePolicy(snapshot: WorkspaceSnapshot, workspaceId: string): boolean {
