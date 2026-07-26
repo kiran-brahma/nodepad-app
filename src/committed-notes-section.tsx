@@ -23,6 +23,8 @@ export function CommittedNotesSection({
   onChooseView,
   onUndo,
   onSetPosition,
+  onRelate,
+  onUnrelate,
   card,
   pendingSyntheses,
 }: {
@@ -36,6 +38,8 @@ export function CommittedNotesSection({
   onChooseView: (view: NoteView) => void
   onUndo: () => void
   onSetPosition: (noteId: string, x: number, y: number) => void
+  onRelate: (noteId: string, otherNoteId: string) => void
+  onUnrelate: (noteId: string, otherNoteId: string) => void
   card: (note: Note) => ReactNode
   /** Undecided Syntheses, drawn provisionally by the graph and by nothing
    *  else. They are not Notes, so no other view arranges them. */
@@ -84,7 +88,17 @@ export function CommittedNotesSection({
       ) : view === "tiling" ? (
         <TilingView notes={notes} card={card} />
       ) : view === "canvas" ? (
-        <CanvasView notes={notes} card={card} onSetPosition={onSetPosition} />
+        <CanvasView
+          // A canvas is the spatial Thinking Graph, not a filtered result
+          // list: every committed Relationship must keep both card endpoints.
+          notes={graph.nodes.map((node) => node.note)}
+          graph={graph}
+          focusedNoteId={focus.focusedNoteId}
+          card={card}
+          onSetPosition={onSetPosition}
+          onRelate={onRelate}
+          onUnrelate={onUnrelate}
+        />
       ) : (
         <KanbanView notes={notes} card={card} />
       )}
