@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import type { Note, PendingSynthesis } from "./workspace-client"
+import type { Note, NoteType, PendingSynthesis } from "./workspace-client"
 import { type NoteView } from "./note-views"
 import { KanbanView } from "./kanban-view"
 import { GraphView } from "./graph-view"
@@ -21,6 +21,7 @@ export function CommittedNotesSection({
   canUndo,
   onUndo,
   onSetPosition,
+  onSetNoteType,
   onRelate,
   onUnrelate,
   card,
@@ -35,6 +36,7 @@ export function CommittedNotesSection({
   canUndo: boolean
   onUndo: () => void
   onSetPosition: (noteId: string, x: number, y: number) => void
+  onSetNoteType: (note: Note, noteType: NoteType) => void
   onRelate: (noteId: string, otherNoteId: string) => void
   onUnrelate: (noteId: string, otherNoteId: string) => void
   card: (note: Note) => ReactNode
@@ -80,7 +82,7 @@ export function CommittedNotesSection({
           onUnrelate={onUnrelate}
         />
       ) : (
-        <KanbanView notes={notes} focus={focus} card={card} />
+        <KanbanView notes={notes} focus={focus} card={card} onSetNoteType={onSetNoteType} />
       )}
     </section>
   )

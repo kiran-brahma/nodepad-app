@@ -58,6 +58,7 @@ let archiveImportOutcome: import("./workspace-client").ArchiveImportOutcome = { 
 let openExternalLinkCalls = 0
 let lastOpenedExternalUrl: string | null = null
 let openLinkOutcome: import("./workspace-client").OpenLinkOutcome = { status: "opened" }
+let setNoteTypeCalls: { noteId: string; noteType: NoteType }[] = []
 
 /** The canonical pair the durable interface stores; order is not direction. */
 function canonicalPair(left: string, right: string): [string, string] {
@@ -128,6 +129,7 @@ vi.mock("@tauri-apps/api/core", () => ({
       case "edit_note_text":
         return Promise.resolve(replace(String(args.noteId), { markdown: String(args.markdown) }))
       case "set_note_type":
+        setNoteTypeCalls.push({ noteId: String(args.noteId), noteType: args.noteType as NoteType })
         return Promise.resolve(
           replace(String(args.noteId), {
             noteType: args.noteType as NoteType,
@@ -348,6 +350,7 @@ beforeEach(() => {
   openExternalLinkCalls = 0
   lastOpenedExternalUrl = null
   openLinkOutcome = { status: "opened" }
+  setNoteTypeCalls = []
   history = []
   snapshot = {
     workspaces: [
@@ -390,6 +393,15 @@ async function captureNote(user: ReturnType<typeof userEvent.setup>, markdown: s
 
 function noteCards() {
   return screen.getAllByRole("article")
+}
+
+function dragTransfer(): DataTransfer {
+  const data = new Map<string, string>()
+  return {
+    effectAllowed: "uninitialized",
+    setData: (format: string, value: string) => data.set(format, value),
+    getData: (format: string) => data.get(format) ?? "",
+  } as unknown as DataTransfer
 }
 
 /** Clicks the thought text to edit it inline. */
@@ -976,6 +988,56 @@ describe("tiling and kanban over one committed projection", () => {
     expect(within(general).getByText("Rivers shaped trade")).toBeDefined()
     // A Note Type nobody used has no column.
     expect(screen.queryByRole("group", { name: "Thesis Notes" })).toBeNull()
+  })
+
+  it("reclassifies a Note dropped in another Note Type column through the durable client", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await captureNote(user, "A question")
+    await captureNote(user, "A general thought")
+    await user.click(within(screen.getByRole("article", { name: "A question" })).getByRole("button", { name: "Change Note Type" }))
+    await user.click(within(screen.getByRole("article", { name: "A question" })).getByRole("option", { name: "Question" }))
+    await waitFor(() => expect(snapshot.notes.find((note) => note.markdown === "A question")?.noteType).toBe("question"))
+    setNoteTypeCalls = []
+
+    await switchTo(user, "Kanban")
+    const question = screen.getByRole("group", { name: "Question Notes" })
+    const general = screen.getByRole("group", { name: "General Notes" })
+    const card = within(general).getByRole("article", { name: "A general thought" })
+    const noteId = snapshot.notes.find((note) => note.markdown === "A general thought")!.id
+    const dataTransfer = dragTransfer()
+
+    fireEvent.dragStart(card.parentElement!, { dataTransfer })
+    fireEvent.dragOver(question, { dataTransfer })
+    fireEvent.drop(question, { dataTransfer })
+
+    await waitFor(() => expect(setNoteTypeCalls).toEqual([{ noteId, noteType: "question" }]))
+    expect(within(screen.getByRole("group", { name: "Question Notes" })).getAllByRole("article")).toHaveLength(2)
+    expect(screen.queryByRole("group", { name: "General Notes" })).toBeNull()
+    expect(snapshot.notes.find((note) => note.id === noteId)?.noteTypeProvenance).toBe("manual")
+
+    await switchTo(user, "Canvas")
+    expect(within(screen.getByRole("article", { name: "A general thought" })).getByText("Question", { selector: ".tag" })).toBeDefined()
+    await switchTo(user, "Graph")
+    expect(screen.getByRole("button", { name: "A general thought" })).toBeDefined()
+  })
+
+  it("does not submit a Note Type change when a Note returns to its origin column", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await captureNote(user, "A general thought")
+    await switchTo(user, "Kanban")
+    const general = screen.getByRole("group", { name: "General Notes" })
+    const card = within(general).getByRole("article", { name: "A general thought" })
+    const dataTransfer = dragTransfer()
+
+    fireEvent.dragStart(card.parentElement!, { dataTransfer })
+    fireEvent.dragOver(general, { dataTransfer })
+    fireEvent.drop(general, { dataTransfer })
+
+    expect(setNoteTypeCalls).toEqual([])
+    expect(snapshot.notes[0]?.noteType).toBe("general")
+    expect(snapshot.undoableCommands).toBe(1)
   })
 
   it("keeps the selected Note across a switch and lets it go when it leaves", async () => {
