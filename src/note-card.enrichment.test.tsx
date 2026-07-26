@@ -25,11 +25,14 @@ const note: Note = {
   lastEnrichedAt: null,
 }
 
-function Card({ status, enabled = true, onRetry = vi.fn(), onReplace = vi.fn() }: {
+function Card({ status, enabled = true, onRetry = vi.fn(), onReplace = vi.fn(), suggestedNotes = [], onAcceptSuggestion = vi.fn(), onDismissSuggestion = vi.fn() }: {
   status: EnrichmentStatus
   enabled?: boolean
   onRetry?: () => void
   onReplace?: () => void
+  suggestedNotes?: Note[]
+  onAcceptSuggestion?: (noteId: string) => void
+  onDismissSuggestion?: (noteId: string) => void
 }) {
   const drafts = useNoteDrafts()
   const intents: NoteIntents = {
@@ -44,7 +47,7 @@ function Card({ status, enabled = true, onRetry = vi.fn(), onReplace = vi.fn() }
     confirmReplaceEnrichment: () => {}, cancelReplaceEnrichment: () => {},
     editTextDraft: () => {}, editAnnotationDraft: () => {},
   }
-  return <NoteCard note={note} context={{ graph: { nodes: [{ note, degree: 0 }], links: [] }, workspaces: [] }} drafts={drafts} intents={intents} focused={false} dimmed={false} registerElement={() => {}} enrichment={status} enrichmentEnabled={enabled} />
+  return <NoteCard note={note} context={{ graph: { nodes: [{ note, degree: 0 }], links: [] }, workspaces: [] }} drafts={drafts} intents={intents} focused={false} dimmed={false} registerElement={() => {}} enrichment={status} enrichmentEnabled={enabled} suggestedNotes={suggestedNotes} onAcceptSuggestion={onAcceptSuggestion} onDismissSuggestion={onDismissSuggestion} />
 }
 
 describe("Note-card enrichment presence", () => {
@@ -69,5 +72,17 @@ describe("Note-card enrichment presence", () => {
     render(<Card enabled={false} status={{ kind: "in_flight", token: { workspaceId: "workspace-1", noteId: note.id, revision: 0, policy: "local_ai", endpoint: "http://localhost:11434", model: "phi3:latest" } }} />)
     expect(screen.getByRole("article").className).not.toContain("enrichment-active")
     expect(screen.queryByText("Organizing…")).toBeNull()
+  })
+
+  it("keeps a suggested Relationship quiet until the thinker links or dismisses it", () => {
+    const other = { ...note, id: "note-2", markdown: "A related thought" }
+    const accept = vi.fn()
+    const dismiss = vi.fn()
+    render(<Card status={{ kind: "idle" }} suggestedNotes={[other]} onAcceptSuggestion={accept} onDismissSuggestion={dismiss} />)
+    expect(screen.getByText("Relate to ‘A related thought’?"))
+    fireEvent.click(screen.getByRole("button", { name: "Link" }))
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }))
+    expect(accept).toHaveBeenCalledWith("note-2")
+    expect(dismiss).toHaveBeenCalledWith("note-2")
   })
 })

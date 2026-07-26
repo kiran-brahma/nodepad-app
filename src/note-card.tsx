@@ -541,6 +541,9 @@ export function NoteCard({
   registerElement,
   enrichment,
   enrichmentEnabled,
+  suggestedNotes = [],
+  onAcceptSuggestion,
+  onDismissSuggestion,
 }: {
   note: Note
   context: NoteCardContext
@@ -556,6 +559,9 @@ export function NoteCard({
   /** Presentation follows the active Thinking Workspace's Assistance Policy.
    *  A Manual Workspace shows none of the durable or transient AI signals. */
   enrichmentEnabled: boolean
+  suggestedNotes?: Note[]
+  onAcceptSuggestion?: (otherNoteId: string) => void
+  onDismissSuggestion?: (otherNoteId: string) => void
 }) {
   const [commandMenuOpen, setCommandMenuOpen] = useState(false)
   const [typePopoverOpen, setTypePopoverOpen] = useState(false)
@@ -711,6 +717,13 @@ export function NoteCard({
           onConfirmReplace={intents.confirmReplaceEnrichment}
           onCancelReplace={intents.cancelReplaceEnrichment}
         />
+        {suggestedNotes.map((other) => (
+          <span className="relationship-suggestion" key={other.id}>
+            Relate to ‘{notePreview(other)}’?
+            <button className="tag-outline" onClick={() => onAcceptSuggestion?.(other.id)}>Link</button>
+            <button className="tag-neutral" onClick={() => onDismissSuggestion?.(other.id)}>Dismiss</button>
+          </span>
+        ))}
       </div>
 
       {/* ── Draft editors (shown when active) ─────────────────────────── */}

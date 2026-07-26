@@ -52,6 +52,7 @@ export type CanvasRelationship = {
   target: Position
   focused: boolean
 }
+export type SuggestedCanvasRelationship = { noteId: string; otherNoteId: string }
 
 /**
  * The canvas reads its lines from the one shared Thinking Graph projection.
@@ -87,6 +88,7 @@ export function CanvasView({
   onSetPosition,
   onRelate,
   onUnrelate,
+  suggestedRelationships = [],
 }: {
   notes: Note[]
   graph: ThinkingGraph
@@ -95,6 +97,7 @@ export function CanvasView({
   onSetPosition: (noteId: string, x: number, y: number) => void
   onRelate: (noteId: string, otherNoteId: string) => void
   onUnrelate: (noteId: string, otherNoteId: string) => void
+  suggestedRelationships?: SuggestedCanvasRelationship[]
 }) {
   const canvas = useRef<HTMLDivElement>(null)
   const attempted = useRef(new Set<string>())
@@ -159,6 +162,12 @@ export function CanvasView({
   return (
     <div className="canvas" aria-label="Note canvas" ref={canvas} onPointerUp={finishLink}>
       <svg className="canvas-relationships" aria-label="Relationships">
+        {suggestedRelationships.flatMap((suggestion) => {
+          const source = positions.get(suggestion.noteId)
+          const target = positions.get(suggestion.otherNoteId)
+          if (!source || !target) return []
+          return <line aria-label="Suggested Relationship" className="canvas-relationship suggested" key={`${suggestion.noteId}-${suggestion.otherNoteId}`} x1={source.x + CANVAS_CARD_WIDTH / 2} x2={target.x + CANVAS_CARD_WIDTH / 2} y1={source.y + CANVAS_CARD_HEIGHT / 2} y2={target.y + CANVAS_CARD_HEIGHT / 2} />
+        })}
         {relationships.map((relationship) => (
           <line
             aria-label="Remove Relationship"

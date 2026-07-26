@@ -26,6 +26,7 @@ export function CommittedNotesSection({
   onUnrelate,
   card,
   pendingSyntheses,
+  suggestedRelationships = [],
 }: {
   notes: Note[]
   /** The whole Thinking Graph of the active Workspace, which no search narrows. */
@@ -43,6 +44,7 @@ export function CommittedNotesSection({
   /** Undecided Syntheses, drawn provisionally by the graph and by nothing
    *  else. They are not Notes, so no other view arranges them. */
   pendingSyntheses: PendingSynthesis[]
+  suggestedRelationships?: import("./canvas-view").SuggestedCanvasRelationship[]
 }) {
   return (
     <section aria-label="Committed Notes">
@@ -80,6 +82,7 @@ export function CommittedNotesSection({
           onSetPosition={onSetPosition}
           onRelate={onRelate}
           onUnrelate={onUnrelate}
+          suggestedRelationships={suggestedRelationships}
         />
       ) : (
         <KanbanView notes={notes} focus={focus} card={card} onSetNoteType={onSetNoteType} />
