@@ -363,6 +363,8 @@ export function App() {
             onChooseView={setView}
             onUndo={undoLastChange}
             onSetPosition={(noteId, x, y) => submit(thinkingWorkspace.setNotePosition(noteId, x, y))}
+            onRelate={(noteId, otherNoteId) => submit(thinkingWorkspace.relateNotes(noteId, otherNoteId))}
+            onUnrelate={(noteId, otherNoteId) => submit(thinkingWorkspace.unrelateNotes(noteId, otherNoteId))}
             card={noteCard}
             pendingSyntheses={synthesis.pending}
           />

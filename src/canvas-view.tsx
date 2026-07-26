@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react"
 import type { Note } from "./workspace-client"
+import type { ThinkingGraph } from "./thinking-graph"
 
 export const CANVAS_CARD_WIDTH = 208
 export const CANVAS_CARD_HEIGHT = 180
@@ -40,20 +41,64 @@ export function autoCanvasPositions(notes: Note[]): Map<string, Position> {
 }
 
 type Drag = { noteId: string; offsetX: number; offsetY: number; position: Position }
+type RelationshipDrag = { sourceNoteId: string; pointerId: number }
+
+export type CanvasRelationship = {
+  id: string
+  noteIdA: string
+  noteIdB: string
+  source: Position
+  target: Position
+  focused: boolean
+}
+
+/**
+ * The canvas reads its lines from the one shared Thinking Graph projection.
+ * A link without two displayed endpoints has no line to draw, never a second
+ * relationship list invented by this view.
+ */
+export function canvasRelationships(
+  graph: ThinkingGraph,
+  positions: ReadonlyMap<string, Position>,
+  focusedNoteId: string | null,
+): CanvasRelationship[] {
+  return graph.links.flatMap((link) => {
+    const source = positions.get(link.noteIdA)
+    const target = positions.get(link.noteIdB)
+    if (!source || !target) return []
+    return [{
+      id: link.id,
+      noteIdA: link.noteIdA,
+      noteIdB: link.noteIdB,
+      source,
+      target,
+      focused: focusedNoteId === link.noteIdA || focusedNoteId === link.noteIdB,
+    }]
+  })
+}
 
 /** A direct spatial projection of committed Notes; its drag state is transient. */
 export function CanvasView({
   notes,
+  graph,
+  focusedNoteId,
   card,
   onSetPosition,
+  onRelate,
+  onUnrelate,
 }: {
   notes: Note[]
+  graph: ThinkingGraph
+  focusedNoteId: string | null
   card: (note: Note) => ReactNode
   onSetPosition: (noteId: string, x: number, y: number) => void
+  onRelate: (noteId: string, otherNoteId: string) => void
+  onUnrelate: (noteId: string, otherNoteId: string) => void
 }) {
   const canvas = useRef<HTMLDivElement>(null)
   const attempted = useRef(new Set<string>())
   const [drag, setDrag] = useState<Drag | null>(null)
+  const [relationshipDrag, setRelationshipDrag] = useState<RelationshipDrag | null>(null)
   const automatic = autoCanvasPositions(notes)
 
   useEffect(() => {
@@ -88,8 +133,52 @@ export function CanvasView({
     onSetPosition(note.id, drag.position.x, drag.position.y)
   }
 
+  function relationshipTarget(event: PointerEvent<HTMLDivElement>): string | null {
+    const underPointer = document.elementFromPoint?.(event.clientX, event.clientY)
+    const target = underPointer ?? event.target
+    return target instanceof Element ? target.closest<HTMLElement>("[data-note-id]")?.dataset.noteId ?? null : null
+  }
+
+  function finishLink(event: PointerEvent<HTMLDivElement>) {
+    if (!relationshipDrag) return
+    if (event.pointerId !== relationshipDrag.pointerId) return
+    const captured = event.target
+    if (captured instanceof Element && captured.hasPointerCapture?.(event.pointerId)) {
+      captured.releasePointerCapture(event.pointerId)
+    }
+    const targetNoteId = relationshipTarget(event)
+    setRelationshipDrag(null)
+    if (!targetNoteId || targetNoteId === relationshipDrag.sourceNoteId) return
+    onRelate(relationshipDrag.sourceNoteId, targetNoteId)
+  }
+
+  const positions = new Map(notes.map((note) => [note.id, positionFor(note)]))
+  const relationships = canvasRelationships(graph, positions, focusedNoteId)
+
   return (
-    <div className="canvas" aria-label="Note canvas" ref={canvas}>
+    <div className="canvas" aria-label="Note canvas" ref={canvas} onPointerUp={finishLink}>
+      <svg className="canvas-relationships" aria-label="Relationships">
+        {relationships.map((relationship) => (
+          <line
+            aria-label="Remove Relationship"
+            className={relationship.focused ? "canvas-relationship focused" : "canvas-relationship"}
+            data-relationship-id={relationship.id}
+            key={relationship.id}
+            onClick={() => onUnrelate(relationship.noteIdA, relationship.noteIdB)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return
+              event.preventDefault()
+              onUnrelate(relationship.noteIdA, relationship.noteIdB)
+            }}
+            role="button"
+            tabIndex={0}
+            x1={relationship.source.x + CANVAS_CARD_WIDTH / 2}
+            x2={relationship.target.x + CANVAS_CARD_WIDTH / 2}
+            y1={relationship.source.y + CANVAS_CARD_HEIGHT / 2}
+            y2={relationship.target.y + CANVAS_CARD_HEIGHT / 2}
+          />
+        ))}
+      </svg>
       {notes.map((note) => {
         const position = positionFor(note)
         return (
@@ -112,6 +201,18 @@ export function CanvasView({
             onPointerUp={drop}
             style={{ left: position.x, top: position.y }}
           >
+            <button
+              aria-label={`Create Relationship from ${note.markdown}`}
+              className="canvas-relationship-handle"
+              onPointerDown={(event) => {
+                event.stopPropagation()
+                event.currentTarget.setPointerCapture?.(event.pointerId)
+                setRelationshipDrag({ sourceNoteId: note.id, pointerId: event.pointerId })
+              }}
+              type="button"
+            >
+              Relate
+            </button>
             {card(note)}
           </div>
         )

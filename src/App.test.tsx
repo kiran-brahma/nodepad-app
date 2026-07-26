@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 // cmdk depends on ResizeObserver and Element.scrollIntoView, neither of
@@ -1295,6 +1295,25 @@ describe("the graph view and Relationship focus", () => {
 
     await switchTo(user, "Graph")
     expect(graph().innerHTML).toBe(drawn)
+  })
+})
+
+describe("Relationships on the canvas", () => {
+  it("creates and removes a Relationship through the Thinking Workspace client", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await captureNote(user, "Cities grew around rivers")
+    await captureNote(user, "Trade follows water")
+    await user.click(within(screen.getByRole("group", { name: "Note view" })).getByRole("button", { name: "Canvas" }))
+
+    const source = screen.getByRole("button", { name: "Create Relationship from Cities grew around rivers" })
+    fireEvent.pointerDown(source, { pointerId: 1 })
+    fireEvent.pointerUp(document.querySelector('[data-note-id="note-2"]')!, { pointerId: 1, clientX: 300, clientY: 20 })
+
+    await waitFor(() => expect(snapshot.relationships).toHaveLength(1))
+    const line = screen.getByRole("button", { name: "Remove Relationship" })
+    await user.click(line)
+    await waitFor(() => expect(snapshot.relationships).toHaveLength(0))
   })
 })
 
