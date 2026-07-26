@@ -5988,6 +5988,45 @@ mod tests {
         ));
     }
 
+    /// R11 relies on this contract instead of adding a guard of its own: the
+    /// thinker may keep editing a Note while AI organizes it, and the edit —
+    /// not a UI lock — is what invalidates the response that was already in
+    /// flight against the previous text.
+    #[test]
+    fn an_edit_during_inference_invalidates_the_response() {
+        let mut store = MemoryStore::new();
+        let workspace_id =
+            workspace_id_named(&committed(store.snapshot_outcome()), DEFAULT_WORKSPACE_NAME);
+        committed(store.set_assistance_policy_outcome(&workspace_id, "local_ai"));
+        let note = committed(store.create_note_outcome(&workspace_id, "an org thought"));
+        let note_id = note.notes[0].id.clone();
+        // The revision the request token captured when inference started.
+        let revision = note.notes[0].enrichment_revision;
+        // The thinker edits the Note's text while the request is out.
+        committed(store.edit_note_text_outcome(&note_id, "a revised org thought"));
+        let outcome = store.apply_enrichment_outcome(
+            &workspace_id,
+            &note_id,
+            &parsed_enrichment(),
+            &token_for(&workspace_id, &note_id, revision),
+            false,
+        );
+        assert!(matches!(
+            outcome,
+            WorkspaceCommandResult::Failed {
+                failure: WorkspaceFailure {
+                    code: WorkspaceFailureCode::Stale,
+                    ..
+                }
+            }
+        ));
+        // The edit stands and nothing from the stale response landed.
+        let after = note_in(&committed(store.snapshot_outcome()), &note_id);
+        assert_eq!(after.markdown, "a revised org thought");
+        assert_eq!(after.note_type_provenance, Provenance::Default);
+        assert!(after.annotation.is_none());
+    }
+
     #[test]
     fn apply_enrichment_rejects_manual_policy() {
         let mut store = MemoryStore::new();

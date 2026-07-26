@@ -50,8 +50,12 @@ main { max-width: 760px; margin: 0 auto; padding: 4rem 1.5rem; }
   min-width: 0;
 }
 .app-main-topbar {
-  /* Reserved for later slices (R3/R4/R6). Currently empty. */
+  /* The view switcher on the left, the AI presence indicator on the right. */
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
 }
 .app-main-content {
   flex: 1;
@@ -271,6 +275,75 @@ select { border: 1px solid #bcae9d; border-radius: 6px; font: inherit; padding: 
 @keyframes view-fade-in {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+
+/* ── R11: Background enrichment presence ─────────────────────────────────── */
+
+/* One quiet indicator, never a control: the top bar says whether AI is
+   working or quiet and nothing else. A Manual Workspace renders none of
+   this at all. */
+.ai-presence {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: #9a8f84;
+  font: 400 0.72rem/1 system-ui, sans-serif;
+  white-space: nowrap;
+}
+.ai-presence-dot {
+  background: #cdbfb0;
+  border-radius: 999px;
+  height: 0.4rem;
+  width: 0.4rem;
+}
+.ai-presence.working {
+  color: #6f625a;
+}
+.ai-presence.working .ai-presence-dot {
+  background: #8f3d27;
+  animation: ai-pulse 1.6s ease-in-out infinite;
+}
+@keyframes ai-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
+/* The shimmer on the Note being organized: a slow sheen across the card,
+   drawn above the card's own background and below its content, so the
+   thought stays legible and every control stays clickable. */
+.note.organizing { position: relative; }
+.note.organizing::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(
+    100deg,
+    rgba(143, 61, 39, 0) 30%,
+    rgba(143, 61, 39, 0.07) 50%,
+    rgba(143, 61, 39, 0) 70%
+  );
+  background-size: 300% 100%;
+  animation: note-shimmer 1.8s linear infinite;
+}
+@keyframes note-shimmer {
+  from { background-position: 150% 0; }
+  to { background-position: -150% 0; }
+}
+
+/* The status text in the meta line reads as meta, not as a badge. */
+.note .meta .enrich-organizing { color: #9a8f84; font-style: italic; }
+.note .meta .enrich-failed { align-items: center; gap: 0.35rem; }
+
+/* Quiet badge: the same states, without the shouting. */
+.badge.quiet {
+  background: transparent;
+  border: 1px solid #ddd2c4;
+  color: #9a8f84;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  text-transform: none;
 }
 
 /* ── R4: Calm Note card ──────────────────────────────────────────────────── */

@@ -31,6 +31,7 @@ import { WorkspaceSettingsSheet } from "./workspace-settings-sheet"
 import { IntroVideo } from "./intro-video"
 import { useLocalDiscovery } from "./use-local-discovery"
 import { useEnrichmentController } from "./enrichment-controller"
+import { AiPresenceIndicator } from "./ai-presence"
 import { useSynthesisController } from "./synthesis-controller"
 import { SynthesisSection } from "./synthesis-section"
 import { useCloudDiscovery } from "./use-cloud-discovery"
@@ -147,6 +148,7 @@ export function App() {
     onRequestReplaceEnrichment: () => enrichment.requestReplace(),
     onConfirmReplaceEnrichment: () => enrichment.confirmReplace(),
     onCancelReplaceEnrichment: () => enrichment.cancelReplace(),
+    onDismissEnrichment: () => enrichment.clear(),
   })
 
   // The one card every view places, over the one set of intents.
@@ -347,18 +349,24 @@ export function App() {
         />
       }
       topbar={
-        <div className="seg" role="group" aria-label="Note view">
-          {NOTE_VIEWS.map((option) => (
-            <button
-              key={option}
-              aria-pressed={view === option}
-              className={view === option ? "active" : ""}
-              onClick={() => chooseView(option)}
-            >
-              {noteViewLabel(option)}
-            </button>
-          ))}
-        </div>
+        <>
+          <div className="seg" role="group" aria-label="Note view">
+            {NOTE_VIEWS.map((option) => (
+              <button
+                key={option}
+                aria-pressed={view === option}
+                className={view === option ? "active" : ""}
+                onClick={() => chooseView(option)}
+              >
+                {noteViewLabel(option)}
+              </button>
+            ))}
+          </div>
+          {/* The only AI signal in the main view besides the per-Note
+              shimmer. No AI configuration lives here; that is in the
+              Workspace settings sheet. */}
+          <AiPresenceIndicator enabled={aiEnabled} status={enrichment.status} />
+        </>
       }
       main={
         <>

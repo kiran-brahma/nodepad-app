@@ -30,6 +30,7 @@ export function buildNoteIntents({
   onRequestReplaceEnrichment,
   onConfirmReplaceEnrichment,
   onCancelReplaceEnrichment,
+  onDismissEnrichment,
 }: {
   drafts: NoteDrafts
   workspaces: ThinkingWorkspace[]
@@ -48,6 +49,8 @@ export function buildNoteIntents({
   onConfirmReplaceEnrichment?: () => void
   /** Called when the thinker backs out of the Re-enrich and Replace. */
   onCancelReplaceEnrichment?: () => void
+  /** Called when the thinker dismisses a failed organization's status. */
+  onDismissEnrichment?: () => void
 }): NoteIntents {
   function saveText(event: FormEvent) {
     event.preventDefault()
@@ -148,5 +151,6 @@ export function buildNoteIntents({
     requestReplaceEnrichment: () => onRequestReplaceEnrichment?.(),
     confirmReplaceEnrichment: () => onConfirmReplaceEnrichment?.(),
     cancelReplaceEnrichment: () => onCancelReplaceEnrichment?.(),
+    dismissEnrichment: () => onDismissEnrichment?.(),
   }
 }
