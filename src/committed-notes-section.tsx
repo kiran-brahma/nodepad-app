@@ -86,21 +86,21 @@ export function CommittedNotesSection({
           </div>
         )
       ) : view === "tiling" ? (
-        <TilingView notes={notes} card={card} />
+        <TilingView notes={notes} focus={focus} card={card} />
       ) : view === "canvas" ? (
         <CanvasView
           // A canvas is the spatial Thinking Graph, not a filtered result
           // list: every committed Relationship must keep both card endpoints.
           notes={graph.nodes.map((node) => node.note)}
           graph={graph}
-          focusedNoteId={focus.focusedNoteId}
+          focus={focus}
           card={card}
           onSetPosition={onSetPosition}
           onRelate={onRelate}
           onUnrelate={onUnrelate}
         />
       ) : (
-        <KanbanView notes={notes} card={card} />
+        <KanbanView notes={notes} focus={focus} card={card} />
       )}
     </section>
   )

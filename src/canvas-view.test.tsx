@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react"
 import { autoCanvasPositions, canvasRelationships, CanvasView } from "./canvas-view"
 import type { Note, Relationship } from "./workspace-client"
 import { thinkingGraph } from "./thinking-graph"
+import type { NoteFocus } from "./note-focus"
 
 function note(id: string, canvasX: number | null = null, canvasY: number | null = null): Note {
   return {
@@ -30,6 +31,17 @@ function relationship(id: string, noteIdA: string, noteIdB: string): Relationshi
   return { id, workspaceId: "w", noteIdA, noteIdB, provenance: "manual", createdAt: "2026-07-26T10:00:00+00:00" }
 }
 
+function noFocus(): NoteFocus {
+  return {
+    focusedNoteId: null,
+    litNoteIds: null,
+    focusNote: vi.fn(),
+    toggleFocus: vi.fn(),
+    hoverNote: vi.fn(),
+    registerNoteElement: vi.fn(),
+  }
+}
+
 function canvas(
   notes: Note[],
   callbacks: Partial<Pick<React.ComponentProps<typeof CanvasView>, "onSetPosition" | "onRelate" | "onUnrelate">> = {},
@@ -38,7 +50,7 @@ function canvas(
     <CanvasView
       notes={notes}
       graph={thinkingGraph(notes, [])}
-      focusedNoteId={null}
+      focus={noFocus()}
       card={() => <div />}
       onSetPosition={callbacks.onSetPosition ?? vi.fn()}
       onRelate={callbacks.onRelate ?? vi.fn()}
@@ -61,7 +73,7 @@ describe("canvas placement", () => {
       <CanvasView
         notes={[note("1", 10, 10)]}
         graph={thinkingGraph([note("1", 10, 10)], [])}
-        focusedNoteId={null}
+        focus={noFocus()}
         card={() => <button>Control</button>}
         onSetPosition={commit}
         onRelate={vi.fn()}
@@ -106,14 +118,14 @@ describe("canvas placement", () => {
       <CanvasView
         notes={notes}
         graph={graph}
-        focusedNoteId="1"
+        focus={{ ...noFocus(), focusedNoteId: "1", litNoteIds: new Set(["1"]) }}
         card={() => <div />}
         onSetPosition={vi.fn()}
         onRelate={vi.fn()}
         onUnrelate={remove}
       />,
     )
-    expect(canvasRelationships(graph, new Map([["1", { x: 10, y: 10 }], ["2", { x: 300, y: 10 }]]), "1")).toHaveLength(1)
+    expect(canvasRelationships(graph, new Map([["1", { x: 10, y: 10 }], ["2", { x: 300, y: 10 }]]), new Set(["1"]))).toHaveLength(1)
     const line = getByRole("button", { name: "Remove Relationship" })
     fireEvent.keyDown(line, { key: "Enter" })
     expect(remove).toHaveBeenCalledWith("1", "2")

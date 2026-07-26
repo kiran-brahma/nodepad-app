@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react"
 import type { Note } from "./workspace-client"
 import type { ThinkingGraph } from "./thinking-graph"
+import type { NoteFocus } from "./note-focus"
 
 export const CANVAS_CARD_WIDTH = 208
 export const CANVAS_CARD_HEIGHT = 180
@@ -60,7 +61,7 @@ export type CanvasRelationship = {
 export function canvasRelationships(
   graph: ThinkingGraph,
   positions: ReadonlyMap<string, Position>,
-  focusedNoteId: string | null,
+  litNoteIds: ReadonlySet<string> | null,
 ): CanvasRelationship[] {
   return graph.links.flatMap((link) => {
     const source = positions.get(link.noteIdA)
@@ -72,7 +73,7 @@ export function canvasRelationships(
       noteIdB: link.noteIdB,
       source,
       target,
-      focused: focusedNoteId === link.noteIdA || focusedNoteId === link.noteIdB,
+      focused: litNoteIds !== null && (litNoteIds.has(link.noteIdA) || litNoteIds.has(link.noteIdB)),
     }]
   })
 }
@@ -81,7 +82,7 @@ export function canvasRelationships(
 export function CanvasView({
   notes,
   graph,
-  focusedNoteId,
+  focus,
   card,
   onSetPosition,
   onRelate,
@@ -89,7 +90,7 @@ export function CanvasView({
 }: {
   notes: Note[]
   graph: ThinkingGraph
-  focusedNoteId: string | null
+  focus: NoteFocus
   card: (note: Note) => ReactNode
   onSetPosition: (noteId: string, x: number, y: number) => void
   onRelate: (noteId: string, otherNoteId: string) => void
@@ -153,7 +154,7 @@ export function CanvasView({
   }
 
   const positions = new Map(notes.map((note) => [note.id, positionFor(note)]))
-  const relationships = canvasRelationships(graph, positions, focusedNoteId)
+  const relationships = canvasRelationships(graph, positions, focus.litNoteIds)
 
   return (
     <div className="canvas" aria-label="Note canvas" ref={canvas} onPointerUp={finishLink}>
@@ -186,6 +187,10 @@ export function CanvasView({
             className="canvas-note"
             data-note-id={note.id}
             key={note.id}
+            onMouseEnter={() => focus.hoverNote(note.id)}
+            onMouseLeave={() => focus.hoverNote(null)}
+            onFocus={() => focus.hoverNote(note.id)}
+            onBlur={() => focus.hoverNote(null)}
             onPointerDown={(event) => {
               if ((event.target as HTMLElement).closest("button, input, textarea, select, a, [role=button], [role=listbox]")) return
               const bounds = event.currentTarget.getBoundingClientRect()
