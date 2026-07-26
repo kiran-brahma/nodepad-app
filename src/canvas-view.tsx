@@ -127,7 +127,7 @@ export function CanvasView({
 
   function drop(event: PointerEvent<HTMLDivElement>) {
     if (!drag) return
-    event.currentTarget.releasePointerCapture(event.pointerId)
+    event.currentTarget.releasePointerCapture?.(event.pointerId)
     const note = notes.find((candidate) => candidate.id === drag.noteId)
     setDrag(null)
     if (!note || (note.canvasX === drag.position.x && note.canvasY === drag.position.y)) return
@@ -194,7 +194,7 @@ export function CanvasView({
             onPointerDown={(event) => {
               if ((event.target as HTMLElement).closest("button, input, textarea, select, a, [role=button], [role=listbox]")) return
               const bounds = event.currentTarget.getBoundingClientRect()
-              event.currentTarget.setPointerCapture(event.pointerId)
+              event.currentTarget.setPointerCapture?.(event.pointerId)
               setDrag({
                 noteId: note.id,
                 offsetX: event.clientX - bounds.left,

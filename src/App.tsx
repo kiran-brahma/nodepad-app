@@ -393,6 +393,7 @@ export function App() {
               canUndo={canUndo}
               onUndo={undoLastChange}
               onSetPosition={(noteId, x, y) => submit(thinkingWorkspace.setNotePosition(noteId, x, y))}
+              onSetNoteType={noteIntents.setNoteType}
               onRelate={(noteId, otherNoteId) => submit(thinkingWorkspace.relateNotes(noteId, otherNoteId))}
               onUnrelate={(noteId, otherNoteId) => submit(thinkingWorkspace.unrelateNotes(noteId, otherNoteId))}
               card={noteCard}
