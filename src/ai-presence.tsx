@@ -5,7 +5,7 @@ import type { EnrichmentStatus } from "./enrichment-controller"
  * `quiet` at every other moment. Two states only, so the shimmer on a Note
  * and the top-bar indicator can never disagree about whether AI is busy.
  */
-export type AiPresence = "quiet" | "working"
+type AiPresence = "quiet" | "working"
 
 /**
  * The one derivation of presence from the Enrichment Workflow's status. The
@@ -13,9 +13,18 @@ export type AiPresence = "quiet" | "working"
  * "is AI organizing anything" and "is this Note being organized" are the same
  * question asked of the same value. Nothing else keeps a copy.
  */
-export function aiPresence(status: EnrichmentStatus | undefined): AiPresence {
-  if (!status) return "quiet"
-  return status.kind === "debouncing" || status.kind === "in_flight" ? "working" : "quiet"
+function aiPresence(status: EnrichmentStatus | undefined): AiPresence {
+  return organizing(status) ? "working" : "quiet"
+}
+
+/** The one statement of what "AI is busy with this Note" means. A type guard,
+ *  so a caller that needs the narrowed status gets it from the same rule the
+ *  presence indicator reads. */
+export function organizing(
+  status: EnrichmentStatus | undefined,
+): status is Extract<EnrichmentStatus, { kind: "debouncing" } | { kind: "in_flight" }> {
+  if (!status) return false
+  return status.kind === "debouncing" || status.kind === "in_flight"
 }
 
 /**

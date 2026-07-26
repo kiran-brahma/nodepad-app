@@ -153,8 +153,11 @@ export function App() {
 
   // The one card every view places, over the one set of intents.
   function noteCard(note: Note) {
+    // The one gate on per-Note AI presence, the same predicate the top-bar
+    // indicator reads. A Workspace switched to Manual mid-flight loses its
+    // shimmer with the indicator, never after it.
     const enrichmentStatus =
-      enrichment.activeNoteId === note.id ? enrichment.status : undefined
+      aiEnabled && enrichment.activeNoteId === note.id ? enrichment.status : undefined
     return (
       <NoteCard
         key={note.id}

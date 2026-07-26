@@ -309,13 +309,16 @@ select { border: 1px solid #bcae9d; border-radius: 6px; font: inherit; padding: 
 }
 
 /* The shimmer on the Note being organized: a slow sheen across the card,
-   drawn above the card's own background and below its content, so the
-   thought stays legible and every control stays clickable. */
+   drawn above the card's own background and below its content (a negative
+   z-index paints behind in-flow content but in front of the parent's
+   background), so the thought stays legible and every control stays
+   clickable. */
 .note.organizing { position: relative; }
 .note.organizing::after {
   content: "";
   position: absolute;
   inset: 0;
+  z-index: -1;
   border-radius: inherit;
   pointer-events: none;
   background: linear-gradient(
@@ -330,6 +333,19 @@ select { border: 1px solid #bcae9d; border-radius: 6px; font: inherit; padding: 
 @keyframes note-shimmer {
   from { background-position: 150% 0; }
   to { background-position: -150% 0; }
+}
+
+/* The global reduced-motion rule neutralises both animations, which would
+   park the sheen off the card and the dot at a third opacity — presence
+   would read as nothing at all. A static tint and a solid dot say the same
+   thing without moving. */
+@media (prefers-reduced-motion: reduce) {
+  .note.organizing::after {
+    background: rgba(143, 61, 39, 0.05);
+  }
+  .ai-presence.working .ai-presence-dot {
+    opacity: 1;
+  }
 }
 
 /* The status text in the meta line reads as meta, not as a badge. */

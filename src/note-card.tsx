@@ -29,7 +29,7 @@ import {
 } from "./note-transfer"
 import type { NoteDrafts } from "./note-drafts"
 import type { EnrichmentStatus } from "./enrichment-controller"
-import { aiPresence } from "./ai-presence"
+import { organizing as aiOrganizing } from "./ai-presence"
 
 /**
  * Every intent a Note card can raise. One object is built once, in App, and
@@ -384,14 +384,12 @@ function NoteEnrichmentBadge({
     }
     return null
   }
-  if (status.kind === "debouncing" || status.kind === "in_flight") {
+  if (aiOrganizing(status)) {
     // The shimmer on the card is the visible signal; this stays a plain,
-    // quiet line so nothing competes with the thought itself.
-    return (
-      <span className="enrich-organizing" role="status" aria-live="polite">
-        Organizing…
-      </span>
-    )
+    // quiet line so nothing competes with the thought itself. It is not a
+    // live region: the card's `aria-busy` and the one top-bar indicator
+    // announce the same fact, and announcing it three times is not quiet.
+    return <span className="enrich-organizing">Organizing…</span>
   }
   if (status.kind === "applied") {
     return <span className="badge quiet" aria-label="Organized by AI">AI organized</span>
@@ -580,6 +578,10 @@ export function NoteCard({
   // because all three read one projection.
   const relatedCount = nodeDegree(context.graph, note.id)
   const firstLabel = note.labels[0]?.name
+  // Whether AI is organizing this Note right now, asked once and answered by
+  // the one presence derivation, so the shimmer, `aria-busy`, and the meta
+  // line cannot disagree.
+  const organizing = aiOrganizing(enrichment)
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     // ⌘· (Command+Period) opens or closes the command menu
@@ -604,7 +606,7 @@ export function NoteCard({
         // A shimmer while AI organizes this Note. Presentation only: the card
         // stays fully editable, and the durable revision guard is what
         // invalidates a response the thinker's edit has overtaken.
-        aiPresence(enrichment) === "working" ? "organizing" : "",
+        organizing ? "organizing" : "",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -615,6 +617,9 @@ export function NoteCard({
       aria-label={notePreview(note)}
       tabIndex={-1}
       aria-current={focused ? "true" : undefined}
+      // Something is being worked out about this Note. It stays editable; the
+      // flag only tells assistive technology the card may change under it.
+      aria-busy={organizing || undefined}
       ref={registerElement}
       onKeyDown={handleKeyDown}
     >

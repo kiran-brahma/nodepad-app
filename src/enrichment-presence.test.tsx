@@ -99,6 +99,18 @@ vi.mock("@tauri-apps/api/core", () => ({
         return new Promise<EnrichmentCommandOutcome>((resolve) => {
           settleEnrichment = resolve
         })
+      case "set_assistance_policy": {
+        const policy = args.policy as AssistancePolicy
+        snapshot = {
+          ...snapshot,
+          workspaces: snapshot.workspaces.map((workspace) =>
+            workspace.id === args.workspaceId
+              ? { ...workspace, assistancePolicy: policy }
+              : workspace,
+          ),
+        }
+        return Promise.resolve(committed())
+      }
       case "discover_local_models":
         return Promise.resolve({ status: "committed", models: ["phi3:latest"] })
       case "request_synthesis":
@@ -148,6 +160,13 @@ function card(): HTMLElement {
   return screen.getAllByRole("article")[0]
 }
 
+/** The Note reads as being worked on: the shimmer and the `aria-busy` flag
+ *  are the same fact, so both are checked together. */
+function shimmering(): boolean {
+  const element = card()
+  return element.className.includes("organizing") && element.getAttribute("aria-busy") === "true"
+}
+
 async function renderApp(policy: AssistancePolicy): Promise<void> {
   snapshot = workspaceSnapshot(policy)
   render(<App />)
@@ -169,13 +188,13 @@ describe("background enrichment presence", () => {
   it("shimmers the Note and reads 'AI · working' while it is being organized", async () => {
     await renderApp("local_ai")
     expect(screen.getByText("AI · quiet")).toBeTruthy()
-    expect(card().className).not.toContain("organizing")
+    expect(shimmering()).toBe(false)
 
     await editNoteText("Cities grew around rivers and harbours")
     await reachInFlight()
 
     expect(enrichCalls).toEqual([{ noteId, force: false }])
-    expect(card().className).toContain("organizing")
+    expect(shimmering()).toBe(true)
     expect(screen.getByText("AI · working")).toBeTruthy()
     expect(screen.queryByText("AI · quiet")).toBeNull()
   })
@@ -191,7 +210,7 @@ describe("background enrichment presence", () => {
       snapshot,
     })
 
-    expect(card().className).not.toContain("organizing")
+    expect(shimmering()).toBe(false)
     expect(screen.getByText("AI · quiet")).toBeTruthy()
   })
 
@@ -199,7 +218,7 @@ describe("background enrichment presence", () => {
     await renderApp("local_ai")
     await editNoteText("Trade follows water")
     await reachInFlight()
-    expect(card().className).toContain("organizing")
+    expect(shimmering()).toBe(true)
 
     // No overlay, no disabled control: the thought opens for editing and the
     // edit commits while the request is still out.
@@ -222,8 +241,26 @@ describe("background enrichment presence", () => {
 
     expect(screen.queryByText("AI · quiet")).toBeNull()
     expect(screen.queryByText("AI · working")).toBeNull()
-    expect(card().className).not.toContain("organizing")
+    expect(shimmering()).toBe(false)
     expect(enrichCalls).toEqual([])
+  })
+
+  it("drops the shimmer with the indicator when the policy turns Manual mid-flight", async () => {
+    await renderApp("local_ai")
+    await editNoteText("A thought under review")
+    await reachInFlight()
+    expect(shimmering()).toBe(true)
+
+    fireEvent.click(screen.getByRole("button", { name: "Workspace settings" }))
+    fireEvent.click(screen.getByRole("button", { name: "Manual" }))
+    await flush()
+
+    // Presence is gated by one predicate, so the Note cannot keep shimmering
+    // in a Workspace whose top bar has already gone silent.
+    expect(shimmering()).toBe(false)
+    expect(screen.queryByText("Organizing…")).toBeNull()
+    expect(screen.queryByText("AI · working")).toBeNull()
+    expect(screen.queryByText("AI · quiet")).toBeNull()
   })
 
   it("offers inline retry and dismiss when an organization fails", async () => {
