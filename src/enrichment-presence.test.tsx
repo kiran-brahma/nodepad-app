@@ -19,6 +19,8 @@ import type { EnrichmentCommandOutcome } from "./enrichment-contracts"
 
 const workspaceId = "workspace-1"
 const noteId = "note-1"
+/** The Note the capture bar commits, which only exists after `create_note`. */
+const capturedNoteId = "note-2"
 const noteText = "Cities grew around rivers"
 let snapshot: WorkspaceSnapshot
 /** Every `enrich_note` call, so a Retry or a Replace is observable. */
@@ -76,6 +78,23 @@ vi.mock("@tauri-apps/api/core", () => ({
     switch (command) {
       case "get_workspace_snapshot":
         return Promise.resolve(committed())
+      case "create_note": {
+        snapshot = {
+          ...snapshot,
+          notes: [
+            ...snapshot.notes,
+            {
+              ...seededNote(),
+              id: capturedNoteId,
+              markdown: String(args.markdown),
+              createdAt: "2026-07-22T11:00:00+00:00",
+              updatedAt: "2026-07-22T11:00:00+00:00",
+            },
+          ],
+          undoableCommands: 1,
+        }
+        return Promise.resolve(committed())
+      }
       case "edit_note_text": {
         // Editing bumps the durable revision, which is what makes an
         // in-flight response stale on the Rust side.
@@ -141,6 +160,15 @@ async function editNoteText(markdown: string): Promise<void> {
   await flush()
 }
 
+/** Captures a fresh Note through the capture bar, the other path that
+ *  schedules an organization. */
+async function captureNote(markdown: string): Promise<void> {
+  const capture = screen.getByRole("textbox", { name: "New Note" })
+  fireEvent.change(capture, { target: { value: markdown } })
+  fireEvent.keyDown(capture, { key: "Enter" })
+  await flush()
+}
+
 /** Runs out the debounce window, so the attempt reaches `in_flight`. */
 async function reachInFlight(): Promise<void> {
   await act(async () => {
@@ -197,6 +225,17 @@ describe("background enrichment presence", () => {
     expect(shimmering()).toBe(true)
     expect(screen.getByText("AI · working")).toBeTruthy()
     expect(screen.queryByText("AI · quiet")).toBeNull()
+  })
+
+  it("organizes a freshly captured Note, not only an edited one", async () => {
+    await renderApp("local_ai")
+    await captureNote("Harbours followed the deltas")
+    await reachInFlight()
+
+    // The attempt is scheduled from the commit callback, one render before the
+    // new Note is in the snapshot, so the token must be resolved against
+    // current state rather than the state captured at schedule time.
+    expect(enrichCalls).toEqual([{ noteId: capturedNoteId, force: false }])
   })
 
   it("drops the shimmer and returns to quiet once the organization is applied", async () => {
