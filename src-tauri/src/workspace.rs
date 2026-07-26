@@ -6159,11 +6159,11 @@ mod tests {
         committed(store.set_assistance_policy_outcome(&workspace_id, "local_ai"));
         let note = committed(store.create_note_outcome(&workspace_id, "an org thought"));
         let note_id = note.notes[0].id.clone();
-        // Capture the revision at request time, then bump it with a manual
-        // edit while the AI is "thinking" — the apply path should reject
-        // the captured token as stale.
+        // Capture the revision at request time, then edit the Note while the
+        // AI is "thinking" — the apply path should reject the captured token
+        // as stale.
         let captured_revision = note.notes[0].enrichment_revision();
-        committed(store.set_note_pinned_outcome(&note_id, true));
+        committed(store.edit_note_text_outcome(&note_id, "the thinker kept editing"));
         let outcome = store.apply_enrichment_outcome(
             &workspace_id,
             &note_id,

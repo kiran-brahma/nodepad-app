@@ -34,6 +34,22 @@ export type EnrichmentStatus =
    *  `confirmReplace` to commit or `cancelReplace` to back out. */
   | { kind: "replace_pending"; reason: string }
 
+const ACTIVE_ENRICHMENT_STATUSES: Partial<Record<EnrichmentStatus["kind"], true>> = {
+  debouncing: true,
+  in_flight: true,
+}
+
+/** Status presentation is a projection of controller state: a scheduled Note
+ *  shimmers through debounce and inference, while the top bar names only a
+ *  request that has actually begun. */
+export function isEnrichmentActive(status: EnrichmentStatus | undefined): boolean {
+  return ACTIVE_ENRICHMENT_STATUSES[status?.kind ?? "idle"] === true
+}
+
+export function isEnrichmentInFlight(status: EnrichmentStatus): boolean {
+  return status.kind === "in_flight"
+}
+
 export interface EnrichmentController {
   /** The current status for the most recently scheduled Note. A Note
    *  that is not the most recent reads `idle` until the UI asks for
@@ -196,8 +212,17 @@ export function useEnrichmentController(options: ScheduleOptions): EnrichmentCon
   const clear = useCallback(() => {
     clearTimer()
     attempts.supersede()
+    activeNoteIdRef.current = null
+    setActiveNoteId(null)
     setStatus({ kind: "idle" })
   }, [attempts, clearTimer])
+
+  // A controller instance survives an active Workspace or Assistance Policy
+  // change. Abandon the old request before either surface can project it into
+  // the new Workspace or a Manual one.
+  useEffect(() => {
+    clear()
+  }, [clear, enabled, workspaceId])
 
   useEffect(
     () => () => {

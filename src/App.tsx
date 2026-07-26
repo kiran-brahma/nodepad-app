@@ -30,7 +30,8 @@ import { CloudConsentDialog } from "./assistance-section"
 import { WorkspaceSettingsSheet } from "./workspace-settings-sheet"
 import { IntroVideo } from "./intro-video"
 import { useLocalDiscovery } from "./use-local-discovery"
-import { useEnrichmentController } from "./enrichment-controller"
+import { isEnrichmentInFlight, useEnrichmentController } from "./enrichment-controller"
+import { EnrichmentPresence } from "./enrichment-presence"
 import { useSynthesisController } from "./synthesis-controller"
 import { SynthesisSection } from "./synthesis-section"
 import { useCloudDiscovery } from "./use-cloud-discovery"
@@ -152,7 +153,7 @@ export function App() {
   // The one card every view places, over the one set of intents.
   function noteCard(note: Note) {
     const enrichmentStatus =
-      enrichment.activeNoteId === note.id ? enrichment.status : undefined
+      aiEnabled && enrichment.activeNoteId === note.id ? enrichment.status : undefined
     return (
       <NoteCard
         key={note.id}
@@ -164,6 +165,7 @@ export function App() {
         dimmed={focus.litNoteIds !== null && !focus.litNoteIds.has(note.id)}
         registerElement={(element) => focus.registerNoteElement(note.id, element)}
         enrichment={enrichmentStatus}
+        enrichmentEnabled={aiEnabled}
       />
     )
   }
@@ -347,17 +349,27 @@ export function App() {
         />
       }
       topbar={
-        <div className="seg" role="group" aria-label="Note view">
-          {NOTE_VIEWS.map((option) => (
-            <button
-              key={option}
-              aria-pressed={view === option}
-              className={view === option ? "active" : ""}
-              onClick={() => chooseView(option)}
-            >
-              {noteViewLabel(option)}
-            </button>
-          ))}
+        <div className="topbar-controls">
+          <div className="seg" role="group" aria-label="Note view">
+            {NOTE_VIEWS.map((option) => (
+              <button
+                key={option}
+                aria-pressed={view === option}
+                className={view === option ? "active" : ""}
+                onClick={() => chooseView(option)}
+              >
+                {noteViewLabel(option)}
+              </button>
+            ))}
+          </div>
+          <EnrichmentPresence
+            enabled={aiEnabled}
+            working={
+              enrichment.activeNoteId !== null &&
+              notes.some((note) => note.id === enrichment.activeNoteId) &&
+              isEnrichmentInFlight(enrichment.status)
+            }
+          />
         </div>
       }
       main={

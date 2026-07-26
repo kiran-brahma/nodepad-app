@@ -28,7 +28,7 @@ import {
   type PendingTransfer,
 } from "./note-transfer"
 import type { NoteDrafts } from "./note-drafts"
-import type { EnrichmentStatus } from "./enrichment-controller"
+import { isEnrichmentActive, type EnrichmentStatus } from "./enrichment-controller"
 
 /**
  * Every intent a Note card can raise. One object is built once, in App, and
@@ -345,6 +345,7 @@ function NoteRelationships({
  */
 function NoteEnrichmentBadge({
   note,
+  enabled,
   status,
   onRetry,
   onReplace,
@@ -352,16 +353,18 @@ function NoteEnrichmentBadge({
   onCancelReplace,
 }: {
   note: Note
+  enabled: boolean
   status?: EnrichmentStatus
   onRetry: () => void
   onReplace: () => void
   onConfirmReplace: () => void
   onCancelReplace: () => void
 }) {
+  if (!enabled) return null
   if (status?.kind === "replace_pending") {
     return (
       <span
-        className="row"
+        className="row enrichment-replace"
         role="alertdialog"
         aria-label="Confirm Re-enrich and Replace"
       >
@@ -380,13 +383,13 @@ function NoteEnrichmentBadge({
   }
   if (status.kind === "debouncing" || status.kind === "in_flight") {
     return (
-      <span className="badge" role="status" aria-live="polite">
+      <span className="badge enrichment-badge" role="status" aria-live="polite">
         Organizing…
       </span>
     )
   }
   if (status.kind === "applied") {
-    return <span className="badge" aria-label="Organized by AI">AI organized</span>
+    return <span className="badge enrichment-badge" aria-label="Organized by AI">AI organized</span>
   }
   return <NoteEnrichmentFailureBadge status={status} onRetry={onRetry} onReplace={onReplace} />
 }
@@ -402,8 +405,8 @@ function NoteEnrichmentFailureBadge({
 }) {
   const label = failureBadgeLabel(status.reason)
   return (
-    <span className="row" role="status" aria-label="AI assistance status" aria-live="polite">
-      <span className="badge">{label}</span>
+    <span className="row enrichment-recovery" role="status" aria-label="AI assistance status" aria-live="polite">
+      <span className="badge enrichment-badge">{label}</span>
       <button onClick={onRetry}>Retry</button>
       {status.reason === "stale" && <button onClick={onReplace}>Re-enrich and Replace</button>}
     </span>
@@ -537,6 +540,7 @@ export function NoteCard({
   dimmed,
   registerElement,
   enrichment,
+  enrichmentEnabled,
 }: {
   note: Note
   context: NoteCardContext
@@ -549,6 +553,9 @@ export function NoteCard({
   /** The Enrichment Workflow status for this Note, or `undefined` if
    *  the active Workspace's policy does not permit AI assistance. */
   enrichment?: EnrichmentStatus
+  /** Presentation follows the active Thinking Workspace's Assistance Policy.
+   *  A Manual Workspace shows none of the durable or transient AI signals. */
+  enrichmentEnabled: boolean
 }) {
   const [commandMenuOpen, setCommandMenuOpen] = useState(false)
   const [typePopoverOpen, setTypePopoverOpen] = useState(false)
@@ -557,6 +564,7 @@ export function NoteCard({
   // because all three read one projection.
   const relatedCount = nodeDegree(context.graph, note.id)
   const firstLabel = note.labels[0]?.name
+  const enrichmentActive = enrichmentEnabled && isEnrichmentActive(enrichment)
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     // ⌘· (Command+Period) opens or closes the command menu
@@ -573,7 +581,7 @@ export function NoteCard({
 
   return (
     <div
-      className={["note", note.pinned ? "pinned" : "", focused ? "focused" : "", dimmed ? "dimmed" : ""]
+      className={["note", note.pinned ? "pinned" : "", focused ? "focused" : "", dimmed ? "dimmed" : "", enrichmentActive ? "enrichment-active" : ""]
         .filter(Boolean)
         .join(" ")}
       // A Note card is one self-contained piece of the thinking, whichever
@@ -696,6 +704,7 @@ export function NoteCard({
         {firstLabel && <span>{firstLabel}</span>}
         <NoteEnrichmentBadge
           note={note}
+          enabled={enrichmentEnabled}
           status={enrichment}
           onRetry={intents.retryEnrichment}
           onReplace={intents.requestReplaceEnrichment}

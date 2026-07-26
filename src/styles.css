@@ -50,8 +50,20 @@ main { max-width: 760px; margin: 0 auto; padding: 4rem 1.5rem; }
   min-width: 0;
 }
 .app-main-topbar {
-  /* Reserved for later slices (R3/R4/R6). Currently empty. */
   flex-shrink: 0;
+}
+.topbar-controls {
+  align-items: center;
+  display: flex;
+  gap: .65rem;
+  justify-content: space-between;
+  padding: .75rem 1.5rem 0;
+}
+.enrichment-presence {
+  color: #9a8f84;
+  font: 600 .68rem/1 system-ui, sans-serif;
+  letter-spacing: .08em;
+  text-transform: uppercase;
 }
 .app-main-content {
   flex: 1;
@@ -177,7 +189,21 @@ select { border: 1px solid #bcae9d; border-radius: 6px; font: inherit; padding: 
 .canvas-relationship-handle { opacity: 0; position: absolute; right: -.4rem; top: 50%; transform: translateY(-50%); transition: opacity .12s ease; z-index: 2; }
 .canvas-note:hover .canvas-relationship-handle, .canvas-note:focus-within .canvas-relationship-handle { opacity: 1; }
 .canvas-note > .note { border-radius: 0; box-sizing: border-box; min-height: 11.25rem; }
-.note { background: #fffdf8; border: 1px solid #dfd5c8; border-radius: 10px; padding: .8rem; white-space: normal; }
+.note { background: #fffdf8; border: 1px solid #dfd5c8; border-radius: 10px; padding: .8rem; position: relative; white-space: normal; }
+.note.enrichment-active::after {
+  animation: enrichment-shimmer 1.8s ease-in-out infinite;
+  background: linear-gradient(100deg, transparent 25%, rgba(183, 149, 110, .14) 50%, transparent 75%);
+  border-radius: inherit;
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+}
+@keyframes enrichment-shimmer {
+  from { opacity: .25; transform: translateX(-12%); }
+  50% { opacity: .75; }
+  to { opacity: .25; transform: translateX(12%); }
+}
 /* Where the thinker navigated to. Transient, so it survives no reload. */
 .note.focused { box-shadow: 0 0 0 2px #8f3d27; outline: none; }
 /* Focus elsewhere, unrelated to this Note. Reading, never a durable change. */
@@ -494,6 +520,25 @@ select { border: 1px solid #bcae9d; border-radius: 6px; font: inherit; padding: 
 .note .meta .badge {
   font-size: 0.6rem;
   padding: 0.15rem 0.4rem;
+}
+.note .meta .enrichment-badge {
+  background: transparent;
+  border: 1px solid #dfd5c8;
+  color: #6f625a;
+  font-weight: 500;
+}
+.note .meta .enrichment-recovery,
+.note .meta .enrichment-replace {
+  gap: .35rem;
+  justify-content: flex-start;
+}
+.note .meta .enrichment-recovery button,
+.note .meta .enrichment-replace button {
+  background: transparent;
+  border-color: #dfd5c8;
+  color: #6f625a;
+  font-size: .65rem;
+  padding: .15rem .4rem;
 }
 
 /* ⌘· menu: dropdown at the card's top-right */

@@ -3,6 +3,8 @@ import { act, renderHook } from "@testing-library/react"
 import {
   ENRICH_DEBOUNCE_MILLIS,
   useEnrichmentController,
+  isEnrichmentActive,
+  isEnrichmentInFlight,
   type EnrichmentStatus,
 } from "./enrichment-controller"
 import type { WorkspaceSnapshot } from "./workspace-client"
@@ -64,6 +66,25 @@ afterEach(() => {
 })
 
 describe("the enrichment controller", () => {
+  it("exposes presentation predicates without giving a view lifecycle ownership", () => {
+    const inFlight: EnrichmentStatus = {
+      kind: "in_flight",
+      token: {
+        workspaceId: "w",
+        noteId: "n",
+        revision: 0,
+        policy: "local_ai",
+        endpoint: "http://localhost:11434",
+        model: "phi3:latest",
+      },
+    }
+    expect(isEnrichmentActive({ kind: "debouncing" })).toBe(true)
+    expect(isEnrichmentActive(inFlight)).toBe(true)
+    expect(isEnrichmentActive({ kind: "applied", result: { noteType: "claim", labels: [], annotation: null, relatedNoteIds: [] }, snapshot, at: "2026-07-26T00:00:00.000Z" })).toBe(false)
+    expect(isEnrichmentInFlight(inFlight)).toBe(true)
+    expect(isEnrichmentInFlight({ kind: "debouncing" })).toBe(false)
+  })
+
   it("is idle when the active Workspace is Manual", () => {
     const manual = {
       ...snapshot,
@@ -76,6 +97,20 @@ describe("the enrichment controller", () => {
       result.current.schedule("n")
     })
     expect(result.current.status.kind).toBe("idle")
+  })
+
+  it("abandons enrichment when its active Thinking Workspace becomes Manual", () => {
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useEnrichmentController({ workspaceId: "w", snapshot, enabled }),
+      { initialProps: { enabled: true } },
+    )
+    act(() => {
+      result.current.schedule("n")
+    })
+    expect(result.current.status.kind).toBe("debouncing")
+    rerender({ enabled: false })
+    expect(result.current.status.kind).toBe("idle")
+    expect(result.current.activeNoteId).toBeNull()
   })
 
   it("debounces a scheduled call and only fires once", async () => {
