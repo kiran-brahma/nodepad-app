@@ -29,6 +29,7 @@ import {
 } from "./note-transfer"
 import type { NoteDrafts } from "./note-drafts"
 import type { EnrichmentStatus } from "./enrichment-controller"
+import { organizing as aiOrganizing } from "./ai-presence"
 
 /**
  * Every intent a Note card can raise. One object is built once, in App, and
@@ -75,6 +76,9 @@ export interface NoteIntents {
   confirmReplaceEnrichment: () => void
   /** Backs out of the Re-enrich and Replace dialog. */
   cancelReplaceEnrichment: () => void
+  /** Dismisses a failed organization's inline affordance. Clears the status
+   *  only; the Note keeps whatever the thinker last committed. */
+  dismissEnrichment: () => void
   editTextDraft: (markdown: string) => void
   editAnnotationDraft: (text: string) => void
 }
@@ -337,11 +341,11 @@ function NoteRelationships({
 }
 
 /**
- * The one visible piece of the Enrichment Workflow. A small badge
- * carries the debounce, the in-flight state, the failure reason, and
- * the retry / replace affordances. The badge never blocks a
- * thinker from editing a Note; it is always below the Note Type and
- * pinned indicators so manual controls stay primary.
+ * The quiet per-Note piece of the Enrichment Workflow. The same four
+ * states as before — organizing, applied, failed, replace-pending — drawn
+ * as unobtrusive affordances rather than attention-seeking ones: while AI
+ * organizes, the card shimmers and this line carries only the status text
+ * a screen reader needs. It never blocks a thinker from editing a Note.
  */
 function NoteEnrichmentBadge({
   note,
@@ -350,6 +354,7 @@ function NoteEnrichmentBadge({
   onReplace,
   onConfirmReplace,
   onCancelReplace,
+  onDismiss,
 }: {
   note: Note
   status?: EnrichmentStatus
@@ -357,6 +362,7 @@ function NoteEnrichmentBadge({
   onReplace: () => void
   onConfirmReplace: () => void
   onCancelReplace: () => void
+  onDismiss: () => void
 }) {
   if (status?.kind === "replace_pending") {
     return (
@@ -374,38 +380,53 @@ function NoteEnrichmentBadge({
   }
   if (!status || status.kind === "idle" || status.kind === "cancelled") {
     if (note.lastEnrichedAt) {
-      return <span className="badge" aria-label="Organized by AI">AI organized</span>
+      return <span className="badge quiet" aria-label="Organized by AI">AI organized</span>
     }
     return null
   }
-  if (status.kind === "debouncing" || status.kind === "in_flight") {
-    return (
-      <span className="badge" role="status" aria-live="polite">
-        Organizing…
-      </span>
-    )
+  if (aiOrganizing(status)) {
+    // The shimmer on the card is the visible signal; this stays a plain,
+    // quiet line so nothing competes with the thought itself. It is not a
+    // live region: the card's `aria-busy` and the one top-bar indicator
+    // announce the same fact, and announcing it three times is not quiet.
+    return <span className="enrich-organizing">Organizing…</span>
   }
   if (status.kind === "applied") {
-    return <span className="badge" aria-label="Organized by AI">AI organized</span>
+    return <span className="badge quiet" aria-label="Organized by AI">AI organized</span>
   }
-  return <NoteEnrichmentFailureBadge status={status} onRetry={onRetry} onReplace={onReplace} />
+  return (
+    <NoteEnrichmentFailureBadge
+      status={status}
+      onRetry={onRetry}
+      onReplace={onReplace}
+      onDismiss={onDismiss}
+    />
+  )
 }
 
+/** A failed organization is recoverable inline: retry, replace when the
+ *  response was overtaken by an edit, or dismiss. No modal, and dismissing
+ *  leaves the Note exactly as the thinker left it. */
 function NoteEnrichmentFailureBadge({
   status,
   onRetry,
   onReplace,
+  onDismiss,
 }: {
   status: Extract<EnrichmentStatus, { kind: "failed" }>
   onRetry: () => void
   onReplace: () => void
+  onDismiss: () => void
 }) {
   const label = failureBadgeLabel(status.reason)
   return (
-    <span className="row" role="status" aria-label="AI assistance status" aria-live="polite">
-      <span className="badge">{label}</span>
+    <span className="row enrich-failed" role="status" aria-label="AI assistance status" aria-live="polite">
+      <span className="badge quiet">{label}</span>
       <button onClick={onRetry}>Retry</button>
       {status.reason === "stale" && <button onClick={onReplace}>Re-enrich and Replace</button>}
+      <button aria-label="Dismiss AI assistance status" onClick={onDismiss}>
+        Dismiss
+      </button>
     </span>
   )
 }
@@ -557,6 +578,10 @@ export function NoteCard({
   // because all three read one projection.
   const relatedCount = nodeDegree(context.graph, note.id)
   const firstLabel = note.labels[0]?.name
+  // Whether AI is organizing this Note right now, asked once and answered by
+  // the one presence derivation, so the shimmer, `aria-busy`, and the meta
+  // line cannot disagree.
+  const organizing = aiOrganizing(enrichment)
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     // ⌘· (Command+Period) opens or closes the command menu
@@ -573,7 +598,16 @@ export function NoteCard({
 
   return (
     <div
-      className={["note", note.pinned ? "pinned" : "", focused ? "focused" : "", dimmed ? "dimmed" : ""]
+      className={[
+        "note",
+        note.pinned ? "pinned" : "",
+        focused ? "focused" : "",
+        dimmed ? "dimmed" : "",
+        // A shimmer while AI organizes this Note. Presentation only: the card
+        // stays fully editable, and the durable revision guard is what
+        // invalidates a response the thinker's edit has overtaken.
+        organizing ? "organizing" : "",
+      ]
         .filter(Boolean)
         .join(" ")}
       // A Note card is one self-contained piece of the thinking, whichever
@@ -583,6 +617,9 @@ export function NoteCard({
       aria-label={notePreview(note)}
       tabIndex={-1}
       aria-current={focused ? "true" : undefined}
+      // Something is being worked out about this Note. It stays editable; the
+      // flag only tells assistive technology the card may change under it.
+      aria-busy={organizing || undefined}
       ref={registerElement}
       onKeyDown={handleKeyDown}
     >
@@ -701,6 +738,7 @@ export function NoteCard({
           onReplace={intents.requestReplaceEnrichment}
           onConfirmReplace={intents.confirmReplaceEnrichment}
           onCancelReplace={intents.cancelReplaceEnrichment}
+          onDismiss={intents.dismissEnrichment}
         />
       </div>
 
