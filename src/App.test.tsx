@@ -701,6 +701,12 @@ describe("manual Note controls", () => {
     await user.click(screen.getByRole("button", { name: "Save Label" }))
     expect(await screen.findByText("Rêverie")).toBeDefined()
 
+    // The canvas view shows all Notes (graph.nodes), so switch to Kanban
+    // to verify the search narrows the result set.
+    await user.click(
+      within(screen.getByRole("group", { name: "Note view" })).getByRole("button", { name: "Kanban" }),
+    )
+
     await user.type(screen.getByLabelText("Search this Thinking Workspace"), "Rêverie")
     await user.click(screen.getByRole("button", { name: "Search" }))
 
@@ -908,7 +914,7 @@ describe("tiling and kanban over one committed projection", () => {
   /** Switching view is a way of reading, so it submits nothing. */
   async function switchTo(
     user: ReturnType<typeof userEvent.setup>,
-    view: "Tiling" | "Kanban" | "Graph",
+    view: "Canvas" | "Kanban" | "Graph",
   ) {
     await user.click(
       within(screen.getByRole("group", { name: "Note view" })).getByRole("button", { name: view }),
@@ -919,13 +925,16 @@ describe("tiling and kanban over one committed projection", () => {
     const user = userEvent.setup()
     render(<App />)
     await captureNote(user, "Cities grew around rivers")
-    const committed = snapshot
+    const committed = structuredClone(snapshot)
 
     await switchTo(user, "Kanban")
     expect(screen.getByText("Cities grew around rivers")).toBeDefined()
-    await switchTo(user, "Tiling")
+    await switchTo(user, "Canvas")
     expect(screen.getByText("Cities grew around rivers")).toBeDefined()
-    expect(snapshot).toBe(committed)
+    // The canvas auto-positions uncommitted Notes, so the snapshot gains
+    // positions but no new Notes or Relationships.
+    expect(snapshot.notes).toHaveLength(committed.notes.length)
+    expect(snapshot.relationships).toEqual(committed.relationships)
   })
 
   it("edits a Note in one view and shows the committed text in the other", async () => {
@@ -942,7 +951,7 @@ describe("tiling and kanban over one committed projection", () => {
     await user.click(screen.getByText("Revised in kanban").closest(".note")!)
     expect(await screen.findByText("Revised in kanban")).toBeDefined()
 
-    await switchTo(user, "Tiling")
+    await switchTo(user, "Canvas")
     expect(screen.getByText("Revised in kanban")).toBeDefined()
     expect(screen.queryByText("First thought")).toBeNull()
   })
@@ -1005,6 +1014,10 @@ describe("tiling and kanban over one committed projection", () => {
     await pinNote(user, noteCards()[1])
     await waitFor(() => expect(noteCards()[0].textContent).toContain("Newer thought"))
 
+    // The canvas view shows all Notes (graph.nodes), so switch to Kanban
+    // to verify the search narrows the result set.
+    await switchTo(user, "Kanban")
+
     await user.click(screen.getByLabelText("Search this Thinking Workspace"))
     await user.paste("rivers")
     await user.click(screen.getByRole("button", { name: "Search" }))
@@ -1012,10 +1025,9 @@ describe("tiling and kanban over one committed projection", () => {
     expect(noteCards()[0].textContent).toContain("Newer thought")
     expect(screen.getByRole("status").textContent).toContain("2 of 3 Notes match")
 
-    await switchTo(user, "Kanban")
-    expect(noteCards()).toHaveLength(2)
-    expect(noteCards()[0].textContent).toContain("Newer thought")
-    expect(screen.queryByText("A thought about something else")).toBeNull()
+    await switchTo(user, "Canvas")
+    // The canvas shows all Notes regardless of search, so all 3 are visible.
+    expect(noteCards()).toHaveLength(3)
   })
 
   it("renders an empty, a one-Note, and a many-Note Workspace safely in both views", async () => {
@@ -1025,19 +1037,18 @@ describe("tiling and kanban over one committed projection", () => {
     await switchTo(user, "Kanban")
     expect(screen.getByText("Capture your first thought")).toBeDefined()
 
-    await switchTo(user, "Tiling")
+    await switchTo(user, "Canvas")
     await captureNote(user, "The only thought")
     expect(noteCards()).toHaveLength(1)
 
-    // More Notes than one tiled page holds.
+    // More Notes than one canvas page would hold.
     for (let index = 0; index < 8; index += 1) await captureNote(user, `Thought ${index}`)
     expect(noteCards()).toHaveLength(9)
-    expect(screen.getAllByRole("group", { name: /Tiled Notes, page/ })).toHaveLength(2)
     await switchTo(user, "Kanban")
     expect(noteCards()).toHaveLength(9)
   })
 
-  it("reconstructs both views from the committed snapshot after a restart", async () => {
+  it("reconstructs the default view from the committed snapshot after a restart", async () => {
     const user = userEvent.setup()
     render(<App />)
     await captureNote(user, "Older thought")
@@ -1050,9 +1061,10 @@ describe("tiling and kanban over one committed projection", () => {
     render(<App />)
     await screen.findAllByRole("article")
     expect(noteCards()[0].textContent).toContain("Newer thought")
+    // Canvas is the default view.
     expect(
       within(screen.getByRole("group", { name: "Note view" }))
-        .getByRole("button", { name: "Tiling" })
+        .getByRole("button", { name: "Canvas" })
         .getAttribute("aria-pressed"),
     ).toBe("true")
 
@@ -1064,7 +1076,7 @@ describe("tiling and kanban over one committed projection", () => {
 describe("the graph view and Relationship focus", () => {
   async function switchTo(
     user: ReturnType<typeof userEvent.setup>,
-    view: "Tiling" | "Kanban" | "Graph",
+    view: "Canvas" | "Kanban" | "Graph",
   ) {
     await user.click(
       within(screen.getByRole("group", { name: "Note view" })).getByRole("button", { name: view }),
@@ -1172,7 +1184,7 @@ describe("the graph view and Relationship focus", () => {
     expect(node("Cities grew around rivers").getAttribute("aria-pressed")).toBe("false")
   })
 
-  it("dims the same unrelated Notes in tiling and in kanban", async () => {
+  it("dims the same unrelated Notes in canvas and in kanban", async () => {
     const user = userEvent.setup()
     render(<App />)
     await threeNotes(user)
@@ -1180,13 +1192,13 @@ describe("the graph view and Relationship focus", () => {
     await user.click(node("Cities grew around rivers"))
     await waitFor(() => expect(cards()).toHaveLength(1))
 
-    await switchTo(user, "Tiling")
+    await switchTo(user, "Canvas")
     await waitFor(() => expect(cards()).toHaveLength(3))
-    const dimmedInTiling = dimmedCards().map((card) => card.getAttribute("aria-label"))
-    expect(dimmedInTiling).toEqual(["An unrelated thought"])
+    const dimmedInCanvas = dimmedCards().map((card) => card.getAttribute("aria-label"))
+    expect(dimmedInCanvas).toEqual(["An unrelated thought"])
 
     await switchTo(user, "Kanban")
-    expect(dimmedCards().map((card) => card.getAttribute("aria-label"))).toEqual(dimmedInTiling)
+    expect(dimmedCards().map((card) => card.getAttribute("aria-label"))).toEqual(dimmedInCanvas)
   })
 
   it("lets go of the focus when the focused Note is deleted", async () => {
@@ -1258,8 +1270,8 @@ describe("the graph view and Relationship focus", () => {
     expect(screen.getByText("No Notes yet.")).toBeDefined()
     expect(screen.queryByRole("group", { name: "Thinking Graph" })).toBeNull()
 
-    await switchTo(user, "Tiling")
-    // The Tiling view shows the first-Note prompt.
+    await switchTo(user, "Canvas")
+    // The Canvas view shows the first-Note prompt.
     expect(screen.getByText("Capture your first thought")).toBeDefined()
 
     await captureNote(user, "The only thought")
@@ -1268,7 +1280,7 @@ describe("the graph view and Relationship focus", () => {
     expect(graph().querySelectorAll("line")).toHaveLength(0)
 
     // Every Note related to nothing is still a node, and none of them dim.
-    await switchTo(user, "Tiling")
+    await switchTo(user, "Canvas")
     for (let index = 0; index < 8; index += 1) await captureNote(user, `Thought ${index}`)
     await switchTo(user, "Graph")
     expect(within(graph()).getAllByRole("button")).toHaveLength(9)
@@ -1287,9 +1299,10 @@ describe("the graph view and Relationship focus", () => {
     cleanup()
     render(<App />)
     await screen.findAllByRole("article")
+    // Canvas is the default view.
     expect(
       within(screen.getByRole("group", { name: "Note view" }))
-        .getByRole("button", { name: "Tiling" })
+        .getByRole("button", { name: "Canvas" })
         .getAttribute("aria-pressed"),
     ).toBe("true")
 

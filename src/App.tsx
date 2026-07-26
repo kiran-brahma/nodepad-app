@@ -9,7 +9,7 @@ import {
   type WorkspaceOutcome,
 } from "./workspace-client"
 import { requestDelete, resolveDeleteConfirmation, type PendingDelete } from "./workspace-lifecycle"
-import { matchingNoteIds, visibleNotes, workspaceNotes, type NoteView } from "./note-views"
+import { matchingNoteIds, noteViewLabel, NOTE_VIEWS, visibleNotes, workspaceNotes, type NoteView } from "./note-views"
 import { NoteCard, type NoteCardContext } from "./note-card"
 import { buildNoteIntents } from "./note-intents"
 import { useNoteDrafts } from "./note-drafts"
@@ -52,9 +52,6 @@ export function App() {
   const [renameLabelDraft, setRenameLabelDraft] = useState<{ id: string; name: string } | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null)
-  // How the same committed Notes are arranged. Not committed, so a restart
-  // reconstructs both views from SQLite alone.
-  const [view, setView] = useState<NoteView>("tiling")
   // The Cloud AI disclosure. Visible only while the active Workspace has not
   // given consent and the thinker has asked to use Cloud AI. Recording
   // consent is what flips the policy to cloud_ai; nothing else does.
@@ -69,6 +66,25 @@ export function App() {
     () => snapshot?.workspaces.find(({ id }) => id === snapshot.activeWorkspaceId),
     [snapshot],
   )
+  // How the same committed Notes are arranged. Not committed, so a restart
+  // reconstructs the default view from SQLite alone. The choice persists per
+  // active Workspace as transient UI state (not written to the snapshot).
+  const [viewByWorkspace, setViewByWorkspace] = useState<Map<string, NoteView>>(new Map())
+  const view = viewByWorkspace.get(activeWorkspace?.id ?? "") ?? "canvas"
+  // Crossfade transition key: increments on view change to trigger a brief
+  // CSS fade-in animation on the view container. The existing global
+  // prefers-reduced-motion rule neutralises all animations automatically.
+  const [transitionKey, setTransitionKey] = useState(0)
+
+  function chooseView(nextView: NoteView) {
+    if (nextView === view || !activeWorkspace) return
+    setViewByWorkspace((prev) => {
+      const next = new Map(prev)
+      next.set(activeWorkspace.id, nextView)
+      return next
+    })
+    setTransitionKey((k) => k + 1)
+  }
   const notes = useMemo(
     () => workspaceNotes(snapshot?.notes ?? [], activeWorkspace?.id),
     [snapshot, activeWorkspace?.id],
@@ -299,7 +315,7 @@ export function App() {
     exportMarkdown: exportWorkspace,
     exportArchive: exportWorkspaceArchive,
     importArchive: importWorkspaceArchive,
-    setView,
+    setView: chooseView,
     setAssistancePolicy,
   })
 
@@ -330,6 +346,20 @@ export function App() {
           onOpenSettings={() => setSettingsOpen(true)}
         />
       }
+      topbar={
+        <div className="seg" role="group" aria-label="Note view">
+          {NOTE_VIEWS.map((option) => (
+            <button
+              key={option}
+              aria-pressed={view === option}
+              className={view === option ? "active" : ""}
+              onClick={() => chooseView(option)}
+            >
+              {noteViewLabel(option)}
+            </button>
+          ))}
+        </div>
+      }
       main={
         <>
           <header>
@@ -353,21 +383,22 @@ export function App() {
             onClear={() => { setSearchQuery(""); setSearchResults(null) }}
           />
 
-          <CommittedNotesSection
-            notes={visible}
-            graph={graph}
-            focus={focus}
-            searching={searchResults !== null}
-            view={view}
-            canUndo={canUndo}
-            onChooseView={setView}
-            onUndo={undoLastChange}
-            onSetPosition={(noteId, x, y) => submit(thinkingWorkspace.setNotePosition(noteId, x, y))}
-            onRelate={(noteId, otherNoteId) => submit(thinkingWorkspace.relateNotes(noteId, otherNoteId))}
-            onUnrelate={(noteId, otherNoteId) => submit(thinkingWorkspace.unrelateNotes(noteId, otherNoteId))}
-            card={noteCard}
-            pendingSyntheses={synthesis.pending}
-          />
+          <div key={transitionKey} className="view-fade">
+            <CommittedNotesSection
+              notes={visible}
+              graph={graph}
+              focus={focus}
+              searching={searchResults !== null}
+              view={view}
+              canUndo={canUndo}
+              onUndo={undoLastChange}
+              onSetPosition={(noteId, x, y) => submit(thinkingWorkspace.setNotePosition(noteId, x, y))}
+              onRelate={(noteId, otherNoteId) => submit(thinkingWorkspace.relateNotes(noteId, otherNoteId))}
+              onUnrelate={(noteId, otherNoteId) => submit(thinkingWorkspace.unrelateNotes(noteId, otherNoteId))}
+              card={noteCard}
+              pendingSyntheses={synthesis.pending}
+            />
+          </div>
 
           <SynthesisSection
             pending={synthesis.pending}
@@ -517,7 +548,6 @@ function buildPaletteActions(input: {
     { id: "export-markdown", label: "Export Markdown", group: "Workspace", run: input.exportMarkdown },
     { id: "export-archive", label: "Export Archive", group: "Workspace", run: input.exportArchive },
     { id: "import-archive", label: "Import Archive", group: "Workspace", run: input.importArchive },
-    { id: "view-tiling", label: "Tiling view", group: "View", run: () => input.setView("tiling") },
     { id: "view-canvas", label: "Canvas view", group: "View", run: () => input.setView("canvas") },
     { id: "view-kanban", label: "Kanban view", group: "View", run: () => input.setView("kanban") },
     { id: "view-graph", label: "Graph view", group: "View", run: () => input.setView("graph") },

@@ -234,6 +234,45 @@ select { border: 1px solid #bcae9d; border-radius: 6px; font: inherit; padding: 
 /* A link Nodepad will not open reads as text, never as a disabled control. */
 .external-link-rejected { color: #5d4f47; }
 
+/* ── R9: Segmented control in the top bar ──────────────────────────────── */
+
+.seg {
+  display: flex;
+  gap: 0;
+  border: 1px solid #bcae9d;
+  border-radius: 8px;
+  overflow: hidden;
+  width: fit-content;
+}
+.seg button {
+  border: none;
+  border-radius: 0;
+  background: #f7f3eb;
+  color: #5d4f47;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+  font-family: system-ui, sans-serif;
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+.seg button:not(:last-child) {
+  border-right: 1px solid #bcae9d;
+}
+.seg button.active {
+  background: #8f3d27;
+  color: white;
+}
+
+/* ── R9: Crossfade transition on view change ───────────────────────────── */
+
+.view-fade {
+  animation: view-fade-in 0.15s ease;
+}
+@keyframes view-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 /* ── R4: Calm Note card ──────────────────────────────────────────────────── */
 
 /* The Note card at rest shows only the thought, its Type tag, a quiet

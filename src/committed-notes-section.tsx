@@ -1,7 +1,6 @@
 import type { ReactNode } from "react"
 import type { Note, PendingSynthesis } from "./workspace-client"
-import { noteViewLabel, NOTE_VIEWS, type NoteView } from "./note-views"
-import { TilingView } from "./tiling-view"
+import { type NoteView } from "./note-views"
 import { KanbanView } from "./kanban-view"
 import { GraphView } from "./graph-view"
 import { CanvasView } from "./canvas-view"
@@ -20,7 +19,6 @@ export function CommittedNotesSection({
   searching,
   view,
   canUndo,
-  onChooseView,
   onUndo,
   onSetPosition,
   onRelate,
@@ -35,7 +33,6 @@ export function CommittedNotesSection({
   searching: boolean
   view: NoteView
   canUndo: boolean
-  onChooseView: (view: NoteView) => void
   onUndo: () => void
   onSetPosition: (noteId: string, x: number, y: number) => void
   onRelate: (noteId: string, otherNoteId: string) => void
@@ -57,21 +54,6 @@ export function CommittedNotesSection({
           Undo
         </button>
       </div>
-
-      {/* A view is a way of reading the same committed Notes. Choosing one
-          commits nothing and changes no Note. */}
-      <div className="row" role="group" aria-label="Note view">
-        {NOTE_VIEWS.map((option) => (
-          <button
-            key={option}
-            aria-pressed={view === option}
-            className={view === option ? "active" : ""}
-            onClick={() => onChooseView(option)}
-          >
-            {noteViewLabel(option)}
-          </button>
-        ))}
-      </div>
       {/* The graph shows the Thinking Graph of the whole active Workspace, so
           it reads the projection rather than the searched-narrowed result. */}
       {view === "graph" ? (
@@ -85,8 +67,6 @@ export function CommittedNotesSection({
             <p>Type a thought below and press Enter. Nodepad commits it locally before it appears.</p>
           </div>
         )
-      ) : view === "tiling" ? (
-        <TilingView notes={notes} focus={focus} card={card} />
       ) : view === "canvas" ? (
         <CanvasView
           // A canvas is the spatial Thinking Graph, not a filtered result
