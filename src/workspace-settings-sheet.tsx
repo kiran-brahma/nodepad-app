@@ -9,6 +9,7 @@ import { AssistanceSection } from "./assistance-section"
 import { deleteConfirmationPrompt, type PendingDelete } from "./workspace-lifecycle"
 import { useEscape, ESCAPE_PRIORITY } from "./escape-stack"
 import { useModalFocus } from "./modal-focus"
+import { WorkspaceRenameForm, type WorkspaceRenameDraft } from "./workspace-rename-form"
 
 /**
  * A settings sheet (modal dialog) for the active Thinking Workspace. Hosts
@@ -52,7 +53,7 @@ export function WorkspaceSettingsSheet({
   onSelectModel,
 }: {
   activeWorkspace: ThinkingWorkspace | undefined
-  renameDraft: { id: string; name: string } | null
+  renameDraft: WorkspaceRenameDraft | null
   pendingDelete: PendingDelete
   localState: DiscoveryState
   localQuery: string
@@ -107,8 +108,11 @@ export function WorkspaceSettingsSheet({
           <section aria-label="Workspace name">
             <h3>Workspace name</h3>
             {renameDraft ? (
-              <RenameForm
+              <WorkspaceRenameForm
                 draft={renameDraft}
+                fieldLabel="Thinking Workspace name"
+                submitLabel="Save name"
+                cancelLabel="Cancel"
                 onDraftChange={onRenameDraftChange}
                 onSubmit={onRename}
                 onCancel={onCancelRename}
@@ -179,37 +183,5 @@ export function WorkspaceSettingsSheet({
         </div>
       </section>
     </div>
-  )
-}
-
-/** Inline rename form inside the settings sheet. Escape closes the sheet
- *  (modal priority), which unmounts the rename form and discards any
- *  unsaved changes. The Cancel button also dismisses the rename inline. */
-function RenameForm({
-  draft,
-  onDraftChange,
-  onSubmit,
-  onCancel,
-}: {
-  draft: { id: string; name: string }
-  onDraftChange: (name: string) => void
-  onSubmit: (event: FormEvent) => void
-  onCancel: () => void
-}) {
-  useEscape(onCancel, ESCAPE_PRIORITY.dialog)
-  return (
-    <form onSubmit={onSubmit}>
-      <label htmlFor="workspace-name">Thinking Workspace name</label>
-      <input
-        autoFocus
-        id="workspace-name"
-        value={draft.name}
-        onChange={(event) => onDraftChange(event.target.value)}
-      />
-      <div className="row">
-        <button type="submit">Save name</button>
-        <button type="button" onClick={onCancel}>Cancel</button>
-      </div>
-    </form>
   )
 }

@@ -59,6 +59,10 @@ let openExternalLinkCalls = 0
 let lastOpenedExternalUrl: string | null = null
 let openLinkOutcome: import("./workspace-client").OpenLinkOutcome = { status: "opened" }
 let setNoteTypeCalls: { noteId: string; noteType: NoteType }[] = []
+/** The Workspace lifecycle commands the rail and the palette dispatch. */
+let selectedWorkspaceIds: string[] = []
+let createdWorkspaceNames: string[] = []
+let renamedWorkspaces: { workspaceId: string; name: string }[] = []
 
 /** The canonical pair the durable interface stores; order is not direction. */
 function canonicalPair(left: string, right: string): [string, string] {
@@ -105,6 +109,43 @@ vi.mock("@tauri-apps/api/core", () => ({
     switch (command) {
       case "get_workspace_snapshot":
         return Promise.resolve(committed())
+      case "select_workspace": {
+        selectedWorkspaceIds.push(String(args.workspaceId))
+        snapshot = { ...snapshot, activeWorkspaceId: String(args.workspaceId) }
+        return Promise.resolve(committed())
+      }
+      case "create_workspace": {
+        const name = String(args.name).trim()
+        createdWorkspaceNames.push(name)
+        const workspace = {
+          id: `workspace-created-${createdWorkspaceNames.length}`,
+          name,
+          assistancePolicy: "manual" as const,
+          selectedModel: null,
+          cloudConsentAt: null,
+          createdAt: "2026-07-22T09:02:00+00:00",
+          updatedAt: "2026-07-22T09:02:00+00:00",
+        }
+        history.push(snapshot)
+        snapshot = {
+          ...snapshot,
+          workspaces: [...snapshot.workspaces, workspace],
+          activeWorkspaceId: workspace.id,
+        }
+        return Promise.resolve(committed())
+      }
+      case "rename_workspace": {
+        const name = String(args.name).trim()
+        renamedWorkspaces.push({ workspaceId: String(args.workspaceId), name })
+        history.push(snapshot)
+        snapshot = {
+          ...snapshot,
+          workspaces: snapshot.workspaces.map((workspace) =>
+            workspace.id === args.workspaceId ? { ...workspace, name } : workspace,
+          ),
+        }
+        return Promise.resolve(committed())
+      }
       case "create_note": {
         created += 1
         const note: Note = {
@@ -351,6 +392,9 @@ beforeEach(() => {
   lastOpenedExternalUrl = null
   openLinkOutcome = { status: "opened" }
   setNoteTypeCalls = []
+  selectedWorkspaceIds = []
+  createdWorkspaceNames = []
+  renamedWorkspaces = []
   history = []
   snapshot = {
     workspaces: [
@@ -1970,5 +2014,141 @@ describe("three-pane app shell", () => {
 
     // The capture input is not inside the rail.
     expect(rail.contains(captureInput)).toBe(false)
+  })
+})
+
+describe("R14 Workspace rail and switcher", () => {
+  it("lists every Thinking Workspace in the rail and marks the active one", async () => {
+    render(<App />)
+    const rail = await screen.findByRole("navigation", { name: "Workspaces" })
+
+    const active = within(rail).getByRole("button", { name: "Research" })
+    expect(active.getAttribute("aria-current")).toBe("true")
+    expect(
+      within(rail).getByRole("button", { name: "Reading" }).getAttribute("aria-current"),
+    ).toBeNull()
+  })
+
+  it("switches Workspace through selectWorkspace when a rail row is chosen", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    const rail = await screen.findByRole("navigation", { name: "Workspaces" })
+
+    await user.click(within(rail).getByRole("button", { name: "Reading" }))
+
+    await waitFor(() => expect(selectedWorkspaceIds).toEqual([otherWorkspaceId]))
+    await waitFor(() =>
+      expect(
+        within(rail).getByRole("button", { name: "Reading" }).getAttribute("aria-current"),
+      ).toBe("true"),
+    )
+  })
+
+  it("creates a Workspace from the rail footer and clears the name draft", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    const rail = await screen.findByRole("navigation", { name: "Workspaces" })
+
+    // The create field is not on screen until the create control opens it.
+    expect(screen.queryByLabelText("New Thinking Workspace name")).toBeNull()
+    await user.click(within(rail).getByRole("button", { name: "New Workspace" }))
+    await user.type(screen.getByLabelText("New Thinking Workspace name"), "Fieldwork")
+    await user.click(within(rail).getByRole("button", { name: "Create Workspace" }))
+
+    await waitFor(() => expect(createdWorkspaceNames).toEqual(["Fieldwork"]))
+    // The committed create closes the field, so the draft cannot be resubmitted.
+    await waitFor(() =>
+      expect(screen.queryByLabelText("New Thinking Workspace name")).toBeNull(),
+    )
+    expect(await within(rail).findByRole("button", { name: "Fieldwork" })).toBeDefined()
+
+    // The name draft went with the commit: reopening offers an empty field.
+    await user.click(within(rail).getByRole("button", { name: "New Workspace" }))
+    expect(
+      (screen.getByLabelText("New Thinking Workspace name") as HTMLInputElement).value,
+    ).toBe("")
+  })
+
+  it("Escape abandons the create field and the name typed into it", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    const rail = await screen.findByRole("navigation", { name: "Workspaces" })
+
+    await user.click(within(rail).getByRole("button", { name: "New Workspace" }))
+    await user.type(screen.getByLabelText("New Thinking Workspace name"), "Abandoned")
+    await user.keyboard("{Escape}")
+
+    await waitFor(() =>
+      expect(screen.queryByLabelText("New Thinking Workspace name")).toBeNull(),
+    )
+    expect(createdWorkspaceNames).toEqual([])
+    await user.click(within(rail).getByRole("button", { name: "New Workspace" }))
+    expect(
+      (screen.getByLabelText("New Thinking Workspace name") as HTMLInputElement).value,
+    ).toBe("")
+  })
+
+  it("a rename started in the settings sheet leaves the rail rows alone", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    const rail = await screen.findByRole("navigation", { name: "Workspaces" })
+
+    await openSettings(user)
+    await user.click(screen.getByRole("button", { name: "Rename" }))
+
+    // The sheet owns that draft: the rail row is still a name to select by,
+    // and only one rename field is on screen to type into.
+    expect(screen.getByLabelText("Thinking Workspace name")).toBeDefined()
+    expect(screen.queryByLabelText("Rename Thinking Workspace")).toBeNull()
+    expect(within(rail).getByRole("button", { name: "Research" })).toBeDefined()
+  })
+
+  it("renames a Workspace in place from a rail row and clears the draft", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    const rail = await screen.findByRole("navigation", { name: "Workspaces" })
+
+    await user.dblClick(within(rail).getByRole("button", { name: "Research" }))
+    const field = await screen.findByLabelText("Rename Thinking Workspace")
+    await user.clear(field)
+    await user.type(field, "Field notes")
+    await user.click(within(rail).getByRole("button", { name: "Save Workspace name" }))
+
+    await waitFor(() =>
+      expect(renamedWorkspaces).toEqual([{ workspaceId, name: "Field notes" }]),
+    )
+    // The committed rename clears the draft, so the row is a name again.
+    await waitFor(() => expect(screen.queryByLabelText("Rename Thinking Workspace")).toBeNull())
+    expect(within(rail).getByRole("button", { name: "Field notes" })).toBeDefined()
+  })
+
+  it("Escape cancels a rail rename without committing one", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    const rail = await screen.findByRole("navigation", { name: "Workspaces" })
+
+    await user.click(within(rail).getByRole("button", { name: "Rename Research" }))
+    await user.type(await screen.findByLabelText("Rename Thinking Workspace"), "Discarded")
+    await user.keyboard("{Escape}")
+
+    await waitFor(() => expect(screen.queryByLabelText("Rename Thinking Workspace")).toBeNull())
+    expect(renamedWorkspaces).toEqual([])
+    expect(within(rail).getByRole("button", { name: "Research" })).toBeDefined()
+  })
+
+  it("exposes a Command-K jump entry per Workspace that switches to it", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByRole("button", { name: "Research" })
+
+    await user.keyboard("{Meta>}k{/Meta}")
+    const palette = await screen.findByRole("dialog", { name: "Command palette" })
+    expect(within(palette).getByRole("option", { name: "Switch Workspace → Research" })).toBeDefined()
+
+    await user.click(
+      within(palette).getByRole("option", { name: "Switch Workspace → Reading" }),
+    )
+
+    await waitFor(() => expect(selectedWorkspaceIds).toEqual([otherWorkspaceId]))
   })
 })
