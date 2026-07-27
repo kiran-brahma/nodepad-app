@@ -1,14 +1,4 @@
-# v0 runtime files
-__v0_runtime_loader.js
-__v0_devtools.tsx
-__v0_jsx-dev-runtime.ts
-
-# Design system (local only, not deployed)
-app/design-system/
-
-# Common ignores
 node_modules/
-.next/
 dist/
 src-tauri/target/
 src-tauri/gen/
@@ -17,7 +7,6 @@ src-tauri/gen/
 .claude/
 .pi-subagents/
 tsconfig.tsbuildinfo
-next-env.d.ts
 
 # Internal docs
 CLAUDE.md
