@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react"
-import type { Note } from "./workspace-client"
+import type { Note, PendingSynthesis } from "./workspace-client"
 import type { ThinkingGraph } from "./thinking-graph"
 import type { NoteFocus } from "./note-focus"
 import type { SuggestedRelationship } from "./suggested-relationships"
+import { synthesisAnchors, type SynthesisAnchor } from "./synthesis-placement"
 
 export const CANVAS_CARD_WIDTH = 208
 export const CANVAS_CARD_HEIGHT = 180
@@ -102,6 +103,67 @@ function suggestedCanvasLines(
   })
 }
 
+/**
+ * The offers of this canvas, placed by the shared rule against the centre of
+ * each source card. An offer is not a Note: it has no committed position, so
+ * it is derived here on every render and never dragged.
+ */
+function canvasSynthesisAnchors(
+  pending: readonly PendingSynthesis[],
+  positions: ReadonlyMap<string, Position>,
+): SynthesisAnchor[] {
+  return synthesisAnchors(pending, (noteId) => {
+    const position = positions.get(noteId)
+    if (!position) return null
+    return { x: position.x + CANVAS_CARD_WIDTH / 2, y: position.y + CANVAS_CARD_HEIGHT / 2 }
+  })
+}
+
+/**
+ * One pending Synthesis, offered where it rests. Dashed and unfilled, because
+ * nothing is committed until the thinker accepts it: accepting writes a fresh
+ * thesis Note through the ordinary command, dismissing writes nothing. A stale
+ * offer — one whose sources have moved on — can only be dismissed.
+ */
+function SynthesisOffer({
+  anchor,
+  onAccept,
+  onDismiss,
+}: {
+  anchor: SynthesisAnchor
+  onAccept: (synthesisId: string) => void
+  onDismiss: (synthesisId: string) => void
+}) {
+  const { synthesis } = anchor
+  return (
+    <article
+      aria-label={`Pending Synthesis: ${synthesis.text}`}
+      className={synthesis.stale ? "canvas-synthesis stale" : "canvas-synthesis"}
+      style={{ left: anchor.x, top: anchor.y }}
+    >
+      {/* What the Synthesis rests on, which is every Note it names — not
+          however many of them this canvas happens to be drawing. */}
+      <p className="canvas-synthesis-header">
+        Synthesis forming · connects {synthesis.sourceNoteIds.length} Notes
+      </p>
+      <p>{synthesis.text}</p>
+      <div className="row">
+        <button
+          disabled={synthesis.stale}
+          onClick={() => onAccept(synthesis.id)}
+          title="Create a new thesis Note from this Synthesis"
+          type="button"
+        >
+          Accept as thesis
+        </button>
+        <button onClick={() => onDismiss(synthesis.id)} type="button">
+          Dismiss
+        </button>
+      </div>
+    </article>
+  )
+}
+
 /** A direct spatial projection of committed Notes; its drag state is transient. */
 export function CanvasView({
   notes,
@@ -109,9 +171,12 @@ export function CanvasView({
   focus,
   card,
   suggestions,
+  pendingSyntheses,
   onSetPosition,
   onRelate,
   onUnrelate,
+  onAcceptSynthesis,
+  onDismissSynthesis,
 }: {
   notes: Note[]
   graph: ThinkingGraph
@@ -120,9 +185,14 @@ export function CanvasView({
   /** Undecided AI proposals, drawn dashed. They commit nothing and are not
    *  part of the Thinking Graph. */
   suggestions: readonly SuggestedRelationship[]
+  /** The undecided Syntheses of this Workspace, offered among the Notes each
+   *  one names. None of them is a Note, and none holds a position. */
+  pendingSyntheses: readonly PendingSynthesis[]
   onSetPosition: (noteId: string, x: number, y: number) => void
   onRelate: (noteId: string, otherNoteId: string) => void
   onUnrelate: (noteId: string, otherNoteId: string) => void
+  onAcceptSynthesis: (synthesisId: string) => void
+  onDismissSynthesis: (synthesisId: string) => void
 }) {
   const canvas = useRef<HTMLDivElement>(null)
   const attempted = useRef(new Set<string>())
@@ -184,6 +254,7 @@ export function CanvasView({
   const positions = new Map(notes.map((note) => [note.id, positionFor(note)]))
   const relationships = canvasRelationships(graph, positions, focus.litNoteIds)
   const suggestedLines = suggestedCanvasLines(suggestions, positions)
+  const offers = canvasSynthesisAnchors(pendingSyntheses, positions)
 
   return (
     <div className="canvas" aria-label="Note canvas" ref={canvas} onPointerUp={finishLink}>
@@ -202,6 +273,21 @@ export function CanvasView({
             y2={line.target.y + CANVAS_CARD_HEIGHT / 2}
           />
         ))}
+        {/* Faint leaders from an offer to the Notes it rests on. They are not
+            Relationships and never become any: they only say what was read. */}
+        {offers.flatMap((offer) =>
+          offer.leaders.map((leader) => (
+            <line
+              aria-hidden="true"
+              className="canvas-synthesis-leader"
+              key={`${offer.synthesis.id}-${leader.noteId}`}
+              x1={offer.x}
+              x2={leader.x}
+              y1={offer.y}
+              y2={leader.y}
+            />
+          )),
+        )}
         {relationships.map((relationship) => (
           <line
             aria-label="Remove Relationship"
@@ -265,6 +351,14 @@ export function CanvasView({
           </div>
         )
       })}
+      {offers.map((offer) => (
+        <SynthesisOffer
+          anchor={offer}
+          key={offer.synthesis.id}
+          onAccept={onAcceptSynthesis}
+          onDismiss={onDismissSynthesis}
+        />
+      ))}
     </div>
   )
 }

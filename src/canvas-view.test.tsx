@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react"
 import { autoCanvasPositions, canvasRelationships, CanvasView } from "./canvas-view"
-import type { Note, Relationship } from "./workspace-client"
+import type { Note, PendingSynthesis, Relationship } from "./workspace-client"
 import { thinkingGraph } from "./thinking-graph"
 import type { NoteFocus } from "./note-focus"
 
@@ -42,10 +42,28 @@ function noFocus(): NoteFocus {
   }
 }
 
-function canvas(
-  notes: Note[],
-  callbacks: Partial<Pick<React.ComponentProps<typeof CanvasView>, "onSetPosition" | "onRelate" | "onUnrelate">> = {},
-) {
+function pendingSynthesis(sourceNoteIds: string[], stale = false): PendingSynthesis {
+  return {
+    id: "synthesis-1",
+    workspaceId: "w",
+    text: "Both Notes circle the same tension.",
+    sourceNoteIds,
+    labels: [],
+    model: "local-model",
+    policy: "local_ai",
+    createdAt: "2026-07-27T10:00:00+00:00",
+    stale,
+  }
+}
+
+type CanvasCallbacks = Partial<
+  Pick<
+    React.ComponentProps<typeof CanvasView>,
+    "onSetPosition" | "onRelate" | "onUnrelate" | "onAcceptSynthesis" | "onDismissSynthesis"
+  >
+>
+
+function canvas(notes: Note[], callbacks: CanvasCallbacks = {}, pending: PendingSynthesis[] = []) {
   return (
     <CanvasView
       notes={notes}
@@ -53,9 +71,12 @@ function canvas(
       focus={noFocus()}
       card={() => <div />}
       suggestions={[]}
+      pendingSyntheses={pending}
       onSetPosition={callbacks.onSetPosition ?? vi.fn()}
       onRelate={callbacks.onRelate ?? vi.fn()}
       onUnrelate={callbacks.onUnrelate ?? vi.fn()}
+      onAcceptSynthesis={callbacks.onAcceptSynthesis ?? vi.fn()}
+      onDismissSynthesis={callbacks.onDismissSynthesis ?? vi.fn()}
     />
   )
 }
@@ -77,6 +98,9 @@ describe("canvas placement", () => {
         focus={noFocus()}
         card={() => <button>Control</button>}
         suggestions={[]}
+        pendingSyntheses={[]}
+        onAcceptSynthesis={vi.fn()}
+        onDismissSynthesis={vi.fn()}
         onSetPosition={commit}
         onRelate={vi.fn()}
         onUnrelate={vi.fn()}
@@ -123,6 +147,9 @@ describe("canvas placement", () => {
         focus={{ ...noFocus(), focusedNoteId: "1", litNoteIds: new Set(["1"]) }}
         card={() => <div />}
         suggestions={[]}
+        pendingSyntheses={[]}
+        onAcceptSynthesis={vi.fn()}
+        onDismissSynthesis={vi.fn()}
         onSetPosition={vi.fn()}
         onRelate={vi.fn()}
         onUnrelate={remove}
@@ -132,5 +159,51 @@ describe("canvas placement", () => {
     const line = getByRole("button", { name: "Remove Relationship" })
     fireEvent.keyDown(line, { key: "Enter" })
     expect(remove).toHaveBeenCalledWith("1", "2")
+  })
+})
+
+describe("pending Synthesis on the canvas", () => {
+  const notes = [note("1", 10, 10), note("2", 300, 10)]
+
+  it("offers a pending Synthesis among the Notes it rests on and routes both answers", () => {
+    const accept = vi.fn()
+    const dismiss = vi.fn()
+    const { container, getByLabelText, getByRole, getByText } = render(
+      canvas(notes, { onAcceptSynthesis: accept, onDismissSynthesis: dismiss }, [
+        pendingSynthesis(["1", "2"]),
+      ]),
+    )
+    const offer = getByLabelText("Pending Synthesis: Both Notes circle the same tension.")
+    // Placed at the centroid of its source cards, and never a Note: it carries
+    // no note id, so nothing can drag it or link a Relationship to it.
+    expect([offer.style.left, offer.style.top]).toEqual(["259px", "100px"])
+    expect(offer.hasAttribute("data-note-id")).toBe(false)
+    expect(getByText("Synthesis forming · connects 2 Notes")).toBeTruthy()
+    expect(container.querySelectorAll(".canvas-synthesis-leader")).toHaveLength(2)
+
+    fireEvent.click(getByRole("button", { name: "Accept as thesis" }))
+    fireEvent.click(getByRole("button", { name: "Dismiss" }))
+    expect(accept).toHaveBeenCalledWith("synthesis-1")
+    expect(dismiss).toHaveBeenCalledWith("synthesis-1")
+  })
+
+  it("shows a stale Synthesis dimmed and lets it only be dismissed", () => {
+    const dismiss = vi.fn()
+    const { getByLabelText, getByRole } = render(
+      canvas(notes, { onDismissSynthesis: dismiss }, [pendingSynthesis(["1", "2"], true)]),
+    )
+    expect(getByLabelText("Pending Synthesis: Both Notes circle the same tension.").className)
+      .toContain("stale")
+    expect((getByRole("button", { name: "Accept as thesis" }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(getByRole("button", { name: "Dismiss" }))
+    expect(dismiss).toHaveBeenCalledWith("synthesis-1")
+  })
+
+  it("offers nothing when none is pending or none of its sources is drawn", () => {
+    const { container: empty } = render(canvas(notes))
+    expect(empty.querySelector(".canvas-synthesis")).toBeNull()
+    cleanup()
+    const { container: undrawn } = render(canvas(notes, {}, [pendingSynthesis(["gone"])]))
+    expect(undrawn.querySelector(".canvas-synthesis")).toBeNull()
   })
 })

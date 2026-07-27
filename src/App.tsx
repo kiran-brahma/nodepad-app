@@ -441,6 +441,8 @@ export function App() {
               card={noteCard}
               pendingSyntheses={synthesis.pending}
               suggestions={suggestions.visible}
+              onAcceptSynthesis={synthesis.accept}
+              onDismissSynthesis={synthesis.dismiss}
             />
           </div>
 
