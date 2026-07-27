@@ -280,13 +280,13 @@ fn no_dependency_introduces_telemetry_or_an_updater() {
     let manifest = std::fs::read_to_string(manifest_dir().join("Cargo.toml"))
         .expect("src-tauri/Cargo.toml is readable");
     for (marker, category) in FORBIDDEN_MARKERS {
-    // The updater plugin is deliberately included for in-app updates.
-    // It is not telemetry — it only checks a GitHub release URL for new
-    // versions when the user runs the app, and the check is scoped to the
-    // configured endpoint in tauri.conf.json.
-    if *marker == "tauri-plugin-updater" {
-        continue;
-    }
+        // The updater plugin is deliberately included for in-app updates.
+        // It is not telemetry — it only checks a GitHub release URL for new
+        // versions when the user runs the app, and the check is scoped to the
+        // configured endpoint in tauri.conf.json.
+        if *marker == "tauri-plugin-updater" {
+            continue;
+        }
         assert!(
             !manifest.contains(marker),
             "src-tauri/Cargo.toml depends on {marker}, which would introduce {category}"
