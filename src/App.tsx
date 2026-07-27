@@ -204,11 +204,19 @@ export function App() {
     )
   }
 
-  function createWorkspace(event: FormEvent) {
-    event.preventDefault()
-    void submit(thinkingWorkspace.createWorkspace(workspaceName)).then((result) => {
+  /** Reports whether the create committed, so the rail's inline field closes
+   *  on a commit and keeps the name when the command refuses it. */
+  function createWorkspace(): Promise<boolean> {
+    return submit(thinkingWorkspace.createWorkspace(workspaceName)).then((result) => {
       if (result.committed) setWorkspaceName("")
+      return result.committed
     })
+  }
+
+  /** The one switch. The rail row and the ⌘K jump entries both run it, so
+   *  which Workspace is active is always a fact the next snapshot reports. */
+  function selectWorkspace(workspaceId: string) {
+    void submit(thinkingWorkspace.selectWorkspace(workspaceId))
   }
 
   function renameWorkspace(event: FormEvent) {
@@ -344,6 +352,8 @@ export function App() {
   const canUndo = Boolean(snapshot) && snapshot!.undoableCommands > 0
   const paletteActions = buildPaletteActions({
     activeWorkspace,
+    workspaces,
+    selectWorkspace,
     canUndo,
     undo: undoLastChange,
     renameWorkspace: () => setRenameDraft({ id: activeWorkspace!.id, name: activeWorkspace!.name }),
@@ -376,9 +386,14 @@ export function App() {
           workspaces={workspaces}
           activeWorkspaceId={activeWorkspace?.id}
           name={workspaceName}
-          onSelect={(workspaceId) => void submit(thinkingWorkspace.selectWorkspace(workspaceId))}
+          renameDraft={renameDraft}
+          onSelect={selectWorkspace}
           onNameChange={setWorkspaceName}
           onCreate={createWorkspace}
+          onStartRename={(workspace) => setRenameDraft({ id: workspace.id, name: workspace.name })}
+          onRenameDraftChange={(name) => setRenameDraft((draft) => (draft ? { ...draft, name } : draft))}
+          onRename={renameWorkspace}
+          onCancelRename={() => setRenameDraft(null)}
           onOpenSettings={() => setSettingsOpen(true)}
         />
       }
@@ -481,7 +496,13 @@ export function App() {
           selectedMissing={
             localDiscovery.selectedMissing || cloudDiscovery.selectedMissing
           }
-          onClose={() => setSettingsOpen(false)}
+          /* Closing the sheet abandons an uncommitted rename with it, so the
+             one draft never outlives the surface the thinker dismissed and
+             lingers as an open field on the rail row. */
+          onClose={() => {
+            setSettingsOpen(false)
+            setRenameDraft(null)
+          }}
           onStartRename={(workspace: ThinkingWorkspace) =>
             setRenameDraft({ id: workspace.id, name: workspace.name })
           }
@@ -575,6 +596,9 @@ function RenameLabelModal({
  *  App component body. Returns nothing when there is no active Workspace. */
 function buildPaletteActions(input: {
   activeWorkspace: ThinkingWorkspace | undefined
+  /** Every Thinking Workspace, so ⌘K can jump to one by name. */
+  workspaces: ThinkingWorkspace[]
+  selectWorkspace: (workspaceId: string) => void
   canUndo: boolean
   undo: () => void
   renameWorkspace: () => void
@@ -600,5 +624,13 @@ function buildPaletteActions(input: {
     { id: "policy-manual", label: "Assistance: Manual", group: "Assistance", run: () => input.setAssistancePolicy("manual") },
     { id: "policy-local", label: "Assistance: Local AI", group: "Assistance", run: () => input.setAssistancePolicy("local_ai") },
     { id: "policy-cloud", label: "Assistance: Cloud AI", group: "Assistance", run: () => input.setAssistancePolicy("cloud_ai") },
+    // One jump per Thinking Workspace, matched by name, running the same
+    // switch the rail row runs. Full palette coverage is a later slice.
+    ...input.workspaces.map((workspace) => ({
+      id: `switch-workspace-${workspace.id}`,
+      label: `Switch Workspace → ${workspace.name}`,
+      group: "Switch Workspace",
+      run: () => input.selectWorkspace(workspace.id),
+    })),
   ]
 }
