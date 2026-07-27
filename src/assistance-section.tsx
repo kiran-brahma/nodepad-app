@@ -7,12 +7,7 @@ import type {
 import { CloudConsentDialog } from "./cloud-consent-dialog"
 import { CloudKeySection } from "./cloud-key-section"
 import { CLOUD_PROVIDER_LABELS } from "./cloud-provider"
-
-const POLICY_LABELS: Record<AssistancePolicy, string> = {
-  manual: "Manual",
-  local_ai: "Local AI",
-  cloud_ai: "Cloud AI",
-}
+import { ASSISTANCE_POLICIES, assistancePolicyLabel } from "./assistance-policy"
 
 /**
  * Controls for the Workspace's Assistance Policy and, when AI is active,
@@ -71,30 +66,19 @@ export function AssistanceSection({
   return (
     <section aria-label="AI Assistance">
       <h2>AI Assistance</h2>
-      <p>{activeWorkspace.name} is using {POLICY_LABELS[policy]} assistance.</p>
+      <p>{activeWorkspace.name} is using {assistancePolicyLabel(policy)} assistance.</p>
 
       <div className="row" role="group" aria-label="Assistance Policy">
-        <button
-          aria-pressed={policy === "manual"}
-          className={policy === "manual" ? "active" : ""}
-          onClick={() => onPolicyChange("manual")}
-        >
-          Manual
-        </button>
-        <button
-          aria-pressed={policy === "local_ai"}
-          className={policy === "local_ai" ? "active" : ""}
-          onClick={() => onPolicyChange("local_ai")}
-        >
-          Local AI
-        </button>
-        <button
-          aria-pressed={policy === "cloud_ai"}
-          className={policy === "cloud_ai" ? "active" : ""}
-          onClick={() => onPolicyChange("cloud_ai")}
-        >
-          Cloud AI
-        </button>
+        {ASSISTANCE_POLICIES.map((option) => (
+          <button
+            key={option}
+            aria-pressed={policy === option}
+            className={policy === option ? "active" : ""}
+            onClick={() => onPolicyChange(option)}
+          >
+            {assistancePolicyLabel(option)}
+          </button>
+        ))}
       </div>
 
       {policy === "local_ai" && (
