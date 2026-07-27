@@ -63,6 +63,1735 @@ All notable changes to Nodepad are documented here.
 
 ### Other
 
+- Update Tauri updater pubkey and release script
+- 
+- Release v0.1.0
+- Release v0.1.0 and update release tooling
+- 
+- Update release_audit.rs
+- Update release_audit.rs
+- Update release_audit.rs
+- Implement automated release pipeline and Tauri updater
+- 
+- repository still carried the Next.js browser experiment it replaced: an
+- `app/` route tree, a `components/` library, `lib/` helpers, and the
+- configs for a build that no longer runs. Nothing under `src/` imported
+- any of it — none of it was in `tsconfig.include`, linted, or bundled —
+- so it was invisible weight that every reader and every tool had to
+- step over.
+- 
+- `src/` imports seven runtime packages: @tauri-apps/api, cmdk, d3, react,
+- react-dom, react-markdown, and remark-gfm. Everything else went: Next,
+- 26 Radix packages, Tailwind and its PostCSS chain, shadcn,
+- framer-motion, recharts, zod, react-hook-form, and the rest of the
+- component-kit tail. 45 packages in total.
+- 
+- Three placement errors are fixed on the way past: vite, vitest, and
+- @vitejs/plugin-react were production dependencies; @eslint/js was
+- imported by the ESLint config without being declared at all.
+- 
+- The tsconfig kept a `next` compiler plugin and an `@/*` path alias that
+- nothing resolved through, and .gitignore kept entries for the v0
+- runtime, `.next/`, and a design-system directory that never existed.
+- 
+- `npm run check` passes: 211 frontend tests, lint, typecheck, and the
+- Rust suites.
+- 
+- Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+- 
+- underneath it was ignored, so every agent session rediscovered the same
+- invariants, conventions, and gotchas. It belongs in the repository.
+- 
+- Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+- 
+- dev server, provider keys in the browser, and a feature list the desktop
+- build had outgrown. It now describes what the application actually is —
+- Tauri over SQLite, the vocabulary from CONTEXT.md, the three views, the
+- keyboard surface, and where data and keys live.
+- 
+- Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+- 
+- review: unit-test the palette builder, enumerate Assistance Policies
+- 
+- Every other pure module in src/ ships a co-located unit test; the palette
+- builder shipped only integration coverage inside App.test.tsx. It now has
+- palette-actions.test.ts, over the builder's own logic: the empty result
+- with no active Workspace, coverage of every arrangement/Note Type/policy/
+- Workspace, the disabled-and-inert focused-Note entries, and the routing of
+- each focused-Note action to the intent the card runs.
+- 
+- The three Assistance Policy entries restated a label table that already
+- existed in assistance-section.tsx, while the views and Note Types were
+- mapped from their canonical lists. ASSISTANCE_POLICIES and
+- assistancePolicyLabel move to assistance-policy.ts, and both the settings
+- buttons and the palette map over them.
+- 
+- Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+- 
+- 
+- R15 — Command palette expansion
+- focusing the capture bar, opening Workspace settings, switching view,
+- switching Workspace, and acting on the focused Note (edit, relate,
+- pin/unpin, set Note Type, delete).
+- 
+- The focused-Note entries route through the same intents object the card
+- uses, so the palette can never mean something different from clicking
+- the card, and they stay listed but disabled while nothing is focused.
+- 
+- The builder moves out of App into its own module, and the stale capture
+- action now focuses the capture bar's actual field instead of a removed
+- element id.
+- 
+- Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+- 
+- review: give each rename surface its own draft, share one form
+- rename started in the settings sheet also opened a field on the rail row
+- behind it, so two autoFocus inputs raced, two escape entries stacked, and the
+- row lost the button that selects it. A draft is not a fact about the Workspace
+- — it is which field is open and what is typed in it — so the rail and the
+- sheet each own one.
+- 
+- The duplication was in the form, not the state: WorkspaceRenameForm is
+- extracted once, with the WorkspaceRenameDraft type, and both surfaces render
+- it under their own accessible name. renameWorkspace(draft, clearDraft) is the
+- one commit path. The ⌘K rename action now opens the rail row's field, the
+- surface this slice gives rename, rather than setting a draft nothing shows.
+- 
+- Escape also closes the rail's create field and drops the name with it, and the
+- create test now proves the draft cleared rather than only that the field shut.
+- 
+- Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+- 
+- R14 — Workspace rail & switcher
+- marks the active one with a 2px accent left edge, in-place rename on a row,
+- a create control in the rail footer beside Settings, and a ⌘K jump entry per
+- Workspace.
+- 
+- Nothing durable is added. Selecting, creating, and renaming run the existing
+- selectWorkspace / createWorkspace / renameWorkspace commands, and deletion
+- keeps its confirmation and the one-valid-Workspace invariant behind
+- deleteWorkspace. The rail shares App's single rename draft with the settings
+- sheet so the two surfaces cannot disagree about the name being edited, and
+- closing the sheet abandons an uncommitted rename with it. createWorkspace now
+- reports whether it committed, so the rail's inline create field closes on a
+- commit and keeps the name when the command refuses.
+- 
+- Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+- 
+- review: keep placement geometry, and the offer, in one place each
+- text, stale, source count — alongside its geometry, so it would have been
+- edited both when the arrangement changed and when the card's wording did.
+- It now carries the PendingSynthesis itself: it owns where a Synthesis sits
+- and nothing else about it, and both views read the offer they were given.
+- 
+- The graph's provisionalMarks wrapper delegated to synthesisAnchors and did
+- nothing else, so it is inlined at its one call site.
+- 
+- Copy follows the glossary: "connects 2 Notes", not "notes", matching every
+- other user-visible string in the app.
+- 
+- Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+- 
+- R13 — Synthesis as an ambient offer
+- placed at the centroid of the source Notes it names, with faint leaders to
+- each of them and two actions — "Accept as thesis", which creates the fresh
+- thesis Note through the existing synthesis controller, and "Dismiss", which
+- commits nothing. A stale offer is dimmed and can only be dismissed.
+- 
+- The card is deliberately not a Note: it carries no note id, holds no
+- canvas position, cannot be dragged, and cannot be a Relationship endpoint,
+- so the rule that a Synthesis has no place in the Thinking Graph stays true
+- on screen.
+- 
+- The placement rule had one owner already, inside the graph view. Rather
+- than copying "centroid of the drawn sources, and nothing drawn when none of
+- them is" into a second view, it moves into one pure module,
+- synthesis-placement.ts, which both views read through the anchor each of
+- them draws its Notes at.
+- 
+- Eligibility, the cooldown, the pending cap, and the two-to-five source rule
+- are untouched and stay in Rust; this slice renders the offer and routes the
+- two answers.
+- 
+- Closes #54
+- 
+- Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+- 
+- review: answer the suggestion when it is answered, not before
+- 
+- Dedupe now honours the word the issue actually used. A dismissal was keyed on
+- pair identity alone, so a waved-off pair stayed suppressed for the session
+- even after the thinker rewrote one of the Notes — a different thought, and so
+- a different suggestion. The key is the pair as those two thoughts currently
+- read. The test that locked in the old behaviour is replaced by two: an
+- unchanged pair is not put again, a rewritten one may be.
+- 
+- Accepting no longer clears the chip on optimism. The suggestion is forgotten
+- once the relate command commits; a refused commit leaves the offer standing,
+- so a failed relate can no longer lose the proposal with no Relationship to
+- show for it. Covered by a test that makes relate_notes refuse.
+- 
+- Pair identity gets one owner: pairKey and noteById move into the Thinking
+- Graph projection, which already held the canonical rule privately, and the
+- suggestion module and the card read them instead of restating the rule.
+- Removing a stray NUL byte from that pair key, in the repository since the
+- projection was written, is a side effect of the move.
+- 
+- Suggested Relationship is recorded in the CONTEXT.md glossary, as
+- docs/agents/domain.md requires of a new domain concept. The chip's styles are
+- scoped to the card like their neighbours, and the canvas line helper is
+- private to the view that draws it.
+- 
+- Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+- 
+- R12 — Suggested Relationships, surfaced inline
+- than as a fact: a dashed accent line on the canvas and a small chip on the
+- Note reading "Relate to '<preview>'?" with Link and Dismiss. Link commits
+- through the existing relateNotes command, so an accepted suggestion is an
+- ordinary Relationship afterwards; Dismiss commits nothing and the same
+- unchanged pair is not offered again in the session.
+- 
+- The precondition for the slice was removing a contradiction underneath it.
+- The enrichment application committed every Relationship the model named,
+- with Ai provenance, inside the same transaction as the Note Type, the
+- Annotation, and the Labels — so a proposal was already a link before the
+- thinker saw it. ApplicableFields no longer carries a relationship channel
+- and neither store writes one; the proposal travels to the UI on the parsed
+- result, which is where it belongs. Parsing, candidate validation, and the
+- five-item cap are untouched.
+- 
+- Suggestions live in one session-scoped module. It holds only what the
+- Thinking Graph cannot answer — which pairs were proposed and which were
+- waved off — and subtracts the rest by projection, so the application never
+- grows a second answer to what is linked.
+- 
+- One pre-existing test bug fixed on the way: apply_enrichment's relationship
+- test read both endpoints from position 0 of two different snapshots, so it
+- was asserting against a self-pair.
+- 
+- Closes #53
+- 
+- Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+- 
+- render that preceded the new Note existing, so the controller's
+- `buildToken` closure held a snapshot without that Note. The token came
+- back null, the status fell back to idle, and `enrich_note` was never
+- invoked — AI organization only ever ran on edits to existing Notes.
+- 
+- Read the snapshot from a ref instead, so a scheduled attempt resolves
+- its token against current state when the debounce fires rather than
+- against the state captured at schedule time. The policy gate in
+- `schedule` reads the same ref.
+- 
+- Adds a test at the existing `thinkingWorkspace` seam: capturing a Note
+- through the capture bar produces exactly one `enrich_note` call after
+- the debounce window. Red before the fix, green after.
+- 
+- Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+- 
+- review: gate presence on one predicate and quiet the duplicate signals
+- top bar reads, so switching a Workspace to Manual mid-flight cannot leave a
+- Note shimmering after the indicator has gone.
+- - The "AI is busy" rule lives once, as a type guard in ai-presence, and both
+- the card class and the meta line read it.
+- - The card carries aria-busy while organizing; the per-Note "Organizing…"
+- line is no longer a live region, so one organization announces once.
+- - The shimmer paints behind the Note's content, and reduced motion gets a
+- static tint and a solid dot instead of an animation parked out of sight.
+- 
+- Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+- 
+- R11 — Background enrichment presence
+- indicator appears in the top bar; at rest the indicator reads 'AI · quiet'.
+- A Manual Workspace shows no AI presence at all.
+- 
+- Presence is derived from the enrichment controller's single status through
+- one pure function, so the shimmer and the indicator cannot disagree about
+- whether AI is busy. The enrichment badge keeps its four states but is
+- restyled as a quiet affordance, and a failed organization is now
+- dismissible inline alongside retry and re-enrich-and-replace.
+- 
+- Editing during inference stays unblocked; a new Rust conformance test
+- confirms a text edit invalidates the in-flight response through the
+- existing revision guard.
+- 
+- Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+- 
+- R9: First-class view switcher
+- - Canvas is the default view (replaces tiling as default)
+- - Remove tiling as a separately labelled view (retained as canvas auto-layout)
+- - Add brief crossfade animation on view change (respects prefers-reduced-motion)
+- - View choice persists per active Workspace as transient UI state
+- - Update AppShell with topbar prop for the segmented control
+- - Simplify CommittedNotesSection (remove view toggle, tiling path)
+- - Update tests for new default view and canvas behavior
+- 
+- R8 — Focus & dim across surfaces
+- its directly-related Notes and dims all others, identically in canvas,
+- kanban, and graph.
+- 
+- Changes:
+- - canvas-view.tsx: accept  instead of ;
+- wire up hover/focus handlers on card wrappers; update
+- to use  for relationship highlighting
+- - kanban-view.tsx: accept ; wire up hover/focus handlers
+- - tiling-view.tsx: accept ; wire up hover/focus handlers
+- - committed-notes-section.tsx: pass  to all views
+- - canvas-view.test.tsx: update to use  prop
+- - App.test.tsx: fix pre-existing test fragility around transient dimmed
+- class names in graph snapshot comparison
+- 
+- Closes #49
+- 
+- Add durable canvas placement
+- R5 — Inline editing everywhere
+- Shift+Enter newline. Type tag opens inline popover for all 14 types.
+- Annotation click-to-edit with length enforcement. 'Add annotation'
+- affordance when none exists. Removed 'Edit text' from action row and
+- 'Edit text'/'Set Type'/'Edit Annotation' from command menu.
+- 
+- ExternalLink now calls stopPropagation() so link clicks don't trigger
+- inline edit mode.
+- 
+- R4 — Calm Note card
+- (uppercase .tag), the rendered thought, a quiet left-ruled Annotation
+- aside, and a small meta line (linked count, first label). Secondary
+- actions move behind a hover action row and a ⌘· menu, both reachable
+- by keyboard.
+- 
+- - Resting layout: Type tag, thought, annotation-aside, meta line
+- - Hover action row: edit, relate, pin, more (icon buttons)
+- - ⌘· menu: full action set (Edit text, Set Type, Annotation, Pin,
+- Add Label, Relate, Move/Copy, Delete)
+- - Pinned Notes: 2px accent left edge instead of badge
+- - Draft editors shown only when their draft is active
+- - All 162 tests pass, TypeScript clean, build succeeds
+- 
+- R3 — Workspace settings out of the main view
+- export/import, and rename/delete into a Workspace settings sheet
+- opened from a control in the rail. The main pane now shows only
+- Notes and capture.
+- 
+- - New WorkspaceSettingsSheet modal component (focus-trapped,
+- Escape/scrim dismiss) hosting AssistanceSection, export/import
+- buttons, rename/delete controls
+- - Settings button in the rail footer (disabled when no active
+- Workspace)
+- - AssistanceSection and CaptureSection admin controls removed
+- from the main pane
+- - All existing behavior preserved — handlers pass through unchanged
+- - 162 tests pass, all quality gates green
+- 
+- Closes #44
+- 
+- R2: Persistent capture bar
+- foot of the main pane. Enter commits the Note via createNote; Shift+Enter
+- inserts a newline; empty Enter is a no-op; Escape blurs the bar.
+- 
+- - New CaptureBar component with keyboard handling (Enter/Shift+Enter/Escape)
+- - CaptureSection now only shows workspace admin controls (rename, delete,
+- export, import) in the top bar area
+- - Empty workspace shows a first-Note prompt in the main pane
+- - Capture bar is disabled with placeholder when no active workspace
+- - Scroll position preserved (separate scroll containers in R1 shell)
+- - All 162 tests pass across 11 test files
+- 
+- R1: Three-pane app shell
+- - Rail: workspace list and create form (WorkspaceSection)
+- - Main pane: scrollable content (header, Notes, assistance, search, synthesis)
+- - Footer: capture bar (CaptureSection)
+- - CSS: viewport-filling flex layout, 240px rail, 2px dividers
+- - Narrow window support (640px breakpoint)
+- - Tests: region presence, content placement, capture/rail separation
+- 
+- review: address code-review findings for issue #19
+- without proving anything.
+- 
+- `SecurityCliKeychain::write` passed the Ollama Cloud bearer key as
+- `security add-generic-password ... -w <value>`, putting the secret in this
+- process's argv where `ps` exposes it to any local process for the duration of
+- the call. The module's own doc comment had claimed the opposite since the seam
+- was written. The value now goes to the child's stdin, and
+- `secrets::process_argument_audit` fails the build if it returns to the command
+- line. Verified against the real macOS keychain: the write round-trips.
+- 
+- The replacement sentinel audit repeated, in subtler form, the defect it was
+- written to fix: it scanned every prohibited artifact for a value that nothing
+- in the test ever planted, so every assertion was vacuous. It now puts the
+- sentinel in the keychain the production Cloud path reads, drives a real
+- discover_models call, and proves through a recording client that the key
+- reached the bearer header before asserting it reached no durable byte. It moves
+- to release_audit.rs, so both release audits live in one module as the
+- simplicity audit promised.
+- 
+- The allowlist scan exempted any line containing `assert!` or `assert_eq!` --
+- wide enough to hide a provider behind a single assertion. Exemptions are now
+- declared in TEST_FIXTURE_ORIGINS where they are visible, and only comments are
+- skipped.
+- 
+- Adds the built-artifact scan the issue asked for: minification and a
+- dependency's runtime can put a string in dist/ that appears in no source file.
+- Each exempted origin was checked by hand against the bundle. Adds an audit
+- pinning the one development URL that ships to a loopback address, disclosed
+- rather than allowlisted away.
+- 
+- Extracts the three duplicated scan loops into one `scan` helper.
+- 
+- Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+- 
+- and produces the Apple Silicon artifact.
+- 
+- The gate did not exist as a runnable command: `npm run check` never ran
+- `cargo fmt` or `cargo clippy`, and both had been failing unobserved for the
+- whole of V0 (one rustfmt diff, eleven clippy errors). Both are wired into
+- `check` and every failure is fixed, including a genuinely dead
+- `read_preference`.
+- 
+- The existing sentinel test asserted far less than its name claimed: it looped
+- over a one-element array collecting only a Workspace UUID and an RFC3339
+- timestamp, neither of which could ever carry a bearer key. It is replaced with
+- an audit that reads the raw bytes of the SQLite file and its write-ahead log,
+- a backup, an exported archive, a Markdown export, the UI snapshot, and an
+- error message. It carries a positive control so it fails loudly rather than
+- passing vacuously if the scan stops reading those bytes.
+- 
+- `release_audit.rs` adds the network audit: an explicit outbound-host allowlist,
+- forbidden markers for analytics/error-reporting/updaters/non-Ollama providers,
+- a check that the webview opens no connection of its own, a CSP check, and a
+- registered-plugin check. It also carries the clean-app-data end-to-end smoke.
+- 
+- Removes the Umami analytics script and the public CORS proxy route from the
+- unshipped Next prototype; both contradicted the release's stated privacy
+- decisions. The prototype's provider config and video components are retained
+- as source material for follow-up work.
+- 
+- Fixes the bundle config, which shipped no DMG and no icon.
+- 
+- Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+- 
+- external-link behavior across the finished V0 surfaces.
+- 
+- Shortcuts and Escape:
+- - Command-K opens a command palette (cmdk) that runs the actions App already
+- owned; the palette learns no business rule.
+- - Command-Z session undo already skipped text editing; unchanged.
+- - Escape is now coordinated by a priority-ordered escape stack so the topmost
+- dismissible surface (palette > modal > inline draft) closes before the
+- note-focus lock clears. The note-focus lock demoted to the lowest priority.
+- 
+- Modals and focus:
+- - useModalFocus traps focus inside a true modal, cycles Tab within it, and
+- restores focus to the invoker on close. Applied to the Cloud consent
+- disclosure, the Rename Label dialog, and the command palette.
+- - Inline note-card and workspace-rename forms cancel on Escape via a shared
+- EscapeDismiss component.
+- 
+- External links:
+- - A Note's Markdown links never navigate the webview: the ReactMarkdown `a`
+- override routes explicit http/https URLs through one Tauri command that
+- re-validates the scheme in Rust and hands the URL to the macOS `open` shell
+- opener. Non-HTTP(S) schemes render as inert text. The single durable seam
+- (workspace-client) gains one binding; no new Tauri plugin or capability.
+- 
+- Status, reduced motion, and visible focus:
+- - The over-limit Annotation counter reads "Over the limit" (role=alert), not
+- color alone. Synthesis and enrichment status get aria-live; the consent
+- dialog announces its saving state.
+- - A defensive prefers-reduced-motion media query neutralises animation
+- without hiding state (V0 has no essential animation).
+- - Global :focus-visible ring for every interactive control.
+- 
+- Tests:
+- - User-level keyboard, accessibility, focus-trap, external-link, scheme
+- rejection, reduced-motion, and "don't steal shortcuts" integration tests.
+- - Rust unit tests for the external-link scheme predicate.
+- - vitest now excludes stale agent-worktree checkouts under .claude/.
+- 
+- Workflow: prd-simplicity-audit (docs/audits/issue-18-simplicity-audit.md,
+- PROCEED), parallel Standards+Spec code-review (findings addressed), scoped
+- fallow (no introduced dead code/duplication; App complexity threshold
+- documented as pre-existing orchestrator debt), and the full check gate
+- (typecheck, lint, vitest, cargo test, web build, cargo check).
+- 
+- review: address code-review and fallow findings for issue #17
+- signal the comment said was being avoided) by excluding the whole
+- note_search family.
+- - Simplify integrity_check's open-failure mapping to |_| BackupError::Corrupt.
+- - Document the UTC-day decision in day_of and the simplicity audit; the
+- audit now reflects the backup-state.json sidecar, not app_preferences rows.
+- - Import WorkspaceSnapshot at the top of storage-recovery.tsx and restore
+- the trailing newline.
+- - Add the two missing scenario tests: a failed pre-restore backup preserves
+- the current database, and a tampered-source replacement preserves the
+- current database.
+- - Remove the unused backup_count test helper.
+- 
+- SQLite database. Backups live in the macOS application-data folder under a
+- `backups` subdirectory, are produced with SQLite-safe `VACUUM INTO` semantics
+- (never a naive copy of a live WAL database), and carry a JSON manifest with
+- schema version, created time, app version, sha256 checksum, and backup kind.
+- 
+- - `src-tauri/src/backup.rs` owns backup creation, validation (checksum +
+- integrity + supported schema), retention (seven automatic; four each
+- pre-migration/pre-restore), a full-scan data fingerprint, and atomic file
+- replacement that preserves the current database on any failure.
+- - `WorkspaceStore::open_with_backup` guards every pending migration with a
+- verified pre-migration backup or aborts without migrating. The migrations
+- list is extracted so the pending count and the migrator share one source.
+- - `WorkspaceStore::maybe_automatic_backup` runs at most once per local
+- calendar day, only after durable data changed since the last backup.
+- Tracking state lives in a sidecar file so recording it never changes the
+- fingerprint it compares against.
+- - The `restore_backup` command re-validates the selected backup, makes a
+- pre-restore backup, closes the live connection, swaps files atomically, and
+- reopens (migrating an older-schema backup forward behind its own pre-
+- migration backup). An invalid backup never replaces current data.
+- - The recovery screen lists valid local backups and restores one after
+- explicit confirmation; it works even when storage would not open.
+- 
+- Closes #17.
+- 
+- deterministic JSON and import a fully validated archive into a fresh
+- Workspace with collision-safe identity remapping.
+- 
+- - archive.rs owns the V0 format, deterministic serialization, and full
+- pre-mutation validation (format, version, size, required fields, length
+- bounds, enums, unique source ids, label normalization, relationship
+- endpoints/pairs, synthesis source ids). No SQLite access.
+- - workspace.rs owns the SQL extraction (archive_export_data) and the
+- transactional import (import_archive): one transaction, fresh ids,
+- remapped references, imported Workspace always Manual, name collisions
+- append deterministic ' (2)'/' (3)' suffixes, rollback on any failure.
+- - Reusable durable validators/constants promoted to pub(crate) so the
+- archive and the store share one source of truth for every limit.
+- - Native save/open dialogs with atomic write; cancel is a no-op.
+- - Export excludes provider keys, selected model, cloud consent, active
+- workspace, undo, view state, and paths; durable domain content only.
+- - Pending Syntheses whose sources left the Workspace are not archived;
+- source revision is derived from the preserved Note on import so
+- staleness is correct in the fresh Workspace.
+- 
+- Tests: archive format/validation unit tests; Rust round-trip covering
+- Unicode, all Note Types, manual/AI provenance, manual/AI Relationships,
+- Labels (including vocabulary with no Note), pending Synthesis with
+- sources, synthesis history, restart recovery; rollback on injected
+- failure; byte scan for secrets/transient markers; name collision
+- suffixing; malformed-before-mutation. Frontend UI tests for export,
+- import success/cancel/failure.
+- 
+- Closes #16.
+- 
+- Add native Markdown export
+- - A failed attempt (malformed body, provider failure, stale sources) now
+- records a cooldown-only checkpoint. Previously only `found: false` and
+- semantic repeats touched `synthesis_attempts`, so a provider answering with
+- nonsense was re-asked after every debounce forever. The cooldown moves; the
+- five-new-Notes checkpoint deliberately does not, so a transient failure
+- never costs the thinker their next five organized Notes.
+- - The diversity gate counted Note Types and Labels into one set, so five Notes
+- sharing one default Note Type and one Label passed on a total of two. The
+- two axes are now counted separately: "at least two represented Note Types
+- **or** Labels" means either axis on its own, never a sum.
+- - The novelty history is now bounded in storage, not only on read.
+- 
+- Standards review:
+- - `extract_json_candidate` is shared with the Note Organization parser rather
+- than copied; the attempt upsert and the organized-material counts each have
+- one home; `store_pending_synthesis` takes `ParsedSynthesis` and
+- `SourceRevision` instead of loose tuples and strings; the Assistance Policy
+- travels as its own enum on both sides of the seam.
+- - Dropped the glossary drift the new prose introduced ("edge", "canvas").
+- - Removed the unused `attemptNow` / `clear` controller surface, and the
+- optional-with-default `pendingSyntheses` prop.
+- - `useWorkspaceSnapshot` exposes `adoptSnapshot` instead of the App wrapping a
+- snapshot in a resolved promise to reuse `submit`.
+- 
+- Fallow (introduced findings only):
+- - Extracted the shared request-generation guard both AI controllers use.
+- - The Synthesis controller now owns which Syntheses are pending here, and the
+- accept and dismiss commands, so the App composes rather than coordinates.
+- - One `assistanceEnabled` predicate replaces three copies of the policy test.
+- - Simplified `statusMessage` from a seven-arm switch to a lookup.
+- Introduced complexity findings are back to zero. The remaining eight-line
+- clone between the two controllers is the call-and-guard shape around two
+- different commands with two different status unions; collapsing it further
+- would be an abstraction neither controller needs.
+- 
+- Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+- 
+- organized material, the Enrichment Workflow sends a bounded, diverse Note
+- sample and recent Synthesis history to the approved Prompt B, and a valid
+- result waits as a pending Synthesis until the thinker accepts it as a fresh
+- thesis Note or dismisses it.
+- 
+- - synthesis.rs holds the pure seam: byte-for-byte Prompt B, the response
+- schema, eligibility evaluation against a caller-supplied clock, five-to-ten
+- candidate selection, the three-block user message, response validation, and
+- the semantic-repeat invariant.
+- - Migration 0009 stores pending Syntheses with their source identities and
+- captured revisions, AI provenance, the bounded novelty history, and the
+- per-Workspace attempt checkpoint. No Relationship row is ever written for a
+- provisional result.
+- - A `found: false` attempt is a success: it moves the cooldown and the
+- checkpoint and adds no pending content. Accept creates a thesis Note and
+- removes the pending item in one transaction; dismiss removes the pending
+- content and keeps only the text for novelty. A changed, deleted, or moved
+- source Note makes a pending Synthesis stale and unacceptable.
+- - The UI shows pending Syntheses beside their sources with Accept and Dismiss,
+- reports ineligible and no-insight outcomes quietly, and draws a provisional
+- mark in the graph without persisting a fake Relationship.
+- 
+- Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+- 
+- Update .gitignore
+- Note is created or edited, the controller debounces 800ms, captures
+- a request token, calls Ollama /api/chat, parses the structured
+- response, and applies the parsed fields to the Note through the
+- manual-provenance gate.
+- 
+- Highlights:
+- - Migration 0008 widens the provenance CHECK to admit the new 'ai'
+- value and adds the enrichment_revision + last_enriched_at columns.
+- - Provenance enum grows an 'Ai' variant; the workspace layer bumps
+- the revision on every commit that touches a Note.
+- - Enrichment Workflow module owns the approved Prompt A, the JSON
+- schema, the candidate selection algorithm, the per-field
+- truncation, the response parser, and the application gate.
+- - The Tauri command 'enrich_note' runs the same provider-agnostic
+- contract for local Ollama and consented Ollama Cloud, with the
+- bearer key read from the macOS keychain on demand.
+- - Manual fields are never overwritten by AI; Re-enrich and Replace
+- is the only path that bypasses the gate, and the UI now surfaces
+- an explicit confirmation dialog before committing.
+- - Typed failures (stale / invalid_schema / provider / unavailable)
+- leave the Note untouched and the UI renders a single retry
+- affordance.
+- - Visible provenance: 'AI organized' badge when the Note has been
+- enriched, and a small 'AI' chip on Note Type and Annotation when
+- the value is AI-authored.
+- 
+- Tests:
+- - 95 Rust tests cover schema, parser, gate, persistence, and the
+- stale / manual / force / reopen paths. Contract test asserts the
+- system prompt byte-for-byte against the approved Prompt A and
+- exercises both a small-model and large-model fixture.
+- - 118 TypeScript tests cover the workspace-snapshot submit return
+- shape, the enrichment controller debounce + cancel + retry +
+- replace confirmation, and the existing App, Note, and Thinking
+- Graph flows.
+- 
+- Closes #12
+- 
+- 
+- Adds per-Workspace Cloud AI consent, a narrow macOS keychain seam for the
+- bearer key, and authenticated discovery against the fixed Ollama Cloud host
+- (/api/tags). The key is read on demand and never enters the database, the
+- React tree, a log line, or a command return value.
+- 
+- - New migration 0007_cloud_consent.sql adds cloud_consent_at to workspaces.
+- - New Rust module secrets.rs: KeychainAdapter trait, SecurityCliKeychain
+- production impl, fake::FakeKeychain for tests.
+- - New Rust module cloud.rs: CloudOllamaProvider with bearer auth and the
+- three cloud-only failure codes; From impl bridges to DiscoveryOutcome.
+- - WorkspaceStore.set_cloud_consent persists the moment of consent.
+- - Five new Tauri commands: set_cloud_consent, set_cloud_api_key,
+- delete_cloud_api_key, cloud_api_key_present, discover_cloud_models.
+- - React: ThinkingWorkspace.cloudConsentAt, CloudConsentDialog,
+- CloudKeySection, useCloudDiscovery hook, Cloud AI branch on the
+- AssistanceSection. The Cloud AI button opens the disclosure on
+- unconsented Workspaces; only accept flips the policy to cloud_ai.
+- - Rust and React tests scan serialized state and SQLite rows for a sentinel
+- bearer key, asserting it never lands in durable or rendered output.
+- 
+- - Default every new Workspace to Manual assistance.
+- - Add local Ollama /api/tags discovery with typed failure states.
+- - Add UI to switch between Manual and Local AI, refresh/search/select models.
+- - Show distinct states for unavailable, timeout, malformed, empty, and missing model.
+- - Persist policy and selected model across restart.
+- - No Note content sent; no chat/generate; no cloud or custom host in this slice.
+- 
+- focus consistent across all three views.
+- 
+- Degree, related Notes, relate candidates, dimming, and the drawn graph
+- previously would have counted the same Relationships in three places. They
+- now all read one projection, `thinkingGraph(notes, relationships)`, which
+- admits a link only when both endpoints are Notes of the Workspace it was
+- given and admits each canonical pair once. A dangling or cross-Workspace
+- link therefore cannot be built, and a node's degree is by construction the
+- number of lines drawn to it.
+- 
+- The arrangement is derived, never stored: `graphLayout` runs a force
+- simulation to rest inside a pure call and returns placements, so there is no
+- simulation to own, no coordinate to persist, and a restart rebuilds the same
+- picture from SQLite alone.
+- 
+- Focus stays transient. Hovering a node previews what it is related to,
+- clicking locks that focus, and clicking again, Escape, or the Note leaving
+- the screen lets it go. Focus survives a view change, because the accepted
+- outcome that tiling and kanban dim against the same related set is only
+- observable if it does, and because #8 shipped a test asserting it; the
+- audit records this deviation from the issue's clearing list.
+- 
+- Selecting a node opens the same Note card the other views place, over the
+- same intents, so the graph offers no action the other views lack.
+- 
+- Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+- 
+- including a ~220-line Note card closure. Both `App` and the card closure were
+- flagged CRITICAL for complexity.
+- 
+- The Note card is now a standalone component, and every change it can make is
+- submitted through a single intents object built once in App and passed down.
+- Views cannot grow their own mutation policy: one card and one set of intent
+- handlers serve every view.
+- 
+- - note-card.tsx: NoteCard plus its stateless sub-parts. Drafts arrive as
+- props; nothing is committed inside the card.
+- - note-intents.ts: buildNoteIntents(), the one place Note mutations are sent.
+- - note-drafts.ts / note-focus.ts: uncommitted per-Note edits and transient
+- focus, each behind one hook.
+- - workspace-snapshot.ts: snapshot, failures, and the single submit path.
+- - workspace-section.tsx / capture-section.tsx / search-section.tsx /
+- storage-recovery.tsx / undo-shortcut.ts: the remaining surfaces.
+- 
+- No durable behavior changes: markup, ids, aria labels, and outcomes are
+- unchanged, and the existing tests pass untouched.
+- 
+- Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+- 
+- consume one projection of the active Thinking Workspace — pinned first,
+- stable creation order, narrowed by any active search — and both place the
+- same Note card, so mutation policy has one home and a view can only decide
+- where a Note appears, never what may be done to it.
+- 
+- Tiling arranges each page by repeated halving, alternating direction with
+- depth. Kanban gives one column per Note Type present, in the fixed order
+- the durable interface declares. Neither stores a coordinate, a page, a
+- column, or the view choice itself, so a restart reconstructs both views
+- from SQLite alone.
+- 
+- Search now narrows both views instead of rendering a separate list of
+- snippets, so a found Note is never a second copy of the thinking.
+- 
+- Closes #8
+- 
+- 
+- A move keeps the Note's identity and every authored field, remaps its
+- Labels into the target Workspace by display meaning, and removes every
+- Relationship, because a Relationship cannot cross a Workspace seam. A
+- copy leaves the original where it is and commits a second Note with a
+- fresh identity and timestamp, the same text, Note Type, Annotation, pin
+- state, manual provenance, and Label meanings, and no Relationship.
+- 
+- A move and the undo of a move are one mutation shape, `Relocate`, so
+- undo stays an ordinary committed transaction: it returns the Note to
+- its prior Workspace and restores only the Relationships the command
+- captured whose two endpoints are both still Notes there. Undoing a copy
+- deletes only the copy. Both file their reversible command under the
+- Workspace the Note came from, which is where the thinker acted.
+- 
+- Label lookup by display meaning is now one function shared with
+- `attach_label`, and Label membership travels with the Note row on an
+- insert as well as a relocation. That also closes a gap where undoing a
+- Note delete restored the Note in SQLite without its Labels while the
+- in-memory adapter restored both.
+- 
+- Every refusal — a missing Note, a missing Workspace, the same
+- Workspace — is decided before a transaction opens, so a rejected
+- transfer leaves both Workspaces and the undo history untouched.
+- 
+- Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+- 
+- the invariants that keep the Thinking Graph well formed.
+- 
+- A Relationship is symmetric and untyped. Each unordered pair is stored
+- once under a canonical endpoint ordering, so either order names the same
+- row and a duplicate is impossible in the module and in the schema. Both
+- endpoints and the Workspace cascade, so no projection can observe an
+- endpoint that no longer names a Note.
+- 
+- - New `thinking_graph` module owns canonical ordering, the endpoint rule,
+- and pair validation as pure rules over committed state.
+- - New `relate_notes` and `unrelate_notes` intents, with manual
+- provenance. Asking for a Relationship that already exists commits no
+- second one. Self and cross-Workspace pairs are refused before any
+- transaction opens, so a refusal leaves nothing partial behind.
+- - Migration 0005 adds the `relationships` table with a unique canonical
+- pair, a `note_id_a < note_id_b` check, and cascades on both endpoints.
+- Provenance admits `ai` so a later assistance slice adds rows rather
+- than changing what an existing row means.
+- - New `src/thinking-graph.ts` owns the projections the Note detail
+- surface renders: related lookup, degree, and relation-editor
+- candidates.
+- - The Note detail surface can add, inspect, navigate to, and remove a
+- Relationship. Navigation is transient focus and commits nothing.
+- 
+- Relationships stay outside undo history, exactly as Labels do. Undoing a
+- Note delete restores the Note, not the Relationships that cascaded with
+- it.
+- 
+- Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+- 
+- Markdown text, delete, pin/unpin, assign any of the fourteen fixed Note Types,
+- write an Annotation independently of the Note text, and undo recent committed
+- mutations during the current session.
+- 
+- Migration 0003 widens the Note Type check to the fixed set and adds Annotation
+- plus the provenance of both, carrying existing Notes forward. Manual Note Type
+- and Annotation edits record manual authorship so a later AI slice cannot
+- overwrite them silently.
+- 
+- Undo keeps at most twenty reversible commands per Workspace in memory and
+- commits a compensating transaction; it never rewinds the database file and does
+- not survive restart. Every Note intent and its compensation share one mutation
+- shape, so both storage adapters run the same code path and the conformance suite
+- covers each mutation, its undo, the bound, per-Workspace isolation, restart
+- clearing, and atomic rollback of failed edits and failed undos.
+- 
+- Notes render through react-markdown without raw HTML, so nothing in a Note
+- executes.
+- 
+- Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+- 
+- Add Tauri capability and ACL schemas
+- 
+- 
+- - A failed open on a path that held no database now removes the stub
+- SQLite created before the failure, so the next launch cannot mistake
+- an empty stub for a legitimate fresh database. Preparation is injected
+- into open so this path is covered by a test.
+- - Locating the app data folder no longer aborts startup. Both the
+- app_data_dir lookup and the folder creation become Initialization
+- recovery states, so the thinker always reaches the recovery screen.
+- Retry re-resolves the path, so a fixed folder recovers without a
+- restart.
+- - Timestamps are fixed-width UTC, so lexicographic order is chronological
+- order in SQL ordering, survivor selection, and tests.
+- - The survivor test now picks a Workspace that is neither the newest, the
+- oldest, the first, nor the last, so no weaker rule passes it. Verified
+- by mutation: replacing the rule with most-recently-created fails both
+- adapters.
+- - Added a rejected-rename rollback case, and the dangling-selection test
+- now tampers through a separate connection instead of reaching into the
+- adapter's private state.
+- 
+- Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+- 
+- interface alongside create, and enforce the invariant that one valid
+- Workspace always exists and is selected.
+- 
+- - Names are trimmed, required, and bounded at 120 Unicode scalar values;
+- duplicate names stay distinct because identity is never the name.
+- - Active Workspace identity persists as an application preference in a
+- new app_preferences table, not as domain content, so the selection
+- reopens when the Workspace still exists and falls back safely when it
+- does not.
+- - Deleting the active Workspace among several selects the most recently
+- updated survivor; deleting the only Workspace empties its Notes and
+- resets it to the default name instead of leaving none.
+- - Every lifecycle intent commits in a single SQLite transaction, so a
+- rejected delete leaves the Workspace, its Notes, and the selection
+- untouched.
+- - Database open and migration failures now render a recovery screen with
+- the error category plus retry and quit actions, and never reset or
+- overwrite an existing database.
+- 
+- Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+- 
+- Building Mac os App PRD and Plans
+- character in an otherwise-English note returned that script and injected
+- [RESPOND IN: X], forcing the AI to write annotations and category tags in
+- that language. Reported in #61 — English wiki pages with a few Japanese
+- words were tagged in Japanese.
+- 
+- Now counts characters per script and returns a non-Latin language only when
+- it is at least as prevalent as the Latin letters, so incidental foreign
+- characters no longer flip the note's response language.
+- 
+- Fixes #61
+- 
+- Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+- 
+- KanbanArea (overflow-x-auto) and TilingArea (overflow-y-auto) so the
+- browser promotes each to its own GPU compositor layer before any
+- interaction. Scroll then runs entirely on the compositor thread,
+- independent of AI enrichment re-renders on the main thread.
+- 
+- Co-Authored-By: sortedcord <103292493+sortedcord@users.noreply.github.com>
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- on top to ensure readability and visual harmony in both modes:
+- 
+- - globals.css: :root → light mode values; .dark → existing dark values +
+- type colour overrides (previously only defined in :root, so dark mode
+- silently inherited light-mode values); added --type-header-fg CSS var
+- (white in light mode, black in dark mode) so tile headers read correctly
+- against both bright (dark-mode) and dark (light-mode) accent backgrounds
+- - ThemeProvider added to layout.tsx (next-themes, defaultTheme="dark")
+- - All 17 component files converted from hardcoded bg-black/XX, border-white/XX,
+- text-white/XX to semantic Tailwind tokens (bg-muted/XX, border-border,
+- text-muted-foreground, text-foreground) so they respond to the active theme
+- - project-sidebar.tsx: theme toggle button (Sun/Moon) added to settings footer
+- - Category tag text: colour: "white" → colour: "var(--foreground)" to ensure
+- contrast on its translucent accent background in both modes
+- - shimmer-body animation updated to use CSS variables (var(--muted) /
+- var(--foreground)) instead of hardcoded oklch values
+- - intro-modal overlay kept bg-black/80 (intentional dark backdrop in all modes)
+- 
+- Co-Authored-By: coxo <skull463@users.noreply.github.com>
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- key, not just the presets. Settings panel widens to 320px for
+- better readability. Preset models appear first; all fetched models
+- follow with Free badges where applicable, deduplicated against
+- presets. Model list is searchable.
+- 
+- Co-Authored-By: coxo <skull463@users.noreply.github.com>
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- schema description to reinforce the expected range, and fixes the
+- markdown export confidence bar which was incorrectly treating the
+- value as a 0-1 float (multiplying by 100) rather than the 0-100
+- integer the rest of the UI already expected.
+- 
+- Co-Authored-By: Aditya Gupta <mail@adityagupta.dev>
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Update README.md
+- Update contributing section to be more generic
+- 
+- workspace exists or the tile is collapsed) that opens a portal dropdown
+- listing all other spaces with Move and Copy actions per row.
+- 
+- Move: pushes an undo snapshot, removes the block from the source workspace,
+- inserts it in the target. Copy: keeps the original, inserts a fresh node
+- (new id, current timestamp) in the target. Both strip influencedBy since
+- those IDs would dangle in the new workspace context.
+- 
+- Wired through TilingArea and KanbanArea. Graph detail panel left untouched.
+- 
+- Based on PR #40 by @LuxF3rre — applied manually to current codebase.
+- 
+- Co-Authored-By: LuxF3rre <LuxF3rre@users.noreply.github.com>
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- inside the textarea (e.g. to select a word) bubbled up to the card's
+- onDoubleClick handler and reset editText back to block.text, wiping
+- any in-progress edits.
+- 
+- Bail out early when isEditing or isEditingAnnotation is already true
+- so native textarea word-selection works without resetting the buffer.
+- 
+- Based on PR #41 by @LuxF3rre — applied manually.
+- 
+- Co-Authored-By: LuxF3rre <LuxF3rre@users.noreply.github.com>
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Fix stale CSP comment to reflect connect-src change
+- 
+- Loosen CSP connect-src to allow custom AI endpoints
+- any OpenAI-compatible endpoint. A static CSP allowlist is fundamentally
+- incompatible with arbitrary user-configured URLs — any domain the user enters
+- that isn't pre-listed gets blocked with "failed to fetch".
+- 
+- Replace the specific provider allowlist with https: (all HTTPS origins) plus
+- http://localhost:* for local providers (Ollama, LM Studio, vLLM). Analytics
+- domains are covered by the https: wildcard.
+- 
+- Fixes #<issue> reported by user with custom endpoint at nodepad.space.
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Update README.md
+- Add custom base URL support and fix IPv6 SSRF guard
+- endpoints (Ollama, LM Studio, vLLM)
+- - Expose Custom Base URL field in sidebar settings between API key and model
+- - Fix SSRF guard false positives: only apply IPv6 ULA prefix checks (fc/fd)
+- to actual IP literals via node:net isIP(), not regular hostnames
+- 
+- Based on PR #23 by @aayushprsingh — applied manually to current codebase.
+- 
+- Co-Authored-By: aayushprsingh <aayushprsingh@users.noreply.github.com>
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Clean up .gitignore — remove stale entries for deleted files
+- 
+- Update README: clarify free tier models require no credits
+- 
+- Fix free models, error messaging, double-enrichment, and settings persistence
+- with Nvidia Nemotron 30B and 120B (Nvidia-hosted, stable uptime)
+- - Add parseProviderError() — maps 401/402/404/429/503 to human-readable
+- messages; 429 with upstream provider name calls out the specific provider
+- - Show error message text in tile card instead of generic "Enrichment failed"
+- - Fix double-enrichment in dev (React StrictMode double-invokes setProjects
+- updater); read context from projectsRef directly instead
+- - Add isHydrated to useAISettings to suppress API key banner flash on load
+- - Add max_tokens caps: 1200 for enrich, 220 for ghost — prevents OpenRouter
+- 402 pre-rejection on low-credit accounts from high provider defaults
+- - Auto-save settings on sidebar back arrow and X close (trim key on save)
+- - Update amber banner and about panel text to clarify free vs paid models
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Add MIT License
+- Update README: multi-provider support, Z.ai, contributor credits
+- Fix Z.ai API key management URL
+- Add Z.ai provider, robust JSON parsing, defensive response handling
+- - Add as first-class provider (GLM-4.5, GLM-4.7, GLM-5, GLM-5-Turbo)
+- - Base URL: https://api.z.ai/api/paas/v4 (standard endpoint, not coding-specific)
+- - Add api.z.ai to CSP connect-src allowlist — no proxy needed
+- - Uses json_object mode with schema hint (same path as non-schema providers)
+- - No grounding support
+- 
+- Robust JSON parsing (from PR #2 review):
+- - parseEnrichResult() tries JSON.parse first, then falls back to regex
+- field extraction for truncated responses
+- - Handles escape sequences in regex-extracted strings (decodeJsonishString)
+- - Reports finish_reason in error message for easier debugging
+- 
+- Defensive response handling:
+- - try/catch around response.json() in both ai-enrich and ai-ghost
+- - Clear error messages distinguish network truncation from bad model output
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Polish before merge: remove source panels, per-provider key memory, input fixes
+- citation text in annotations is sufficient
+- - Store providerKeys per-provider in AISettings so switching back to OpenRouter
+- after using OpenAI restores the original key
+- - API key input: always type="text" with WebkitTextSecurity masking to prevent
+- password manager popups
+- - Use Next.js Script component for Umami (afterInteractive strategy)
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Remove Z.ai integration and tighten CSP allowlist
+- model list branch, custom base URL logic, and sidebar UI are all
+- stripped. The connect-src CSP is locked back to an explicit allowlist
+- (openrouter.ai, api.openai.com) rather than the open https: wildcard
+- that was introduced to accommodate unknown provider domains.
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Extract web grounding source citations into tile card links
+- annotations on the message object (url_citation type). Previously these
+- were ignored — block.sources was never populated and the link card UI
+- in tile-card was dead. Now annotations are extracted, deduplicated, and
+- mapped to block.sources so grounding-enabled notes show clickable
+- source cards consistently regardless of provider.
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Extract web grounding source citations into tile card links
+- annotations on the message object (url_citation type). Previously these
+- were ignored — block.sources was never populated and the link card UI
+- in tile-card was dead. Now annotations are extracted, deduplicated, and
+- mapped to block.sources so grounding-enabled notes show clickable
+- source cards consistently regardless of provider.
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Free Model field for OpenAI
+- Fix CSP allowed domians
+- Add Other AI Provider Support
+- Add comment on Umami script for self-hosters
+- 
+- Add source code link to About panel
+- 
+- Fix SSRF and origin-check vulnerabilities flagged in security review
+- - Add isBlockedHost() that blocks all private/reserved IPv4 ranges
+- (loopback, RFC1918, link-local/cloud metadata 169.254.x.x, multicast),
+- IPv6 loopback and ULA, and named internal hostnames (localhost,
+- metadata.google.internal). The previous regex only blocked non-http
+- schemes, leaving internal network probing open.
+- 
+- Weak origin check (Medium) — proxy.ts:
+- - Replace origin.includes(host) substring match with strict URL parsing
+- via new URL(origin).hostname === host, preventing bypasses like
+- https://evil.com?nodepad.space satisfying the old check.
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Update README for public release
+- - Frame as a design experiment prominently
+- - Update API key note: key goes directly to OpenRouter, never via server
+- - Remove stale keyboard shortcuts (⌘1/2/3, ⌘I, ⌘G)
+- - Clean up model list and copy
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Move AI calls to direct browser → OpenRouter, remove server proxy routes
+- calls now go browser → openrouter.ai directly.
+- 
+- - Add lib/ai-enrich.ts and lib/ai-ghost.ts with client-side AI logic
+- - Add app/api/fetch-url/route.ts — minimal server route for URL metadata
+- only (CORS bypass for external URLs; no API key involved)
+- - Delete app/api/enrich/route.ts and app/api/ghost/route.ts
+- - Update app/page.tsx to use enrichBlockClient / generateGhostClient
+- - Add loadAIConfig() to lib/ai-settings.ts for direct config access
+- - Update proxy.ts to guard only /api/fetch-url
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Replace feedback button with copy-email button in About panel
+- Mail icon crossfades to Check on copy, label swaps to "Copied!", colour
+- shifts to green, all transitions 300ms. Resets after 2s.
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Fix Submit Feedback button and remove stale shortcut references
+- event interception (Sheet portal blocks native link navigation)
+- - Remove ⌘3 and ⌘I references from Tips section (those shortcuts no longer exist)
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Add Submit Feedback mailto link in About panel header
+- 
+- Fix conflicting keyboard shortcuts and reduce unnecessary re-renders
+- - Remove shortcut sub-labels from command palette Views/Navigate sections
+- - Update About panel keyboard shortcuts table to only show real shortcuts
+- - Add blocksRef to page.tsx so callbacks no longer close over the `blocks` array;
+- fixes addBlock, deleteBlock, reEnrichBlock, handleChangeType, clearBlocks all
+- being recreated on every state update — which was causing React.memo'd TileCards
+- to re-render unnecessarily and triggering CSS transition flickers
+- - Move BSP buildPageTree/getWeight outside the component (pure functions)
+- - Remove unused KanbanArea import and framer-motion import from tiling-area.tsx
+- - Remove AnimatePresence no-op wrapper around task block (was wrapping a plain div)
+- - Remove MutationObserver from tiling-area.tsx (ResizeObserver alone is sufficient)
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Ignore DESIGN_CASE_STUDY.md (internal doc, local only)
+- 
+- Update DESIGN_CASE_STUDY.md with recent product changes
+- help tooltip anchoring the ? button as permanent help entry point)
+- - New subsection: API key banner (full-width amber bar, all views,
+- replaces per-view empty-state toast)
+- - Tile card: Tag icon type-change button, user-controlled type vs
+- AI-assigned category design distinction
+- - Type detection flow: general neutral loading state during enrichment,
+- eliminates double-classification jump
+- - Shimmer: body text / annotation target, 3.5s timing, rationale
+- - Command palette: Ctrl+K for Windows/Linux, platform-adaptive labels
+- - About panel: Watch the intro video section at top
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Add first-visit intro video modal with help tooltip and about panel embed
+- (youtube-nocookie.com), autoplay, closes via X button, Skip to app,
+- backdrop click, or Escape key. Only shown once — gated by
+- nodepad-intro-seen in localStorage.
+- - After modal is dismissed, an animated tooltip appears below the ?
+- button for 6 seconds: "Find help & the intro video here anytime".
+- Dismisses immediately if the user clicks ?.
+- - About panel: added "Watch the intro" section at top of scrollable
+- body with the same YouTube embed (no autoplay) above "The idea".
+- - CSP: added frame-src for youtube-nocookie.com and youtube.com, and
+- img-src for i.ytimg.com (YouTube thumbnails) to fix blocked iframe.
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Add Windows/Linux Ctrl shortcut support alongside Mac ⌘
+- already worked functionally. This makes the displayed shortcut labels
+- platform-aware:
+- 
+- - Add useModKey() hook to lib/utils.ts — returns '⌘' on macOS/iOS,
+- 'Ctrl' on Windows/Linux, starting as '⌘' on SSR and correcting after
+- mount to avoid hydration mismatches
+- - Apply in vim-input.tsx (⌘K pill, view/nav item subs)
+- - Apply in tiling-area, kanban-area, graph-area (hint text)
+- - Apply in about-panel (view labels, keyboard shortcut table, tips)
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Show general type during enrichment to avoid double-classification jump
+- switched to the AI type on enrichment completion — causing a jarring two-step
+- classification animation.
+- 
+- Now only HIGH_CONFIDENCE_TYPES (question, reference, quote, task) show their
+- type immediately, since those are also sent as forcedType to the AI and will
+- never change. Everything else starts as "general" while enriching, then
+- transitions once to the AI-assigned type.
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Fix connection dot dimming and replace per-view API key banners with global top bar
+- recursive renderBSPNode() function so React doesn't unmount/remount the tile
+- tree on every hover state change, which was firing mouseleave and clearing state
+- - Fix getRelatedIds: remove sameCategory criterion that made all notes in a focused
+- research session appear "related", preventing any dimming from ever showing
+- - Replace per-view amber toast banners (tiling, kanban) with a single full-width
+- top bar in page.tsx, visible across all views when no API key is configured;
+- includes "Add API key →" CTA that opens sidebar to settings and "Get a key ↗" link
+- - Remove now-unused hasApiKey and onOpenSidebar props from TilingArea, KanbanArea,
+- and GraphArea components
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Slow shimmer-body animation from 1.6s to 3.5s
+- 
+- Improve enrichment shimmer: body text only, higher contrast
+- background made it invisible and it's the wrong surface for this signal
+- - Add shimmer-body class: oklch(0.35) dim regions flanking an
+- oklch(0.92) bright sweep, 300% background-size, 1.6s ease-in-out —
+- much more visible on the dark tile body background
+- - Apply shimmer-body to the body text wrapper and annotation div
+- instead of shimmer-text, so the effect reads clearly on dark surfaces
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Align type picker to the right edge of the trigger button
+- so the dropdown grows leftward from the button instead of rightward.
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Fix type picker (portal, dedicated button) and restore shimmer
+- - Root cause: the dropdown was position:absolute inside overflow:hidden,
+- so it opened but was invisible (clipped by the tile boundary)
+- - Fix: render the picker via createPortal into document.body with
+- position:fixed, coords from getBoundingClientRect() on the trigger
+- - Move the trigger off the type label onto a dedicated Tag icon button
+- in the right side of the header (same pattern as pin/delete), so
+- there's no event competition with text editing
+- - Outside-click detection now checks both the trigger button ref and
+- the portal dropdown ref, so clicking inside either keeps it open
+- - Same approach applied to graph-detail-panel
+- 
+- Shimmer:
+- - Re-add shimmer-text class to the type label span when block.isEnriching
+- (was silently dropped during the type-picker refactor)
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Make category tag read-only; type label is the only user-changeable field
+- plain read-only span — no input, no click handler, no edit state. It
+- updates only when AI enrichment fires (either on add, edit, or type change).
+- 
+- Removed from tile-card: isEditingCategory state, categoryText state,
+- categoryInputRef, the focus useEffect, handleCategorySave, and
+- handleCategoryKeyDown.
+- 
+- Removed from graph-detail-panel: same state/ref/effects plus commitCategory.
+- 
+- The type label in the tile header remains the one user-facing control —
+- clicking it opens the type picker, selecting a type triggers re-enrichment
+- with that type as forcedType, which rewrites both annotation and category.
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Re-enrich on type change so annotation and category update
+- instead of just mutating contentType in state. Picking a different type
+- from the header picker now behaves like a re-enrich with that type
+- locked — the shimmer state shows, annotation regenerates, and the
+- category tag at the bottom updates to match.
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Fix classification strictness and add manual type picker
+- - Import detectContentType client-side in addBlock so new tiles show
+- their correct type immediately instead of flashing "general" while
+- the API is in flight
+- - Pass the heuristic result as forcedType to enrichBlock for the four
+- syntactically unambiguous types (question/reference/quote/task) so
+- the AI can never override an explicit question mark or URL
+- 
+- Manual type override:
+- - Add onChangeType prop to TileCard, TilingArea, KanbanArea, GraphArea,
+- and GraphDetailPanel — threads all the way from page.tsx down
+- - Clicking the type label (icon + name) in any tile header opens a
+- 2-column dropdown showing all 13 non-thesis types with their accent
+- colours and icons; the active type is highlighted
+- - Clicking a type updates contentType directly (no re-enrichment)
+- - Dropdown closes on selection, Escape, or outside click
+- - Same picker available in the Graph detail panel header
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Fix React hydration error and Umami beacon CSP block
+- an empty string on the server and gets set after mount, which React
+- correctly flags as a text-node mismatch (#418). The warning suppression
+- is scoped to this one element — the mismatch is intentional.
+- - Add api-gateway.umami.dev to connect-src: Umami sends event beacons
+- to this domain, not cloud.umami.is, so the previous allowlist was
+- blocking all analytics payloads.
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Allow Umami analytics origin in Content Security Policy
+- connect-src (for the event beacon requests) so the CSP does not
+- block analytics collection.
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Fix empty state positioning, color, and font across all three views
+- container, so the panel centres at exactly the same position when
+- switching between tiling, kanban, and graph — no more jumping
+- - Flipped colours: example note text is now muted (text-foreground/50),
+- "type anything · #type to classify · ⌘K for commands" is pure white
+- - Removed font-mono from body text; only type labels (small caps) keep it
+- - whitespace-nowrap on the footer hint guarantees one line at all widths
+- - Kanban empty state moved outside the padded scroll container so padding
+- no longer offsets the vertical centre
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Improve empty state clarity across all three views + swap to Umami analytics
+- note text, larger font (13px body, 10px type labels), consistent gap
+- rhythm, whitespace-nowrap footer so hint always stays on one line
+- - Graph empty state expanded from a single line to a full themed panel
+- matching tiling and kanban layouts
+- - Swapped @vercel/analytics for Umami (works on Render); uninstalled package
+- - Added analytics disclosure note in About panel under byline
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Engineering audit fixes: kanban width, memory leaks, data integrity
+- - Column width increased from w-80 (320px) to w-96 (384px) — +20%
+- 
+- Tiling:
+- - Pinned block sort is now stable: secondary sort by timestamp so
+- pinned blocks maintain consistent order across renders
+- 
+- State / memory (app/page.tsx):
+- - Undo toast timer is cleared on component unmount (was leaking)
+- - Debounce timers for previous project are cleared when switching
+- projects via a prevActiveProjectId ref effect
+- - AI confidence values are clamped to 0–100 and rounded at the point
+- of enrichment result ingestion, before storing in state
+- 
+- Export (lib/export.ts):
+- - mdCell() helper escapes pipe and newline characters in category
+- strings so they cannot break markdown table cell boundaries
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Fix connection lock getting stuck in tiling view
+- 1. Canvas background click clears lockedConnectionId (onClick on scroll
+- container, guarded to fire only when target === currentTarget so
+- clicking tiles themselves doesn't trigger it)
+- 2. Escape key clears the lock from anywhere in the view
+- 3. useEffect watches blocks — if the locked block's influencedBy list
+- becomes empty (e.g. re-enrichment changed connections), lock is
+- automatically cleared rather than leaving ghost dimming
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Fix language bleed and make pinning spatial in tiling view
+- - Replace vague "the same language as the note text" fallback with English
+- stopword-frequency detection (≥10% → English). Most English text scores
+- well above threshold; Spanish/French/etc. do not.
+- - URLs default to English so fetched foreign-language page content cannot
+- drive the annotation language.
+- - Zero-word text (short codes, symbols) defaults to English safely.
+- - System prompt now explicitly bans <url_fetch_result> from influencing
+- language, alongside the existing ban on context <note> items.
+- - Directive is now described as absolute with no override path.
+- 
+- Pinning (tiling-area.tsx):
+- - gridBlocks is now sorted with isPinned=true blocks first before BSP
+- chunking, so pinned tiles always appear on page 1 / top of the canvas.
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Add cover image to README
+- 
+- Add 404 page, OG image, mobile wall; gitignore internal docs
+- colour at low opacity, on-brand message, back-to-canvas link
+- .gitignore: exclude CLAUDE.md, ARCHITECTURE.md, DEMO_TRANSCRIPT.md from
+- public repo (removed from git tracking with git rm --cached)
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Fetch URL content server-side for reference-type notes
+- calling the AI, extracting title, og:description, and a body text
+- excerpt. This is passed to the model in a structured <url_fetch_result>
+- block so the annotation reflects the actual page content.
+- 
+- Error handling:
+- - Network error / timeout → AI annotates from URL structure, notes
+- it couldn't be reached
+- - 404 → flagged in annotation explicitly
+- - 4xx/5xx → status code surfaced, AI annotates from URL alone
+- - Non-HTML content (PDF, JSON, etc.) → content-type noted
+- - Successful fetch with no readable content → gracefully noted
+- 
+- Timeout is 6s with AbortController. User-Agent identifies nodepad.
+- System prompt updated to instruct the model to use url_fetch_result
+- as the primary source when present.
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Add OG image and fix social share metadata
+- (edge runtime) — dark bg, logo mark, headline, nodepad.space URL
+- - layout.tsx: add explicit openGraph and twitter card metadata blocks;
+- sharpen title and description to match the app's actual positioning
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Add mobile wall, README, and fix upstream error leak
+- - Full-screen fixed overlay shown on viewports < md (768px)
+- - Logo, "Spatial thinking needs space." tagline, desktop-only message
+- - Pure CSS via md:hidden — no JS, no hydration flicker
+- 
+- app/layout.tsx:
+- - Import and render MobileWall above app content
+- 
+- README.md:
+- - Concept-first: AI as augmentative, not conversational
+- - Setup guide: clone, install, API key, web grounding
+- - Model table, keyboard shortcuts, data/export section
+- - Tech stack, attribution
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Revert middleware rename — proxy.ts/export proxy is correct for Next.js 16
+- proxy(). The previous commit incorrectly reversed this by renaming the file
+- to middleware.ts — that triggered the deprecation warning. Back to proxy.ts.
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Security hardening before public release
+- so Next.js actually runs the middleware export (was inert as proxy.ts)
+- - Remove raw upstream error body from enrich API response; log server-side
+- only and return a generic client-facing message to prevent detail leakage
+- - Scrub .env.local: replace commented-out API key with a safe placeholder
+- (key should be rotated on OpenRouter if it was ever active)
+- - Update CLAUDE.md: proxy.ts → middleware.ts
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Sync CLAUDE.md and ARCHITECTURE.md with session changes
+- - Data model: Project.ghostNote → ghostNotes: GhostNote[] (array, capped at 5)
+- - shadcn/ui: only sheet.tsx remains; updated both docs to reflect cleanup
+- - Enrich: document detectScript() language isolation + [RESPOND IN: X] directive
+- - Graph: document selection behaviour (focalId priority, didPan guard,
+- Escape key, simulation kick deferred to actual drag)
+- - Keyboard shortcuts: Esc now covers graph deselection too
+- - UI patterns: note to build bespoke rather than adding shadcn components
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Fix TS2345 in graph-area: narrow D3 node coords from number|undefined to number
+- catches null but TypeScript still considered undefined possible downstream.
+- Widened the guard to cover both x and y for source and target, then
+- destructured into typed locals so arcPath receives number not number|undefined.
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Remove 39 orphaned shadcn/ui components and unused hooks
+- actually used (by about-panel.tsx). All others were dead code:
+- 
+- - Deleted 39 files from components/ui/ (alert, avatar, badge, button,
+- card, checkbox, collapsible, context-menu, dialog, dropdown-menu,
+- empty, field, form, hover-card, input, input-group, input-otp, item,
+- kbd, label, popover, progress, scroll-area, select, separator,
+- sidebar, skeleton, sonner, spinner, switch, textarea, toast, toaster,
+- toggle, toggle-group, tooltip, use-mobile, use-toast, button-group)
+- - Deleted hooks/use-toast.ts and hooks/use-mobile.ts (only consumed
+- by now-deleted ui components)
+- 
+- Undo toasts use a bespoke Framer Motion implementation in page.tsx.
+- Only sheet.tsx remains — the single shadcn primitive in active use.
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Fix three TypeScript errors in page.tsx, sidebar, and tile-index
+- but never called internally; page.tsx referenced non-existent setIsSettingsOpen)
+- - Fix ghostNote prop on GraphArea: Project stores ghostNotes[] array, pass
+- the last item (most recent synthesis) instead of non-existent .ghostNote
+- - Extend TileIndex viewMode type to include "graph" — the third view added
+- this session was missing from the union type
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Fix Latin-script language fallback in detectScript
+- Portuguese, etc. — they share Latin Unicode so can't be distinguished
+- by character range. Changed fallback to "the same language as the note
+- text" so the model retains detection authority for Latin-script languages
+- while still being locked to the directive for Arabic/Hebrew/CJK/Cyrillic.
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Harden language isolation in enrich: server-side script detection + explicit directive
+- when Arabic notes existed in context, because prompt-only instructions
+- are probabilistic and context-weighted.
+- 
+- server-side before the API call and injects a [RESPOND IN: X] directive
+- physically adjacent to the note. The system prompt is updated to treat
+- this directive as the single source of truth — context note languages
+- are explicitly ignored.
+- 
+- Supports: Arabic, Hebrew, CJK, Russian, Hindi, English
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Fix language bleed-through in enrich and graph selection bugs
+- - Scope language detection explicitly to <note_to_enrich> text only,
+- not to context <note> items — prevents Arabic context from overriding
+- the language of a new English note (and vice versa)
+- 
+- graph-area.tsx:
+- - Include selectedId in focalId (hoveredId ?? selectedId ?? highlightedBlockId)
+- so selected node's connections stay lit after cursor moves away
+- - Track didPan ref to prevent SVG background click from deselecting
+- when the user was actually panning the canvas
+- - Move simulation alphaTarget(0.3) kick from onMouseDown to the first
+- actual drag movement, eliminating the node-position jolt on simple clicks
+- - Add Escape key handler to clear selection from anywhere
+- - Selection now properly clears when clicking the SVG background (non-pan click)
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Fix Arabic font loading and strengthen language rule for AI enrichment
+- instead of unreliable raw @import url() in globals.css
+- - Apply font variable to <body> so .rtl-text picks it up correctly
+- - Elevate language rule in enrich prompt to its own CRITICAL section,
+- explicitly covering both annotation and category fields by name
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Remove ghost micro-labels from graph detail panel
+- section labels (font-mono 8px muted-foreground/40) from graph-detail-panel.
+- Content is self-evident from context; the labels added visual noise at
+- near-invisible contrast levels.
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Gitignore app/design-system/ local design system page
+- 
+- Update About panel byline to "A design experiment by Saleh Kayyali"
+- 
+- Update docs and About panel to reflect graph view and session changes
+- - Add Graph view entry (⌘3) to Views section with description
+- - Add ⌘3 keyboard shortcut
+- - Update Connection mapping AI feature to mention graph
+- - Update tips: graph view tip, index highlighting tip, pin tiling-only note
+- 
+- ARCHITECTURE.md:
+- - New feature §3: Graph View — D3 centrality-radial layout, simulation design,
+- enriching node pinning, interaction model, feature parity notes
+- - New feature §16: Feature Parity Across Views (category editing everywhere,
+- pinning tiling-only)
+- - New feature §17: Clickable links in annotations via react-markdown
+- - Add ⌘3 to keyboard shortcuts table
+- - Add D3 to stack table
+- - Update state diagram with GraphArea + GraphDetailPanel
+- - Update viewMode type to include "graph"
+- - Add graph-area.tsx and graph-detail-panel.tsx to file map
+- 
+- CLAUDE.md:
+- - Add D3 to tech stack
+- - Update viewMode to "tiling"|"kanban"|"graph"
+- - New Graph view section with simulation lifecycle, feature parity, pinning note
+- - Update component table with graph-area, graph-detail-panel, kanban category
+- editing, ReactMarkdown link rendering in detail panel
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Graph detail panel: render annotation via ReactMarkdown for clickable links
+- Replace plain {block.annotation} with ReactMarkdown + remark-gfm so those
+- links render as clickable <a> tags (same behaviour as tile-card annotations).
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Make URLs clickable in all views
+- and wraps them in styled <a> links (icon + domain label, opens in new tab).
+- 
+- Applied to:
+- - tile-card renderBody: all body styles (blockquote, italic, muted-italic,
+- checkbox, thesis, default) — covers tiling and kanban views
+- - graph-detail-panel note text display
+- 
+- Links stop click/dblclick propagation so editing mode is not accidentally
+- triggered when clicking or double-clicking a URL.
+- Trailing punctuation (.,;:!?) stripped from matched URLs.
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Feature parity across views + graph index highlight
+- - Index panel hover now highlights the matching graph node and dims unrelated ones
+- (highlightedBlockId drives the same focalId dimming logic as hover)
+- - Highlighted node gets a distinct outer ring when triggered from the index
+- 
+- Graph detail panel:
+- - Category badge is now click-to-edit (same UX as tile-card)
+- - onReEnrich updated to (id, newCategory?) signature
+- 
+- Kanban view:
+- - Pin button removed from kanban tiles (pin is tiling-only per design)
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Graph: larger node icons, remove text labels
+- - Remove short text labels below nodes
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Graph: centrality-radial layout — position encodes connection importance
+- - Nodes with many connections (hubs) drift toward canvas centre via forceRadial
+- - Isolated nodes settle at the outer ring
+- - Synthesis node (connects to everything) always gravitates to centre
+- - No artificial anchor node, no spoke lines — only real influencedBy connections
+- 
+- New features:
+- - forceRadial strength encodes degree: r = outerR * (1 - degree/maxDeg * 0.82)
+- - Node radius also scales with degree (22–34px) — bigger = more connected
+- - Hub nodes (degree ≥ 3) get a subtle secondary ring + glow for visual emphasis
+- - Short text labels (first 4 words, 8.5px, opacity 0.32) below each node —
+- barely visible at default zoom, legible when zoomed in
+- - Link count shown in tooltip header
+- - Pin indicator dot on pinned nodes
+- - Project name as ghost text at canvas centre (fades as nodes fill the space)
+- - Centrality legend bottom-right: "centre = most connected / edge = isolated"
+- - Drag to reposition individual nodes
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Graph: single expanding ring with D3 force dynamics restored
+- (targets ~80px arc between adjacent nodes, min 200px)
+- - Restore D3 force simulation for organic, living node movement
+- - Centre node (project name) is permanently fixed via fx/fy — all other nodes
+- are tethered to it by spoke link forces, keeping the hub-and-spoke shape
+- while still breathing naturally
+- - Spoke link distance updates dynamically as nodes are added, so the ring
+- expands smoothly to accommodate new nodes
+- - Drag to reposition individual nodes; simulation reheats on drag
+- - Enriching nodes stay in place via spoke tether rather than flying away
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Redesign graph view: circular hub-and-spoke layout with project name centre
+- - Centre node = project name; all block nodes arranged on concentric rings
+- - Spoke edges (centre → all nodes, thin/subtle) + chord edges (influencedBy, curved bezier)
+- - New nodes fly in from centre via CSS transition (0.7s spring easing)
+- - Fix enriching animation: add transformBox:fill-box so the spinning dashed ring
+- rotates around the node's own centre, not the SVG viewport origin (was the giant
+- sweeping arc across the whole screen)
+- - Hover dimming: dim unrelated nodes + edges; highlight active chords at 0.75 opacity
+- - Remove D3 dependency from graph-area.tsx (no longer needed)
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Add Graph View with D3 force simulation and stable enrichment animation
+- - GraphDetailPanel: tile-card-style side panel with editable text, annotation, confidence bar, sources, connected nodes
+- - Floating HTML tooltip with full note text and colour-coded header
+- - Split simulation into init-once + update-in-place effects to prevent violent restarts on block changes
+- - Fix enrichment animation: pin new nodes near centre during enrichment (fx/fy), release gracefully on completion
+- - Extend vim-input ⌘K palette with Graph view entry (⌘3) and three-section keyboard nav
+- - Add @keyframes spin to globals.css for enriching-node indicator ring
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Improve hint text contrast and increase tile body font size
+- for better contrast on the dark input bar (Undo, Commands, ⌘K label,
+- placeholder, footer kbd hints)
+- - tile-card: bump all tile body text from text-sm (14px) to text-base (16px)
+- for improved readability; edit textarea and sub-task text match;
+- annotation editor and markdown headings scaled proportionally
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Add ARCHITECTURE.md and update CLAUDE.md
+- localStorage key names, removed deleted components (theme-provider,
+- settings-panel, command-palette), added backup/undo/synthesis detail,
+- documented proxy.ts security, collapse removal from tiling view,
+- and full localStorage key table
+- - ARCHITECTURE.md: new document — features first (15 sections covering
+- all user-facing capabilities), then technical architecture with
+- feature→code mapping, data flow diagrams for note addition and
+- synthesis, and a full file map
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Add About panel and ? button to status bar
+- right Sheet (max-w-2xl, z-200) with sections covering the app idea,
+- quick start guide, content types, views, AI features, export/data,
+- keyboard shortcuts, and tips
+- - Author credit (Saleh Kayyali / mskayyali.com) below the tagline
+- - ? button added to far right of status bar with a thin divider
+- - Panel state is self-contained inside StatusBar — no page.tsx changes
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+- Initial commit — nodepad v0.1.0
+- React 19, Tailwind CSS v4, and OpenRouter. Key features:
+- 
+- - BSP tiling view with scroll-aware minimap
+- - Kanban view with minimap navigation
+- - AI enrichment via /api/enrich (content type, annotation, confidence, web grounding)
+- - Emergent synthesis via /api/ghost (auto-triggered ghost notes panel)
+- - 14 content types with oklch colour system
+- - .nodepad import/export, rich markdown export
+- - Undo history (20-state ring), localStorage persistence + backup
+- - Rate limiting + origin check in proxy.ts
+- - Prompt injection mitigation (XML delimiters + json_schema strict)
+- - Stable connection IDs with hover/lock dimming in both views
+- - Settings (API key, model, web grounding) stored in localStorage
+- 
+- Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+- 
+
+## [0.1.0] - 2026-07-27
+
+### Added
+
+- drag kanban notes between types
+- draw relationships on canvas
+- add consented fallback AI providers
+- V0-18 harden privacy gates and build the macOS artifact
+- V0-17 complete macOS keyboard, accessibility, and external links
+- V0-16 add rotating backup, restore, and migration safety
+- V0-15 add versioned Nodepad archive workflow
+- add safe URL metadata enrichment
+- V0-12 provisional Synthesis with Prompt B
+- V0-11 automatic Note Organization with Prompt A
+- V0-10 Ollama Cloud consent, keychain, and discovery
+- V0-09 Assistance Policy and local Ollama discovery
+- reconnect the graph view over one Thinking Graph projection
+- reconnect tiling and kanban to durable projections
+- move and copy Notes between Thinking Workspaces
+- add symmetric Relationships and Thinking Graph invariants
+- add workspace labels and search
+- add manual Note controls, Annotation, pinning, and undo
+- complete Thinking Workspace lifecycle and safe open recovery
+- bootstrap Tauri workspace storage
+- light/dark theme with fully harmonised colour system
+- dynamic model fetching and searchable model selector
+- move/copy blocks between workspaces
+
+### Fixed
+
+- enrich freshly captured Notes, not only edited ones
+- close review gaps in Workspace lifecycle and open recovery
+- language detection flips to non-Latin on a few stray characters
+- clamp confidence score range to 0-100 across the application
+- preserve edit buffer on double-click while editing tile
+- Deterministic Unicode-range language detection (detectScript) runs
+
+### Documentation
+
+- track CLAUDE.md alongside AGENTS.md
+- rewrite the README for the desktop application
+- record the R15 PRD simplicity audit
+- back up V0 plans and issue specs
+- update README for dynamic model fetching and custom base URL
+
+### Changed
+
+- address review findings on the Synthesis slice
+- split App into Note card, sections, and one intents object
+
+### Performance
+
+- promote scroll containers to compositor layers for 60fps scroll
+
+### Chores
+
+- remove the browser experiment's dependencies and dead tree
+- update intro video link across app and README
+
+### Other
+
 - Release v0.1.0 and update release tooling
 - 
 - Update release_audit.rs
