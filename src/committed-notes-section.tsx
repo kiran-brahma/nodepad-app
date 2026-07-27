@@ -28,6 +28,8 @@ export function CommittedNotesSection({
   card,
   pendingSyntheses,
   suggestions,
+  onAcceptSynthesis,
+  onDismissSynthesis,
 }: {
   notes: Note[]
   /** The whole Thinking Graph of the active Workspace, which no search narrows. */
@@ -42,12 +44,16 @@ export function CommittedNotesSection({
   onRelate: (noteId: string, otherNoteId: string) => void
   onUnrelate: (noteId: string, otherNoteId: string) => void
   card: (note: Note) => ReactNode
-  /** Undecided Syntheses, drawn provisionally by the graph and by nothing
-   *  else. They are not Notes, so no other view arranges them. */
+  /** Undecided Syntheses, offered provisionally by the spatial views. They
+   *  are not Notes, so no view arranges them among committed positions. */
   pendingSyntheses: PendingSynthesis[]
   /** Undecided AI-proposed Relationships, drawn dashed by the canvas. They
    *  are not Relationships, so the graph never carries them. */
   suggestions: readonly SuggestedRelationship[]
+  /** Answering an offer. Both routes go to the one Synthesis controller, so
+   *  the canvas and the panel can never disagree about what is waiting. */
+  onAcceptSynthesis: (synthesisId: string) => void
+  onDismissSynthesis: (synthesisId: string) => void
 }) {
   return (
     <section aria-label="Committed Notes">
@@ -83,6 +89,9 @@ export function CommittedNotesSection({
           focus={focus}
           card={card}
           suggestions={suggestions}
+          pendingSyntheses={pendingSyntheses}
+          onAcceptSynthesis={onAcceptSynthesis}
+          onDismissSynthesis={onDismissSynthesis}
           onSetPosition={onSetPosition}
           onRelate={onRelate}
           onUnrelate={onUnrelate}

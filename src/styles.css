@@ -179,6 +179,14 @@ select { border: 1px solid #bcae9d; border-radius: 6px; font: inherit; padding: 
 /* A proposal, not a link: dashed and inert, in the accent so it reads as
    something offered. It is answered on the Note, never on the line. */
 .canvas-relationship.suggested { cursor: default; pointer-events: none; stroke: #8f3d27; stroke-dasharray: 6 5; stroke-width: 1.5; }
+/* An offer among the Notes it rests on: dashed, unfilled, and centred on
+   their centroid, so it reads as something forming rather than as a card the
+   Workspace holds. It has no committed position and is never dragged. */
+.canvas-synthesis { background: none; border: 1px dashed #8f3d27; border-radius: 10px; display: grid; gap: .4rem; padding: .7rem; position: absolute; transform: translate(-50%, -50%); width: 13rem; z-index: 2; }
+.canvas-synthesis.stale { opacity: .5; }
+.canvas-synthesis p { margin: 0; }
+.canvas-synthesis-header { color: #6f625a; font: 400 .75rem/1.4 system-ui, sans-serif; text-transform: uppercase; }
+.canvas-synthesis-leader { stroke: #c8a08f; stroke-dasharray: 4 4; stroke-width: 1; }
 .canvas-note { cursor: grab; position: absolute; touch-action: none; width: 13rem; z-index: 1; }
 .canvas-note:active { cursor: grabbing; }
 .canvas-relationship-handle { opacity: 0; position: absolute; right: -.4rem; top: 50%; transform: translateY(-50%); transition: opacity .12s ease; z-index: 2; }

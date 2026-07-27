@@ -4,6 +4,7 @@ import { notePreview } from "./note-controls"
 import type { ThinkingGraph } from "./thinking-graph"
 import { graphLayout, GRAPH_HEIGHT, GRAPH_WIDTH, type GraphPlacement } from "./graph-layout"
 import type { NoteFocus } from "./note-focus"
+import { synthesisAnchors, type SynthesisAnchor } from "./synthesis-placement"
 
 /** Enough of a Note to recognise its node without redrawing the Note on it. */
 function nodeLabel(note: Note): string {
@@ -67,39 +68,18 @@ function GraphNodeMark({
  *  a thought the Thinking Workspace already holds. */
 const SYNTHESIS_RADIUS = 8
 
-interface ProvisionalMark {
-  id: string
-  text: string
-  x: number
-  y: number
-  leaders: { noteId: string; x: number; y: number }[]
-}
-
 /**
- * Places each pending Synthesis at the centre of the Notes it names. The
- * arrangement is derived on every render from the same layout the Notes
- * use; nothing is stored, so dismissing a Synthesis simply stops drawing it.
- * A Synthesis whose sources are no longer drawn is not drawn either.
+ * Where each pending Synthesis sits on the graph: the shared placement rule,
+ * read against the same layout the Notes are drawn from. Nothing is stored,
+ * so dismissing a Synthesis simply stops drawing it.
  */
 function provisionalMarks(
   pending: PendingSynthesis[],
   placements: GraphPlacement[],
-): ProvisionalMark[] {
-  return pending.flatMap((synthesis) => {
-    const leaders = synthesis.sourceNoteIds.flatMap((noteId) => {
-      const placement = placements.find((candidate) => candidate.node.note.id === noteId)
-      return placement ? [{ noteId, x: placement.x, y: placement.y }] : []
-    })
-    if (leaders.length === 0) return []
-    return [
-      {
-        id: synthesis.id,
-        text: synthesis.text,
-        x: leaders.reduce((total, leader) => total + leader.x, 0) / leaders.length,
-        y: leaders.reduce((total, leader) => total + leader.y, 0) / leaders.length,
-        leaders,
-      },
-    ]
+): SynthesisAnchor[] {
+  return synthesisAnchors(pending, (noteId) => {
+    const placement = placements.find((candidate) => candidate.node.note.id === noteId)
+    return placement ? { x: placement.x, y: placement.y } : null
   })
 }
 
