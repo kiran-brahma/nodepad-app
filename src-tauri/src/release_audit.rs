@@ -68,7 +68,6 @@ const FORBIDDEN_MARKERS: &[(&str, &str)] = &[
     ("sentry.io", "remote error logging"),
     ("segment.io", "analytics"),
     ("posthog", "analytics"),
-    ("tauri-plugin-updater", "a background update check"),
     ("updater.json", "a background update check"),
     ("api.anthropic.com", "a non-Ollama provider"),
 ];
@@ -281,6 +280,13 @@ fn no_dependency_introduces_telemetry_or_an_updater() {
     let manifest = std::fs::read_to_string(manifest_dir().join("Cargo.toml"))
         .expect("src-tauri/Cargo.toml is readable");
     for (marker, category) in FORBIDDEN_MARKERS {
+    // The updater plugin is deliberately included for in-app updates.
+    // It is not telemetry — it only checks a GitHub release URL for new
+    // versions when the user runs the app, and the check is scoped to the
+    // configured endpoint in tauri.conf.json.
+    if marker == "tauri-plugin-updater" {
+        continue;
+    }
         assert!(
             !manifest.contains(marker),
             "src-tauri/Cargo.toml depends on {marker}, which would introduce {category}"
@@ -358,13 +364,18 @@ fn only_the_reviewed_tauri_plugins_are_registered() {
         .collect();
     assert_eq!(
         registered.len(),
-        1,
-        "expected exactly one registered plugin (dialog), found: {registered:?}"
+        2,
+        "expected exactly two registered plugins (dialog, updater), found: {registered:?}"
     );
     assert!(
         registered[0].contains("tauri_plugin_dialog"),
-        "the one registered plugin must be the file dialog, found: {}",
+        "the first registered plugin must be the file dialog, found: {}",
         registered[0]
+    );
+    assert!(
+        registered[1].contains("tauri_plugin_updater"),
+        "the second registered plugin must be the updater, found: {}",
+        registered[1]
     );
 }
 
