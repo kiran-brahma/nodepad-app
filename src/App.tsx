@@ -19,7 +19,8 @@ import { useWorkspaceSnapshot } from "./workspace-snapshot"
 import { useUndoShortcut } from "./undo-shortcut"
 import { useEscape, ESCAPE_PRIORITY } from "./escape-stack"
 import { useModalFocus } from "./modal-focus"
-import { CommandPalette, useCommandPaletteShortcut, type PaletteAction } from "./command-palette"
+import { CommandPalette, useCommandPaletteShortcut } from "./command-palette"
+import { buildPaletteActions } from "./palette-actions"
 import { WorkspaceSection } from "./workspace-section"
 import type { WorkspaceRenameDraft } from "./workspace-rename-form"
 import { CaptureBar } from "./capture-bar"
@@ -367,6 +368,10 @@ export function App() {
     selectWorkspace,
     canUndo,
     undo: undoLastChange,
+    focusCapture: () => document.getElementById("capture-bar")?.focus(),
+    openSettings: () => setSettingsOpen(true),
+    focusedNote: visible.find(({ id }) => id === focus.focusedNoteId),
+    noteIntents,
     renameWorkspace: () => setRailRenameDraft({ id: activeWorkspace!.id, name: activeWorkspace!.name }),
     deleteWorkspace: () => setPendingDelete(requestDelete(activeWorkspace!)),
     exportMarkdown: exportWorkspace,
@@ -593,49 +598,4 @@ function RenameLabelModal({
       </section>
     </div>
   )
-}
-
-/** Builds the Command-K palette's actions from handlers that already exist in
- *  App, so the palette module itself never learns about Workspaces, views, or
- *  assistance policy. A module-level helper keeps the branching out of the
- *  App component body. Returns nothing when there is no active Workspace. */
-function buildPaletteActions(input: {
-  activeWorkspace: ThinkingWorkspace | undefined
-  /** Every Thinking Workspace, so ⌘K can jump to one by name. */
-  workspaces: ThinkingWorkspace[]
-  selectWorkspace: (workspaceId: string) => void
-  canUndo: boolean
-  undo: () => void
-  renameWorkspace: () => void
-  deleteWorkspace: () => void
-  exportMarkdown: () => void
-  exportArchive: () => void
-  importArchive: () => void
-  setView: (view: NoteView) => void
-  setAssistancePolicy: (policy: AssistancePolicy) => void
-}): PaletteAction[] {
-  if (!input.activeWorkspace) return []
-  return [
-    { id: "new-note", label: "New Note", group: "Notes", run: () => document.getElementById("note")?.focus() },
-    { id: "undo", label: "Undo", group: "Notes", disabled: !input.canUndo, run: input.undo },
-    { id: "rename-workspace", label: "Rename Workspace", group: "Workspace", run: input.renameWorkspace },
-    { id: "delete-workspace", label: "Delete Workspace", group: "Workspace", run: input.deleteWorkspace },
-    { id: "export-markdown", label: "Export Markdown", group: "Workspace", run: input.exportMarkdown },
-    { id: "export-archive", label: "Export Archive", group: "Workspace", run: input.exportArchive },
-    { id: "import-archive", label: "Import Archive", group: "Workspace", run: input.importArchive },
-    { id: "view-canvas", label: "Canvas view", group: "View", run: () => input.setView("canvas") },
-    { id: "view-kanban", label: "Kanban view", group: "View", run: () => input.setView("kanban") },
-    { id: "view-graph", label: "Graph view", group: "View", run: () => input.setView("graph") },
-    { id: "policy-manual", label: "Assistance: Manual", group: "Assistance", run: () => input.setAssistancePolicy("manual") },
-    { id: "policy-local", label: "Assistance: Local AI", group: "Assistance", run: () => input.setAssistancePolicy("local_ai") },
-    { id: "policy-cloud", label: "Assistance: Cloud AI", group: "Assistance", run: () => input.setAssistancePolicy("cloud_ai") },
-    // One jump per Thinking Workspace, matched by name, running the same
-    // switch the rail row runs. Full palette coverage is a later slice.
-    ...input.workspaces.map((workspace) => ({
-      id: `switch-workspace-${workspace.id}`,
-      label: `Switch Workspace → ${workspace.name}`,
-      group: "Switch Workspace",
-      run: () => input.selectWorkspace(workspace.id),
-    })),
-  ]
 }

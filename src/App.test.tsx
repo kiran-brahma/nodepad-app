@@ -2152,3 +2152,144 @@ describe("R14 Workspace rail and switcher", () => {
     await waitFor(() => expect(selectedWorkspaceIds).toEqual([otherWorkspaceId]))
   })
 })
+
+describe("R15 command palette expansion", () => {
+  async function openPalette(user: ReturnType<typeof userEvent.setup>) {
+    await user.keyboard("{Meta>}k{/Meta}")
+    return screen.findByRole("dialog", { name: "Command palette" })
+  }
+
+  /** Locks focus on the one Note by selecting its node in the Graph view,
+   *  the same way a thinker locks focus anywhere else. */
+  async function focusOneNote(user: ReturnType<typeof userEvent.setup>, preview: string) {
+    await captureNote(user, preview)
+    await user.click(
+      within(screen.getByRole("group", { name: "Note view" })).getByRole("button", { name: "Graph" }),
+    )
+    const graph = screen.getByRole("group", { name: "Thinking Graph" })
+    await user.click(within(graph).getByRole("button", { name: preview }))
+    await waitFor(() => expect(noteCards()).toHaveLength(1))
+  }
+
+  it("exposes the view, capture, settings, and Workspace actions", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByRole("button", { name: "Research" })
+
+    const palette = await openPalette(user)
+    for (const label of [
+      "Canvas view",
+      "Kanban view",
+      "Graph view",
+      "Capture a thought",
+      "Open Workspace settings",
+      "Rename Workspace",
+      "Delete Workspace",
+      "Switch Workspace → Reading",
+    ]) {
+      expect(within(palette).getByRole("option", { name: label })).toBeDefined()
+    }
+  })
+
+  it("focuses the capture bar from the palette", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByRole("button", { name: "Research" })
+
+    const palette = await openPalette(user)
+    await user.click(within(palette).getByRole("option", { name: "Capture a thought" }))
+
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("New Note")))
+  })
+
+  it("opens the Workspace settings sheet from the palette", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByRole("button", { name: "Research" })
+
+    const palette = await openPalette(user)
+    await user.click(within(palette).getByRole("option", { name: "Open Workspace settings" }))
+
+    expect(await screen.findByRole("dialog", { name: "Workspace settings" })).toBeDefined()
+  })
+
+  it("disables the focused-Note actions while no Note is focused", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByRole("button", { name: "Research" })
+
+    const palette = await openPalette(user)
+    for (const label of [
+      "Edit focused Note",
+      "Relate focused Note",
+      "Pin focused Note",
+      "Delete focused Note",
+      "Set Note Type → Question",
+    ]) {
+      expect(
+        within(palette).getByRole("option", { name: label }).getAttribute("aria-disabled"),
+      ).toBe("true")
+    }
+  })
+
+  it("runs the focused Note's own intents from the palette", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByRole("button", { name: "Research" })
+    await focusOneNote(user, "Cities grew around rivers")
+
+    // Pinning through the palette commits the same change the card's control
+    // commits, so the entry reads Unpin the next time it is opened.
+    const palette = await openPalette(user)
+    await user.click(within(palette).getByRole("option", { name: "Pin focused Note" }))
+    await waitFor(() =>
+      expect(within(noteCards()[0]).getByRole("button", { name: "Unpin" })).toBeDefined(),
+    )
+    const reopened = await openPalette(user)
+    expect(within(reopened).getByRole("option", { name: "Unpin focused Note" })).toBeDefined()
+    await user.keyboard("{Escape}")
+
+    const typePalette = await openPalette(user)
+    await user.click(within(typePalette).getByRole("option", { name: "Set Note Type → Question" }))
+    await waitFor(() => expect(setNoteTypeCalls.map(({ noteType }) => noteType)).toEqual(["question"]))
+  })
+
+  it("opens the focused Note's editor and relate field from the palette", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByRole("button", { name: "Research" })
+    await focusOneNote(user, "Cities grew around rivers")
+
+    const palette = await openPalette(user)
+    await user.click(within(palette).getByRole("option", { name: "Edit focused Note" }))
+    // The read view and the inline editor share the label, so the editor is
+    // identified by being the field, not the rendered thought.
+    await waitFor(() =>
+      expect(screen.getByLabelText("Edit note text").tagName).toBe("TEXTAREA"),
+    )
+    await user.keyboard("{Escape}")
+    await waitFor(() =>
+      expect(screen.getByLabelText("Edit note text").tagName).not.toBe("TEXTAREA"),
+    )
+
+    const relatePalette = await openPalette(user)
+    await user.click(within(relatePalette).getByRole("option", { name: "Relate focused Note" }))
+    expect(await screen.findByLabelText("Relate to Note")).toBeDefined()
+  })
+
+  it("asks before deleting the focused Note from the palette", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByRole("button", { name: "Research" })
+    await focusOneNote(user, "Cities grew around rivers")
+
+    const palette = await openPalette(user)
+    await user.click(within(palette).getByRole("option", { name: "Delete focused Note" }))
+
+    // The palette routes through the card's own intent, so the confirmation
+    // stands between ⌘K and a destroyed thought.
+    expect(await screen.findByRole("button", { name: "Delete Note" })).toBeDefined()
+    // Nothing is committed until the thinker answers it.
+    expect(noteCards()).toHaveLength(1)
+  })
+})
