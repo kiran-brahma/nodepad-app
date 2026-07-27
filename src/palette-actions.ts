@@ -1,5 +1,6 @@
 import { NOTE_TYPES, type AssistancePolicy, type Note, type ThinkingWorkspace } from "./workspace-client"
 import { noteTypeLabel } from "./note-controls"
+import { ASSISTANCE_POLICIES, assistancePolicyLabel } from "./assistance-policy"
 import type { NoteIntents } from "./note-card"
 import type { NoteView } from "./note-views"
 import { noteViewLabel, NOTE_VIEWS } from "./note-views"
@@ -56,9 +57,12 @@ export function buildPaletteActions(input: {
       group: "View",
       run: () => input.setView(view),
     })),
-    { id: "policy-manual", label: "Assistance: Manual", group: "Assistance", run: () => input.setAssistancePolicy("manual") },
-    { id: "policy-local", label: "Assistance: Local AI", group: "Assistance", run: () => input.setAssistancePolicy("local_ai") },
-    { id: "policy-cloud", label: "Assistance: Cloud AI", group: "Assistance", run: () => input.setAssistancePolicy("cloud_ai") },
+    ...ASSISTANCE_POLICIES.map((policy) => ({
+      id: `policy-${policy}`,
+      label: `Assistance: ${assistancePolicyLabel(policy)}`,
+      group: "Assistance",
+      run: () => input.setAssistancePolicy(policy),
+    })),
     // One jump per Thinking Workspace, matched by name, running the same
     // switch the rail row runs.
     ...input.workspaces.map((workspace) => ({

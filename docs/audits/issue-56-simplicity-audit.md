@@ -55,6 +55,10 @@ Pin's label reads the Note (`Unpin focused Note` when pinned), which is display 
 
 **CAUTION → resolved by extraction.** `buildPaletteActions` grew from 14 entries to roughly 35 inside `App.tsx`, a file already carrying a `fallow-ignore` for complexity. It moved to `src/palette-actions.ts` unchanged in kind: same inputs, same `PaletteAction[]` output, still a module-level builder so branching stays out of the component body. Deletion test: delete the module and the branching spreads into `App`'s body or into the palette component, which is exactly where it must not be. It earns its keep.
 
+### Assistance Policy entries
+
+**CAUTION → resolved during code review.** The three policy entries were hand-written literals restating `POLICY_LABELS` in `assistance-section.tsx`, which is the very duplication the view and Note Type entries avoid by mapping their canonical list. `ASSISTANCE_POLICIES` and `assistancePolicyLabel` now live in `src/assistance-policy.ts`; both the settings buttons and the palette map over them, so a fourth policy cannot ship with a palette — or a settings sheet — that has not heard of it.
+
 ### Change test
 
 If a new action is added, `palette-actions.ts` changes and the palette component does not. If what an action *means* changes, `note-intents.ts` or the App handler changes and the palette follows. If a Note Type or an arrangement is added, neither file changes.
@@ -69,7 +73,7 @@ Seam Quality: Preserved — no new command, no change to `PaletteAction`, no new
 
 Module Cohesion: Cohesive — rendering in `command-palette.tsx`, the action list in `palette-actions.ts`, Note meaning in `note-intents.ts`, durable rules in Rust.
 
-Change Blast Radius: Narrow — `palette-actions.ts` (new), `App.tsx` (shrinks), `App.test.tsx`.
+Change Blast Radius: Narrow — `palette-actions.ts` (new), `palette-actions.test.ts` (new), `assistance-policy.ts` (new, extracted), `assistance-section.tsx` (shrinks), `App.tsx` (shrinks), `App.test.tsx`.
 
 Incidental Complexity Load: Mostly Problem — one avoidable tangle (a growing builder inside the orchestrator) removed by extraction; one accepted (`getElementById` for focus), bounded to a single line in App.
 
@@ -79,4 +83,4 @@ Summary: Coverage over surfaces that already exist. The palette gains entries an
 
 ## GATE DECISION: PROCEED
 
-Implement as specified, with three recorded structural choices: the builder moves to its own module, Set Note Type is enumerated per `NOTE_TYPES` rather than opening a second surface, and focused-Note entries route through the card's `NoteIntents` — including delete, which keeps its confirmation.
+Implement as specified, with four recorded structural choices: the builder moves to its own module (a deviation from the issue's "extend the existing `buildPaletteActions`" — same function and shape, new home), Set Note Type is enumerated per `NOTE_TYPES` rather than opening a second surface, the Assistance Policies are enumerated from one exported list instead of being restated, and focused-Note entries route through the card's `NoteIntents` — including delete, which keeps its confirmation.
