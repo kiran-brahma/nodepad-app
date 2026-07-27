@@ -16,7 +16,13 @@ import {
   notePreview,
   noteTypeLabel,
 } from "./note-controls"
-import { nodeDegree, relatableNotes, relatedNotes, type ThinkingGraph } from "./thinking-graph"
+import {
+  nodeDegree,
+  noteById,
+  relatableNotes,
+  relatedNotes,
+  type ThinkingGraph,
+} from "./thinking-graph"
 import { ExternalLink } from "./external-link"
 import { EscapeDismiss } from "./escape-dismiss"
 import { useEscape, ESCAPE_PRIORITY } from "./escape-stack"
@@ -364,9 +370,7 @@ function SuggestedRelationshipChips({
   return (
     <div className="row suggested-relationships" aria-label="Suggested Relationships">
       {suggestions.map((suggestion) => {
-        const other = context.graph.nodes.find(
-          (node) => node.note.id === suggestion.otherNoteId,
-        )?.note
+        const other = noteById(context.graph, suggestion.otherNoteId)
         if (!other) return null
         const preview = notePreview(other)
         return (

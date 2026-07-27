@@ -79,7 +79,7 @@ export function canvasRelationships(
   })
 }
 
-export type SuggestedCanvasLine = {
+type SuggestedCanvasLine = {
   key: string
   source: Position
   target: Position
@@ -90,7 +90,7 @@ export type SuggestedCanvasLine = {
  * the same positions as committed Relationships and nothing else: a proposal
  * is not in the Thinking Graph, so it can only ever be dashed.
  */
-export function suggestedCanvasLines(
+function suggestedCanvasLines(
   suggestions: readonly SuggestedRelationship[],
   positions: ReadonlyMap<string, Position>,
 ): SuggestedCanvasLine[] {

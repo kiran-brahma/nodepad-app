@@ -606,9 +606,8 @@ select { border: 1px solid #bcae9d; border-radius: 6px; font: inherit; padding: 
 
 /* Modernist chip controls: an outlined accept and a neutral dismiss, so the
    two answers are told apart by shape and not by colour alone. */
-.tag-neutral,
-.tag-outline {
-  background: transparent;
+.note .suggested-relationship .tag-neutral,
+.note .suggested-relationship .tag-outline {
   border-radius: 4px;
   font-family: system-ui, sans-serif;
   font-size: 0.65rem;
@@ -624,6 +623,7 @@ select { border: 1px solid #bcae9d; border-radius: 6px; font: inherit; padding: 
 }
 
 .note .suggested-relationship .tag-outline {
+  background: transparent;
   border: 1px solid #8f3d27;
   color: #8f3d27;
   font-weight: 600;

@@ -137,9 +137,10 @@ export function App() {
   const suggestions = useSuggestedRelationships(
     graph,
     useCallback(
-      (noteId: string, otherNoteId: string) => {
-        void submit(thinkingWorkspace.relateNotes(noteId, otherNoteId))
-      },
+      (noteId: string, otherNoteId: string) =>
+        submit(thinkingWorkspace.relateNotes(noteId, otherNoteId)).then(
+          (result) => result.committed,
+        ),
       [submit],
     ),
   )

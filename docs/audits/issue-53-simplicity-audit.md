@@ -49,7 +49,15 @@ Resolution: one small session-scoped module, `src/suggested-relationships.ts`, h
 
 ### Dedupe within the session
 
-**CLEAN.** One `Set` of canonical pair keys. Dismissal adds a key; the projection subtracts it. "Unchanged pair" is the pair identity, which is all the issue asks for.
+**CAUTION → resolved after review.** The issue says a dismissed suggestion is not re-shown "for the same **unchanged** pair". Keying dismissal on pair identity alone drops the qualifier: a pair waved off once would stay suppressed even after the thinker rewrote one of the Notes, which is a different suggestion about a different thought. Dismissal is therefore keyed on the pair *as those two thoughts currently read* — the canonical pair key plus both Notes' text. One `Set`, still no durable state; a rewritten Note simply produces a key the set does not hold.
+
+### Accepting a suggestion that the relate command refuses
+
+**Resolved after review.** Accepting must not clear the chip on optimism. The suggestion is forgotten only once `relateNotes` reports a committed snapshot; a refused commit leaves the offer standing, so the thinker never loses a proposal without gaining a Relationship.
+
+### Pair identity has one owner
+
+**Resolved after review.** The canonical pair rule already lived inside the Thinking Graph. Rather than restating it, `pairKey` and `noteById` are exported from `thinking-graph.ts` and the suggestion module reads them, so "is this the same pair" and "which Note is this" have one answer for links and proposals alike.
 
 ### Change test
 

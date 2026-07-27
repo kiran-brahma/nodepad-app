@@ -21,6 +21,8 @@ const secondText = "Trade follows water"
 let snapshot: WorkspaceSnapshot
 /** Every `relate_notes` call, so committing a link is observable. */
 let relateCalls: { noteId: string; otherNoteId: string }[] = []
+/** Makes the next `relate_notes` refuse, so a failed commit is observable. */
+let relateFails = false
 let settleEnrichment: ((outcome: EnrichmentCommandOutcome) => void) | null = null
 
 function seededNote(id: string, markdown: string): Note {
@@ -106,6 +108,12 @@ vi.mock("@tauri-apps/api/core", () => ({
           noteId: String(args.noteId),
           otherNoteId: String(args.otherNoteId),
         })
+        if (relateFails) {
+          return Promise.resolve({
+            status: "failed",
+            failure: { code: "storage", message: "the Relationship was not written" },
+          })
+        }
         snapshot = {
           ...snapshot,
           relationships: [
@@ -184,6 +192,7 @@ function solidLines(): Element[] {
 beforeEach(() => {
   vi.useFakeTimers()
   relateCalls = []
+  relateFails = false
   settleEnrichment = null
 })
 
@@ -238,7 +247,27 @@ describe("suggested Relationships", () => {
     expect(screen.queryByText(`Relate to “${secondText}”?`)).toBeNull()
   })
 
-  it("does not offer a dismissed pair again in the same session", async () => {
+  it("does not offer a dismissed pair again while it is unchanged", async () => {
+    await renderApp()
+    const thought = "Cities grew around rivers and harbours"
+    await editFirstNote(thought)
+    await proposeLink([secondNoteId])
+    fireEvent.click(
+      screen.getByRole("button", { name: `Dismiss suggested Relationship to ${secondText}` }),
+    )
+    await flush()
+
+    // The same pair, unchanged, proposed again by a later organization. The
+    // thinker already answered this suggestion, so it is not put again.
+    await editFirstNote(thought)
+    await proposeLink([secondNoteId])
+
+    expect(screen.queryByText(`Relate to “${secondText}”?`)).toBeNull()
+    expect(dashedLines()).toHaveLength(0)
+    expect(relateCalls).toEqual([])
+  })
+
+  it("may offer a dismissed pair again once the thought itself is rewritten", async () => {
     await renderApp()
     await editFirstNote("Cities grew around rivers and harbours")
     await proposeLink([secondNoteId])
@@ -247,12 +276,29 @@ describe("suggested Relationships", () => {
     )
     await flush()
 
-    // The same unchanged pair, proposed again by a later organization.
+    // A rewritten Note is a different thought, so the pair the thinker waved
+    // off is no longer the pair being proposed.
     await editFirstNote("Cities grew around rivers, harbours, and rail")
     await proposeLink([secondNoteId])
 
-    expect(screen.queryByText(`Relate to “${secondText}”?`)).toBeNull()
-    expect(dashedLines()).toHaveLength(0)
+    expect(screen.getByText(`Relate to “${secondText}”?`)).toBeTruthy()
+    expect(dashedLines()).toHaveLength(1)
     expect(relateCalls).toEqual([])
+  })
+
+  it("keeps the offer standing when the relate command refuses it", async () => {
+    await renderApp()
+    await editFirstNote("Cities grew around rivers and harbours")
+    await proposeLink([secondNoteId])
+
+    relateFails = true
+    fireEvent.click(screen.getByRole("button", { name: `Link to ${secondText}` }))
+    await flush()
+
+    // Nothing was committed, so the suggestion is still unanswered: losing
+    // the chip here would lose the proposal with no Relationship to show.
+    expect(snapshot.relationships).toEqual([])
+    expect(screen.getByText(`Relate to “${secondText}”?`)).toBeTruthy()
+    expect(dashedLines()).toHaveLength(1)
   })
 })

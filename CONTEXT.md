@@ -32,6 +32,13 @@ _Avoid_: Canvas, graph view
 A meaningful association between two Notes in the same Thinking Workspace, created by the thinker or suggested by AI.
 _Avoid_: Edge, influenced-by ID, connection indicator
 
+**Suggested Relationship**:
+A Relationship AI has proposed between two Notes and the thinker has not yet
+answered. It is not a Relationship: nothing durable holds it, the Thinking
+Graph does not carry it, and it lasts only for the session. Accepting one
+creates an ordinary Relationship; dismissing one commits nothing.
+_Avoid_: Pending link, auto-link, AI edge
+
 **Synthesis**:
 A provisional insight that connects tensions or patterns across multiple Notes and may become a Note when accepted by the thinker.
 _Avoid_: Ghost note, generated answer
