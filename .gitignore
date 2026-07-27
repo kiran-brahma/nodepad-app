@@ -9,5 +9,4 @@ src-tauri/gen/
 tsconfig.tsbuildinfo
 
 # Internal docs
-CLAUDE.md
 /.pi-subagents
