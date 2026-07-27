@@ -4,7 +4,7 @@ import { notePreview } from "./note-controls"
 import type { ThinkingGraph } from "./thinking-graph"
 import { graphLayout, GRAPH_HEIGHT, GRAPH_WIDTH, type GraphPlacement } from "./graph-layout"
 import type { NoteFocus } from "./note-focus"
-import { synthesisAnchors, type SynthesisAnchor } from "./synthesis-placement"
+import { synthesisAnchors } from "./synthesis-placement"
 
 /** Enough of a Note to recognise its node without redrawing the Note on it. */
 function nodeLabel(note: Note): string {
@@ -69,21 +69,6 @@ function GraphNodeMark({
 const SYNTHESIS_RADIUS = 8
 
 /**
- * Where each pending Synthesis sits on the graph: the shared placement rule,
- * read against the same layout the Notes are drawn from. Nothing is stored,
- * so dismissing a Synthesis simply stops drawing it.
- */
-function provisionalMarks(
-  pending: PendingSynthesis[],
-  placements: GraphPlacement[],
-): SynthesisAnchor[] {
-  return synthesisAnchors(pending, (noteId) => {
-    const placement = placements.find((candidate) => candidate.node.note.id === noteId)
-    return placement ? { x: placement.x, y: placement.y } : null
-  })
-}
-
-/**
  * The Thinking Graph drawn: one node per Note of the active Thinking
  * Workspace, one line per Relationship. Lines are undirected and carry no
  * relation type, because a Relationship has none. Hovering a node previews
@@ -112,8 +97,15 @@ export function GraphView({
   pendingSyntheses: PendingSynthesis[]
 }) {
   const layout = useMemo(() => graphLayout(graph), [graph])
+  // Where each offer sits comes from the shared placement rule, read against
+  // the same layout the Notes are drawn from. Nothing is stored, so dismissing
+  // a Synthesis simply stops drawing it.
   const provisional = useMemo(
-    () => provisionalMarks(pendingSyntheses, layout.placements),
+    () =>
+      synthesisAnchors(pendingSyntheses, (noteId) => {
+        const placement = layout.placements.find((candidate) => candidate.node.note.id === noteId)
+        return placement ? { x: placement.x, y: placement.y } : null
+      }),
     [pendingSyntheses, layout.placements],
   )
   const focusedNote = graph.nodes.find((node) => node.note.id === focus.focusedNoteId)?.note
@@ -150,12 +142,12 @@ export function GraphView({
           <GraphNodeMark key={placement.node.note.id} placement={placement} focus={focus} />
         ))}
         {provisional.map((mark) => (
-          <g className="graph-synthesis" key={mark.id}>
+          <g className="graph-synthesis" key={mark.synthesis.id}>
             {mark.leaders.map((leader) => (
               <line
                 aria-hidden="true"
                 className="graph-synthesis-leader"
-                key={`${mark.id}-${leader.noteId}`}
+                key={`${mark.synthesis.id}-${leader.noteId}`}
                 strokeDasharray="4 4"
                 x1={mark.x}
                 y1={mark.y}
@@ -164,7 +156,7 @@ export function GraphView({
               />
             ))}
             <circle
-              aria-label={`Pending Synthesis: ${mark.text}`}
+              aria-label={`Pending Synthesis: ${mark.synthesis.text}`}
               className="graph-synthesis-mark"
               cx={mark.x}
               cy={mark.y}
@@ -172,7 +164,7 @@ export function GraphView({
               role="img"
               strokeDasharray="3 3"
             >
-              <title>{mark.text}</title>
+              <title>{mark.synthesis.text}</title>
             </circle>
           </g>
         ))}

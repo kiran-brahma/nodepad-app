@@ -134,26 +134,29 @@ function SynthesisOffer({
   onAccept: (synthesisId: string) => void
   onDismiss: (synthesisId: string) => void
 }) {
+  const { synthesis } = anchor
   return (
     <article
-      aria-label={`Pending Synthesis: ${anchor.text}`}
-      className={anchor.stale ? "canvas-synthesis stale" : "canvas-synthesis"}
+      aria-label={`Pending Synthesis: ${synthesis.text}`}
+      className={synthesis.stale ? "canvas-synthesis stale" : "canvas-synthesis"}
       style={{ left: anchor.x, top: anchor.y }}
     >
+      {/* What the Synthesis rests on, which is every Note it names — not
+          however many of them this canvas happens to be drawing. */}
       <p className="canvas-synthesis-header">
-        Synthesis forming · connects {anchor.sourceCount} notes
+        Synthesis forming · connects {synthesis.sourceNoteIds.length} Notes
       </p>
-      <p>{anchor.text}</p>
+      <p>{synthesis.text}</p>
       <div className="row">
         <button
-          disabled={anchor.stale}
-          onClick={() => onAccept(anchor.id)}
+          disabled={synthesis.stale}
+          onClick={() => onAccept(synthesis.id)}
           title="Create a new thesis Note from this Synthesis"
           type="button"
         >
           Accept as thesis
         </button>
-        <button onClick={() => onDismiss(anchor.id)} type="button">
+        <button onClick={() => onDismiss(synthesis.id)} type="button">
           Dismiss
         </button>
       </div>
@@ -277,7 +280,7 @@ export function CanvasView({
             <line
               aria-hidden="true"
               className="canvas-synthesis-leader"
-              key={`${offer.id}-${leader.noteId}`}
+              key={`${offer.synthesis.id}-${leader.noteId}`}
               x1={offer.x}
               x2={leader.x}
               y1={offer.y}
@@ -351,7 +354,7 @@ export function CanvasView({
       {offers.map((offer) => (
         <SynthesisOffer
           anchor={offer}
-          key={offer.id}
+          key={offer.synthesis.id}
           onAccept={onAcceptSynthesis}
           onDismiss={onDismissSynthesis}
         />

@@ -178,7 +178,7 @@ describe("pending Synthesis on the canvas", () => {
     // no note id, so nothing can drag it or link a Relationship to it.
     expect([offer.style.left, offer.style.top]).toEqual(["259px", "100px"])
     expect(offer.hasAttribute("data-note-id")).toBe(false)
-    expect(getByText("Synthesis forming · connects 2 notes")).toBeTruthy()
+    expect(getByText("Synthesis forming · connects 2 Notes")).toBeTruthy()
     expect(container.querySelectorAll(".canvas-synthesis-leader")).toHaveLength(2)
 
     fireEvent.click(getByRole("button", { name: "Accept as thesis" }))

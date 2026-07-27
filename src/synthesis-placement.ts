@@ -1,6 +1,6 @@
 import type { PendingSynthesis } from "./workspace-client"
 
-export interface Anchor {
+interface Point {
   x: number
   y: number
 }
@@ -15,12 +15,9 @@ export interface Anchor {
  * from being drawn.
  */
 export interface SynthesisAnchor {
-  id: string
-  text: string
-  stale: boolean
-  /** How many Notes the Synthesis rests on, which is what it claims to
-   *  connect — not how many of them this view happens to be drawing. */
-  sourceCount: number
+  /** The offer itself, carried rather than copied, so this module owns where
+   *  a Synthesis sits and nothing else about it. */
+  synthesis: PendingSynthesis
   x: number
   y: number
   leaders: { noteId: string; x: number; y: number }[]
@@ -34,7 +31,7 @@ export interface SynthesisAnchor {
  */
 export function synthesisAnchors(
   pending: readonly PendingSynthesis[],
-  anchorOf: (noteId: string) => Anchor | null,
+  anchorOf: (noteId: string) => Point | null,
 ): SynthesisAnchor[] {
   return pending.flatMap((synthesis) => {
     const leaders = synthesis.sourceNoteIds.flatMap((noteId) => {
@@ -44,10 +41,7 @@ export function synthesisAnchors(
     if (leaders.length === 0) return []
     return [
       {
-        id: synthesis.id,
-        text: synthesis.text,
-        stale: synthesis.stale,
-        sourceCount: synthesis.sourceNoteIds.length,
+        synthesis,
         x: leaders.reduce((total, leader) => total + leader.x, 0) / leaders.length,
         y: leaders.reduce((total, leader) => total + leader.y, 0) / leaders.length,
         leaders,
