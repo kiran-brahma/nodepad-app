@@ -19,11 +19,12 @@ function bumpJson(path, key) {
 
 function bumpToml(path) {
   let text = readFileSync(path, "utf8");
-  const updated = text.replace(/^version = "[^"]+"/m, `version = "${version}"`);
-  if (updated === text) {
+  const regex = /^version = "[^"]+"/m;
+  if (!regex.test(text)) {
     console.error(`Could not find version line in ${path}`);
     process.exit(1);
   }
+  const updated = text.replace(regex, `version = "${version}"`);
   writeFileSync(path, updated);
   console.log(`→ ${path}: ${version}`);
 }

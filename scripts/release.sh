@@ -109,14 +109,6 @@ fi
 echo "→ Generating changelog from git log..."
 node scripts/generate-changelog.mjs "--tag=$VERSION"
 
-echo ""
-echo "─────────────────────────────────────────────────────────────────────"
-echo "  CHANGELOG.md has been updated from git history."
-echo "  Review it now, then ask pi to refine it if needed."
-echo "  When ready, re-run this script to finalize the release."
-echo "─────────────────────────────────────────────────────────────────────"
-echo ""
-
 # ─── Dry-run stop ────────────────────────────────────────────────────────
 
 if [[ "$DRY_RUN" == true ]]; then
