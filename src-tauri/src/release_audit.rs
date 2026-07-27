@@ -284,7 +284,7 @@ fn no_dependency_introduces_telemetry_or_an_updater() {
     // It is not telemetry — it only checks a GitHub release URL for new
     // versions when the user runs the app, and the check is scoped to the
     // configured endpoint in tauri.conf.json.
-    if marker == "tauri-plugin-updater" {
+    if *marker == "tauri-plugin-updater" {
         continue;
     }
         assert!(
