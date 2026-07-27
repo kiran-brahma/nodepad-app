@@ -22,7 +22,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::cloud::OPENROUTER_BASE_URL;
-use crate::thinking_graph::RelationshipProvenance;
 use crate::workspace::Note;
 
 /// The fixed Note Type enum returned by the model. Order matches the
@@ -853,13 +852,16 @@ impl EnrichmentSource for Note {
 
 /// The output of an enrichment run from the durable layer's point of
 /// view: which fields may be applied, given the manual-provenance gate.
+///
+/// Relationships are deliberately absent. A Relationship the model names is
+/// a suggestion, never an application: it travels to the thinker on the
+/// outcome's parsed result and becomes durable only when the thinker accepts
+/// it through the relate command. The AI never links on their behalf.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ApplicableFields {
     pub note_type: Option<String>,
     pub annotation: Option<String>,
     pub add_labels: Vec<String>,
-    pub add_relationships: Vec<String>,
-    pub remove_relationship_ids: Vec<String>,
 }
 
 /// The application gate. Given a parsed result and the current Note, this
@@ -868,7 +870,6 @@ pub struct ApplicableFields {
 pub fn gate_parsed_against_source<S: EnrichmentSource>(
     parsed: &ParsedEnrichmentResult,
     source: &S,
-    existing_relationships: &[String],
     force: bool,
 ) -> ApplicableFields {
     let note_type = if force || source.note_type_provenance().is_ai_writable() {
@@ -907,30 +908,14 @@ pub fn gate_parsed_against_source<S: EnrichmentSource>(
         }
         add_labels.push(label.clone());
     }
-    let mut add_relationships: Vec<String> = Vec::new();
-    for candidate in &parsed.related_note_ids {
-        if existing_relationships.contains(candidate) {
-            continue;
-        }
-        add_relationships.push(candidate.clone());
-    }
-    // Removing Relationships from a parsed result is not part of the
-    // structured contract: the model can only add. The application never
-    // removes a Relationship based on AI alone; only the user can.
+    // The parsed Relationships are not gated here because they are not
+    // applied here. They reach the thinker as proposals; neither adding nor
+    // removing a Relationship ever follows from an AI result alone.
     ApplicableFields {
         note_type,
         annotation,
         add_labels,
-        add_relationships,
-        remove_relationship_ids: Vec::new(),
     }
-}
-
-/// Translates the AI provenance into a RelationshipProvenance for rows
-/// the enrichment introduces.
-#[allow(dead_code)]
-pub fn relationship_provenance_for_ai() -> RelationshipProvenance {
-    RelationshipProvenance::Ai
 }
 
 /// A provider-agnostic handle for the runtime to drive enrichment. The
@@ -1489,11 +1474,10 @@ Before returning, verify that the Note Type describes structural role; Labels ar
             annotation: Some("note".to_owned()),
             related_note_ids: vec!["c1".to_owned()],
         };
-        let applied = gate_parsed_against_source(&parsed, &source, &[], false);
+        let applied = gate_parsed_against_source(&parsed, &source, false);
         assert_eq!(applied.note_type, None);
         assert_eq!(applied.annotation.as_deref(), Some("note"));
         assert_eq!(applied.add_labels, vec!["alpha".to_owned()]);
-        assert_eq!(applied.add_relationships, vec!["c1".to_owned()]);
     }
 
     #[test]
@@ -1506,7 +1490,7 @@ Before returning, verify that the Note Type describes structural role; Labels ar
             annotation: None,
             related_note_ids: vec![],
         };
-        let applied = gate_parsed_against_source(&parsed, &source, &[], true);
+        let applied = gate_parsed_against_source(&parsed, &source, true);
         assert_eq!(applied.note_type.as_deref(), Some("question"));
     }
 
@@ -1521,7 +1505,7 @@ Before returning, verify that the Note Type describes structural role; Labels ar
             annotation: Some("a new note".to_owned()),
             related_note_ids: vec!["c1".to_owned()],
         };
-        let applied = gate_parsed_against_source(&parsed, &source, &[], false);
+        let applied = gate_parsed_against_source(&parsed, &source, false);
         assert_eq!(applied.note_type.as_deref(), Some("question"));
         assert_eq!(applied.annotation.as_deref(), Some("a new note"));
         assert_eq!(applied.add_labels, vec!["new".to_owned()]);
@@ -1536,22 +1520,30 @@ Before returning, verify that the Note Type describes structural role; Labels ar
             annotation: None,
             related_note_ids: vec![],
         };
-        let applied = gate_parsed_against_source(&parsed, &source, &[], false);
+        let applied = gate_parsed_against_source(&parsed, &source, false);
         assert_eq!(applied.add_labels, vec!["gamma".to_owned()]);
     }
 
+    /// A named Relationship is a proposal for the thinker, so the gate hands
+    /// the durable layer nothing to write for it — in either direction.
     #[test]
-    fn gate_does_not_remove_relationships() {
+    fn gate_applies_no_relationship() {
         let source = make_note("n", "t", "claim", &[], "text", None);
         let parsed = ParsedEnrichmentResult {
             note_type: "claim".to_owned(),
-            labels: vec![],
+            labels: vec!["alpha".to_owned()],
             annotation: None,
             related_note_ids: vec!["c1".to_owned()],
         };
-        let applied = gate_parsed_against_source(&parsed, &source, &["c1".to_owned()], false);
-        assert!(applied.add_relationships.is_empty());
-        assert!(applied.remove_relationship_ids.is_empty());
+        let applied = gate_parsed_against_source(&parsed, &source, false);
+        assert_eq!(
+            applied,
+            ApplicableFields {
+                note_type: None,
+                annotation: None,
+                add_labels: vec!["alpha".to_owned()],
+            }
+        );
     }
 
     #[test]
@@ -1564,7 +1556,7 @@ Before returning, verify that the Note Type describes structural role; Labels ar
             annotation: None,
             related_note_ids: vec![],
         };
-        let applied = gate_parsed_against_source(&parsed, &source, &[], false);
+        let applied = gate_parsed_against_source(&parsed, &source, false);
         assert_eq!(applied.annotation, None);
     }
 }

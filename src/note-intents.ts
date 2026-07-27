@@ -11,6 +11,7 @@ import { isAnnotationTooLong, requestNoteDelete, resolveNoteDeleteConfirmation }
 import { requestTransfer } from "./note-transfer"
 import type { NoteDrafts } from "./note-drafts"
 import type { NoteIntents } from "./note-card"
+import type { SuggestedRelationship } from "./suggested-relationships"
 
 export type SubmitResult = { committed: boolean; snapshot: WorkspaceSnapshot | null }
 
@@ -31,6 +32,8 @@ export function buildNoteIntents({
   onConfirmReplaceEnrichment,
   onCancelReplaceEnrichment,
   onDismissEnrichment,
+  onAcceptSuggestion,
+  onDismissSuggestion,
 }: {
   drafts: NoteDrafts
   workspaces: ThinkingWorkspace[]
@@ -51,6 +54,11 @@ export function buildNoteIntents({
   onCancelReplaceEnrichment?: () => void
   /** Called when the thinker dismisses a failed organization's status. */
   onDismissEnrichment?: () => void
+  /** Called when the thinker accepts an AI-proposed Relationship. The
+   *  suggestion holder commits it through the one relate command. */
+  onAcceptSuggestion?: (suggestion: SuggestedRelationship) => void
+  /** Called when the thinker waves off an AI-proposed Relationship. */
+  onDismissSuggestion?: (suggestion: SuggestedRelationship) => void
 }): NoteIntents {
   function saveText(event: FormEvent) {
     event.preventDefault()
@@ -152,5 +160,7 @@ export function buildNoteIntents({
     confirmReplaceEnrichment: () => onConfirmReplaceEnrichment?.(),
     cancelReplaceEnrichment: () => onCancelReplaceEnrichment?.(),
     dismissEnrichment: () => onDismissEnrichment?.(),
+    acceptSuggestion: (suggestion) => onAcceptSuggestion?.(suggestion),
+    dismissSuggestion: (suggestion) => onDismissSuggestion?.(suggestion),
   }
 }

@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useMemo, useState } from "react"
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react"
 import {
   assistanceEnabled,
   thinkingWorkspace,
@@ -35,6 +35,7 @@ import { AiPresenceIndicator } from "./ai-presence"
 import { useSynthesisController } from "./synthesis-controller"
 import { SynthesisSection } from "./synthesis-section"
 import { useCloudDiscovery } from "./use-cloud-discovery"
+import { useSuggestedRelationships } from "./suggested-relationships"
 
 // App is the V0 orchestrator: a pre-existing 400-line component that wires
 // every section to the one durable seam. The Command-K palette adds exactly
@@ -129,6 +130,32 @@ export function App() {
 
   const cardContext: NoteCardContext = { graph, workspaces }
 
+  // AI-proposed Relationships wait here until the thinker answers them. The
+  // holder keeps only what the Thinking Graph cannot say — which pairs were
+  // proposed, and which were waved off — and accepting commits through the
+  // one relate command, so an accepted suggestion is an ordinary Relationship.
+  const suggestions = useSuggestedRelationships(
+    graph,
+    useCallback(
+      (noteId: string, otherNoteId: string) => {
+        void submit(thinkingWorkspace.relateNotes(noteId, otherNoteId))
+      },
+      [submit],
+    ),
+  )
+
+  // The one place a proposal enters the session. The controller's `applied`
+  // status carries the result the model returned; the Relationships in it are
+  // proposals, because the durable layer commits none of them.
+  const enrichmentStatus = enrichment.status
+  const activeEnrichedNoteId = enrichment.activeNoteId
+  const proposeSuggestions = suggestions.propose
+  useEffect(() => {
+    if (enrichmentStatus.kind !== "applied") return
+    if (!activeEnrichedNoteId) return
+    proposeSuggestions(activeEnrichedNoteId, enrichmentStatus.result.relatedNoteIds)
+  }, [enrichmentStatus, activeEnrichedNoteId, proposeSuggestions])
+
   // One set of Note intents, built once and handed to every card, so a layout
   // decides only where a Note appears and never what may be done to one.
   const noteIntents = buildNoteIntents({
@@ -149,6 +176,8 @@ export function App() {
     onConfirmReplaceEnrichment: () => enrichment.confirmReplace(),
     onCancelReplaceEnrichment: () => enrichment.cancelReplace(),
     onDismissEnrichment: () => enrichment.clear(),
+    onAcceptSuggestion: suggestions.accept,
+    onDismissSuggestion: suggestions.dismiss,
   })
 
   // The one card every view places, over the one set of intents.
@@ -156,7 +185,7 @@ export function App() {
     // The one gate on per-Note AI presence, the same predicate the top-bar
     // indicator reads. A Workspace switched to Manual mid-flight loses its
     // shimmer with the indicator, never after it.
-    const enrichmentStatus =
+    const cardEnrichment =
       aiEnabled && enrichment.activeNoteId === note.id ? enrichment.status : undefined
     return (
       <NoteCard
@@ -168,7 +197,8 @@ export function App() {
         focused={focus.focusedNoteId === note.id}
         dimmed={focus.litNoteIds !== null && !focus.litNoteIds.has(note.id)}
         registerElement={(element) => focus.registerNoteElement(note.id, element)}
-        enrichment={enrichmentStatus}
+        enrichment={cardEnrichment}
+        suggestions={suggestions.forNote(note.id)}
       />
     )
   }
@@ -409,6 +439,7 @@ export function App() {
               onUnrelate={(noteId, otherNoteId) => submit(thinkingWorkspace.unrelateNotes(noteId, otherNoteId))}
               card={noteCard}
               pendingSyntheses={synthesis.pending}
+              suggestions={suggestions.visible}
             />
           </div>
 
