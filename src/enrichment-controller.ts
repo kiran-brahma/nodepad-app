@@ -76,6 +76,13 @@ export function useEnrichmentController(options: ScheduleOptions): EnrichmentCon
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const activeNoteIdRef = useRef<string | null>(null)
   const attempts = useRequestGeneration()
+  // A scheduled attempt resolves its token when the debounce fires, not when
+  // it was scheduled. Capturing a Note schedules from the commit callback of
+  // the render that preceded the Note existing, so reading the snapshot out
+  // of a closure would look for a Note the closure cannot see. The ref always
+  // holds the latest committed snapshot.
+  const snapshotRef = useRef(snapshot)
+  snapshotRef.current = snapshot
 
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -86,10 +93,11 @@ export function useEnrichmentController(options: ScheduleOptions): EnrichmentCon
 
   const buildToken = useCallback(
     (noteId: string): RequestToken | null => {
-      if (!snapshot) return null
-      const workspace = snapshot.workspaces.find((candidate) => candidate.id === workspaceId)
+      const current = snapshotRef.current
+      if (!current) return null
+      const workspace = current.workspaces.find((candidate) => candidate.id === workspaceId)
       if (!workspace) return null
-      const note = snapshot.notes.find((candidate) => candidate.id === noteId)
+      const note = current.notes.find((candidate) => candidate.id === noteId)
       if (!note) return null
       if (!workspace.selectedModel) return null
       const revision = note.enrichmentRevision
@@ -105,7 +113,7 @@ export function useEnrichmentController(options: ScheduleOptions): EnrichmentCon
         model: workspace.selectedModel,
       }
     },
-    [snapshot, workspaceId],
+    [workspaceId],
   )
 
   const runEnrichment = useCallback(
@@ -137,7 +145,8 @@ export function useEnrichmentController(options: ScheduleOptions): EnrichmentCon
         setStatus({ kind: "idle" })
         return
       }
-      if (snapshot && !hasEligiblePolicy(snapshot, workspaceId)) {
+      const current = snapshotRef.current
+      if (current && !hasEligiblePolicy(current, workspaceId)) {
         setStatus({ kind: "idle" })
         return
       }
@@ -153,7 +162,7 @@ export function useEnrichmentController(options: ScheduleOptions): EnrichmentCon
         void runEnrichment(noteId, false)
       }, ENRICH_DEBOUNCE_MILLIS)
     },
-    [clearTimer, enabled, runEnrichment, snapshot, workspaceId],
+    [clearTimer, enabled, runEnrichment, workspaceId],
   )
 
   const retry = useCallback(() => {
