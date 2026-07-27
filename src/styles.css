@@ -176,6 +176,9 @@ select { border: 1px solid #bcae9d; border-radius: 6px; font: inherit; padding: 
 .canvas-relationships { height: 100%; inset: 0; overflow: visible; pointer-events: none; position: absolute; width: 100%; z-index: 0; }
 .canvas-relationship { cursor: pointer; pointer-events: stroke; stroke: var(--color-divider); stroke-width: 2; }
 .canvas-relationship.focused { stroke: #8f3d27; }
+/* A proposal, not a link: dashed and inert, in the accent so it reads as
+   something offered. It is answered on the Note, never on the line. */
+.canvas-relationship.suggested { cursor: default; pointer-events: none; stroke: #8f3d27; stroke-dasharray: 6 5; stroke-width: 1.5; }
 .canvas-note { cursor: grab; position: absolute; touch-action: none; width: 13rem; z-index: 1; }
 .canvas-note:active { cursor: grabbing; }
 .canvas-relationship-handle { opacity: 0; position: absolute; right: -.4rem; top: 50%; transform: translateY(-50%); transition: opacity .12s ease; z-index: 2; }
@@ -583,6 +586,51 @@ select { border: 1px solid #bcae9d; border-radius: 6px; font: inherit; padding: 
 .note .meta .badge {
   font-size: 0.6rem;
   padding: 0.15rem 0.4rem;
+}
+
+/* Suggested Relationships: one quiet chip per undecided proposal, sitting
+   under the meta line. Never a popup, never an alert — a proposal the
+   thinker may ignore indefinitely. */
+.note .suggested-relationships {
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+}
+
+.note .suggested-relationship {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.3rem;
+}
+
+/* Modernist chip controls: an outlined accept and a neutral dismiss, so the
+   two answers are told apart by shape and not by colour alone. */
+.note .suggested-relationship .tag-neutral,
+.note .suggested-relationship .tag-outline {
+  border-radius: 4px;
+  font-family: system-ui, sans-serif;
+  font-size: 0.65rem;
+  letter-spacing: 0.06em;
+  line-height: 1.4;
+  padding: 0.2rem 0.5rem;
+}
+
+.note .suggested-relationship .tag-neutral {
+  background: #f1e8dc;
+  border: 1px solid transparent;
+  color: #6f625a;
+}
+
+.note .suggested-relationship .tag-outline {
+  background: transparent;
+  border: 1px solid #8f3d27;
+  color: #8f3d27;
+  font-weight: 600;
+}
+
+.note .suggested-relationship button {
+  cursor: pointer;
 }
 
 /* ⌘· menu: dropdown at the card's top-right */

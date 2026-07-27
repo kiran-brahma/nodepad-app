@@ -52,6 +52,7 @@ function canvas(
       graph={thinkingGraph(notes, [])}
       focus={noFocus()}
       card={() => <div />}
+      suggestions={[]}
       onSetPosition={callbacks.onSetPosition ?? vi.fn()}
       onRelate={callbacks.onRelate ?? vi.fn()}
       onUnrelate={callbacks.onUnrelate ?? vi.fn()}
@@ -75,6 +76,7 @@ describe("canvas placement", () => {
         graph={thinkingGraph([note("1", 10, 10)], [])}
         focus={noFocus()}
         card={() => <button>Control</button>}
+        suggestions={[]}
         onSetPosition={commit}
         onRelate={vi.fn()}
         onUnrelate={vi.fn()}
@@ -120,6 +122,7 @@ describe("canvas placement", () => {
         graph={graph}
         focus={{ ...noFocus(), focusedNoteId: "1", litNoteIds: new Set(["1"]) }}
         card={() => <div />}
+        suggestions={[]}
         onSetPosition={vi.fn()}
         onRelate={vi.fn()}
         onUnrelate={remove}

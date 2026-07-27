@@ -6,6 +6,7 @@ import { GraphView } from "./graph-view"
 import { CanvasView } from "./canvas-view"
 import type { ThinkingGraph } from "./thinking-graph"
 import type { NoteFocus } from "./note-focus"
+import type { SuggestedRelationship } from "./suggested-relationships"
 
 /**
  * The committed Notes, arranged however the thinker chose to read them. The
@@ -26,6 +27,7 @@ export function CommittedNotesSection({
   onUnrelate,
   card,
   pendingSyntheses,
+  suggestions,
 }: {
   notes: Note[]
   /** The whole Thinking Graph of the active Workspace, which no search narrows. */
@@ -43,6 +45,9 @@ export function CommittedNotesSection({
   /** Undecided Syntheses, drawn provisionally by the graph and by nothing
    *  else. They are not Notes, so no other view arranges them. */
   pendingSyntheses: PendingSynthesis[]
+  /** Undecided AI-proposed Relationships, drawn dashed by the canvas. They
+   *  are not Relationships, so the graph never carries them. */
+  suggestions: readonly SuggestedRelationship[]
 }) {
   return (
     <section aria-label="Committed Notes">
@@ -77,6 +82,7 @@ export function CommittedNotesSection({
           graph={graph}
           focus={focus}
           card={card}
+          suggestions={suggestions}
           onSetPosition={onSetPosition}
           onRelate={onRelate}
           onUnrelate={onUnrelate}

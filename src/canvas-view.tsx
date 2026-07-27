@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from "
 import type { Note } from "./workspace-client"
 import type { ThinkingGraph } from "./thinking-graph"
 import type { NoteFocus } from "./note-focus"
+import type { SuggestedRelationship } from "./suggested-relationships"
 
 export const CANVAS_CARD_WIDTH = 208
 export const CANVAS_CARD_HEIGHT = 180
@@ -78,12 +79,36 @@ export function canvasRelationships(
   })
 }
 
+type SuggestedCanvasLine = {
+  key: string
+  source: Position
+  target: Position
+}
+
+/**
+ * The lines for suggestions the thinker has not answered. They are drawn from
+ * the same positions as committed Relationships and nothing else: a proposal
+ * is not in the Thinking Graph, so it can only ever be dashed.
+ */
+function suggestedCanvasLines(
+  suggestions: readonly SuggestedRelationship[],
+  positions: ReadonlyMap<string, Position>,
+): SuggestedCanvasLine[] {
+  return suggestions.flatMap((suggestion) => {
+    const source = positions.get(suggestion.noteId)
+    const target = positions.get(suggestion.otherNoteId)
+    if (!source || !target) return []
+    return [{ key: suggestion.key, source, target }]
+  })
+}
+
 /** A direct spatial projection of committed Notes; its drag state is transient. */
 export function CanvasView({
   notes,
   graph,
   focus,
   card,
+  suggestions,
   onSetPosition,
   onRelate,
   onUnrelate,
@@ -92,6 +117,9 @@ export function CanvasView({
   graph: ThinkingGraph
   focus: NoteFocus
   card: (note: Note) => ReactNode
+  /** Undecided AI proposals, drawn dashed. They commit nothing and are not
+   *  part of the Thinking Graph. */
+  suggestions: readonly SuggestedRelationship[]
   onSetPosition: (noteId: string, x: number, y: number) => void
   onRelate: (noteId: string, otherNoteId: string) => void
   onUnrelate: (noteId: string, otherNoteId: string) => void
@@ -155,10 +183,25 @@ export function CanvasView({
 
   const positions = new Map(notes.map((note) => [note.id, positionFor(note)]))
   const relationships = canvasRelationships(graph, positions, focus.litNoteIds)
+  const suggestedLines = suggestedCanvasLines(suggestions, positions)
 
   return (
     <div className="canvas" aria-label="Note canvas" ref={canvas} onPointerUp={finishLink}>
       <svg className="canvas-relationships" aria-label="Relationships">
+        {/* A proposal, drawn dashed so it never reads as a link the Thinking
+            Workspace holds. It is answered on the Note, not here. */}
+        {suggestedLines.map((line) => (
+          <line
+            aria-hidden="true"
+            className="canvas-relationship suggested"
+            data-suggested-relationship={line.key}
+            key={line.key}
+            x1={line.source.x + CANVAS_CARD_WIDTH / 2}
+            x2={line.target.x + CANVAS_CARD_WIDTH / 2}
+            y1={line.source.y + CANVAS_CARD_HEIGHT / 2}
+            y2={line.target.y + CANVAS_CARD_HEIGHT / 2}
+          />
+        ))}
         {relationships.map((relationship) => (
           <line
             aria-label="Remove Relationship"

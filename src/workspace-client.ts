@@ -65,7 +65,9 @@ export interface SearchResult {
   rank: number
 }
 
-/** Who created a Relationship. Only `manual` is written today. */
+/** Who created a Relationship. Only `manual` is written today: the AI never
+ *  links on the thinker's behalf, so accepting a suggested link is recorded
+ *  as the thinker's own act. `ai` remains a value durable data may hold. */
 export type RelationshipProvenance = "manual" | "ai"
 
 /**

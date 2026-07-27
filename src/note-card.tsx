@@ -16,7 +16,13 @@ import {
   notePreview,
   noteTypeLabel,
 } from "./note-controls"
-import { nodeDegree, relatableNotes, relatedNotes, type ThinkingGraph } from "./thinking-graph"
+import {
+  nodeDegree,
+  noteById,
+  relatableNotes,
+  relatedNotes,
+  type ThinkingGraph,
+} from "./thinking-graph"
 import { ExternalLink } from "./external-link"
 import { EscapeDismiss } from "./escape-dismiss"
 import { useEscape, ESCAPE_PRIORITY } from "./escape-stack"
@@ -30,6 +36,7 @@ import {
 import type { NoteDrafts } from "./note-drafts"
 import type { EnrichmentStatus } from "./enrichment-controller"
 import { organizing as aiOrganizing } from "./ai-presence"
+import type { SuggestedRelationship } from "./suggested-relationships"
 
 /**
  * Every intent a Note card can raise. One object is built once, in App, and
@@ -79,6 +86,11 @@ export interface NoteIntents {
   /** Dismisses a failed organization's inline affordance. Clears the status
    *  only; the Note keeps whatever the thinker last committed. */
   dismissEnrichment: () => void
+  /** Commits an AI-proposed Relationship through the one relate command. */
+  acceptSuggestion: (suggestion: SuggestedRelationship) => void
+  /** Forgets an AI-proposed Relationship. Nothing is committed and the same
+   *  pair is not offered again this session. */
+  dismissSuggestion: (suggestion: SuggestedRelationship) => void
   editTextDraft: (markdown: string) => void
   editAnnotationDraft: (text: string) => void
 }
@@ -341,6 +353,53 @@ function NoteRelationships({
 }
 
 /**
+ * An AI-proposed Relationship, offered where the thought is rather than in a
+ * popup: one line naming the other Note, and two small controls. Nothing is
+ * committed until Link is pressed, and Dismiss commits nothing at all.
+ */
+function SuggestedRelationshipChips({
+  context,
+  intents,
+  suggestions,
+}: {
+  context: NoteCardContext
+  intents: NoteIntents
+  suggestions: readonly SuggestedRelationship[]
+}) {
+  if (suggestions.length === 0) return null
+  return (
+    <div className="row suggested-relationships" aria-label="Suggested Relationships">
+      {suggestions.map((suggestion) => {
+        const other = noteById(context.graph, suggestion.otherNoteId)
+        if (!other) return null
+        const preview = notePreview(other)
+        return (
+          <span className="suggested-relationship" key={suggestion.key}>
+            <span className="tag tag-neutral">Relate to “{preview}”?</span>
+            <button
+              aria-label={`Link to ${preview}`}
+              className="tag-outline"
+              onClick={() => intents.acceptSuggestion(suggestion)}
+              type="button"
+            >
+              Link
+            </button>
+            <button
+              aria-label={`Dismiss suggested Relationship to ${preview}`}
+              className="tag-neutral"
+              onClick={() => intents.dismissSuggestion(suggestion)}
+              type="button"
+            >
+              Dismiss
+            </button>
+          </span>
+        )
+      })}
+    </div>
+  )
+}
+
+/**
  * The quiet per-Note piece of the Enrichment Workflow. The same four
  * states as before — organizing, applied, failed, replace-pending — drawn
  * as unobtrusive affordances rather than attention-seeking ones: while AI
@@ -558,6 +617,7 @@ export function NoteCard({
   dimmed,
   registerElement,
   enrichment,
+  suggestions = [],
 }: {
   note: Note
   context: NoteCardContext
@@ -570,6 +630,9 @@ export function NoteCard({
   /** The Enrichment Workflow status for this Note, or `undefined` if
    *  the active Workspace's policy does not permit AI assistance. */
   enrichment?: EnrichmentStatus
+  /** The AI-proposed Relationships this Note's organization raised and the
+   *  thinker has not answered. Never a committed Relationship. */
+  suggestions?: readonly SuggestedRelationship[]
 }) {
   const [commandMenuOpen, setCommandMenuOpen] = useState(false)
   const [typePopoverOpen, setTypePopoverOpen] = useState(false)
@@ -741,6 +804,13 @@ export function NoteCard({
           onDismiss={intents.dismissEnrichment}
         />
       </div>
+
+      {/* Undecided AI proposals: a quiet chip, never a modal */}
+      <SuggestedRelationshipChips
+        context={context}
+        intents={intents}
+        suggestions={suggestions}
+      />
 
       {/* ── Draft editors (shown when active) ─────────────────────────── */}
 
