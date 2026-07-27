@@ -32,13 +32,13 @@ Durable decisions this slice must not re-litigate: the `thinkingWorkspace` seam,
 
 **CAUTION → resolved by sharing the one draft.** R3's sheet already renames from App's `renameDraft`, and the palette's "Rename Workspace" action already sets it. A second draft owned by the rail would give the application two answers to "what name is being edited," and they would drift the moment either surface changed.
 
-Resolution: the rail reads and writes the same `renameDraft` and submits the same `renameWorkspace` handler. Two surfaces can be open on the same draft; because there is one value and one commit path, they cannot disagree, and one committed rename clears the draft and closes both. This is the same argument R13 recorded for the panel and the canvas offering one Synthesis decision. The rail's field carries its own accessible name ("Rename Thinking Workspace") so the two surfaces stay separately addressable; Escape is registered on the shared escape stack, and cancelling clears the one draft.
+Resolution (revised during code review): a draft is not a fact about the Workspace — it is which field is open and what is typed in it, and that is per surface. Sharing one value made both surfaces render a field at once: two `autoFocus` inputs racing, two escape-stack entries, and the rail row's select button replaced by an input while the sheet was open. The shipped answer keeps two drafts, `railRenameDraft` and the sheet's `renameDraft`, and removes the duplication where it actually was — one `WorkspaceRenameForm` (`src/workspace-rename-form.tsx`, with the `WorkspaceRenameDraft` type) that both surfaces render with their own accessible name. One commit path, `renameWorkspace(draft, clearDraft)`, so neither surface owns a rename rule. The ⌘K "Rename Workspace" action now opens the rail row's field, the surface R14 gives rename, instead of setting a draft with nothing on screen to show it.
 
 ### The create control
 
 **CLEAN, with one bounded piece of local state.** The issue asks for a create control that *opens* an inline name field, so whether the field is open is a fact the rail alone knows — it is not derivable from the snapshot and nothing else in the app needs it. Keeping it in `WorkspaceSection` is the narrowest home. The name itself stays App's `workspaceName` draft, cleared by App on commit, so the field's contents remain single-sourced.
 
-For the rail to close the field only on a committed create, `onCreate` returns whether the command committed (`Promise<boolean>`) instead of taking a `FormEvent`. That is a subtraction: App no longer needs to hand the rail a form-event handler, and the rail no longer guesses at commit from a cleared draft. A refused create leaves the field open with the name intact.
+For the rail to close the field only on a committed create, `onCreate` returns whether the command committed (`Promise<boolean>`) instead of taking a `FormEvent`. That is a subtraction: App no longer needs to hand the rail a form-event handler, and the rail no longer guesses at commit from a cleared draft. A refused create leaves the field open with the name intact; Escape closes the field and clears the name with it, so reopening never resumes a name the thinker walked away from.
 
 ### The ⌘K jump
 
@@ -56,15 +56,15 @@ If the rail's shape, accent, or row actions change in 6 months, `workspace-secti
 
 ## COMPLEXITY SCORECARD
 
-State Surface: Low — one new boolean (`creating`) local to the rail. Every other input is committed snapshot state or an App draft that already existed.
+State Surface: Low — one new boolean (`creating`) local to the rail, and one rename draft per surface. Every other input is committed snapshot state or an App draft that already existed.
 
 Seam Quality: Preserved — four existing commands, no new one, and no durable field added.
 
 Module Cohesion: Cohesive — layout in the shell, presentation in the section, drafts and commits in App, invariants in Rust.
 
-Change Blast Radius: Narrow — `workspace-section.tsx`, `App.tsx` (props and palette actions), `styles.css`, plus tests.
+Change Blast Radius: Narrow — `workspace-section.tsx`, `workspace-rename-form.tsx` (new, extracted from the settings sheet), `workspace-settings-sheet.tsx` (shrinks), `App.tsx` (props and palette actions), `styles.css`, plus tests.
 
-Incidental Complexity Load: Mostly Problem — the one avoidable complexity, a second rename draft, is avoided by sharing the existing one.
+Incidental Complexity Load: Mostly Problem — the one avoidable complexity, a second rename *form*, is removed by extracting the one both surfaces render.
 
 Summary: The slice is a new arrangement of state the app already holds, over commands it already has. Nothing durable is added, so nothing durable can drift.
 
@@ -72,4 +72,4 @@ Summary: The slice is a new arrangement of state the app already holds, over com
 
 ## GATE DECISION: PROCEED
 
-Implement as specified, with two recorded structural choices: the rail shares App's one `renameDraft` rather than owning a second, and `onCreate` reports whether the create committed so the rail's inline field closes on a commit rather than inferring it from a cleared draft.
+Implement as specified, with two recorded structural choices: the in-place rename *form* is extracted once and rendered by both the rail and the settings sheet, each over its own draft (revised from the pre-implementation plan to share one draft — see the finding above), and `onCreate` reports whether the create committed so the rail's inline field closes on a commit rather than inferring it from a cleared draft.

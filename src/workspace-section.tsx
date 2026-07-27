@@ -1,6 +1,7 @@
-import { useState, type FormEvent } from "react"
+import { useState, type FormEvent, type ReactNode } from "react"
 import type { ThinkingWorkspace } from "./workspace-client"
 import { useEscape, ESCAPE_PRIORITY } from "./escape-stack"
+import { WorkspaceRenameForm, type WorkspaceRenameDraft } from "./workspace-rename-form"
 
 /**
  * The rail's Thinking Workspaces: a vertical list marking the active one,
@@ -8,10 +9,10 @@ import { useEscape, ESCAPE_PRIORITY } from "./escape-stack"
  * the Settings entry.
  *
  * It owns no business rule. Selecting, creating, and renaming all run App's
- * handlers over the existing commands; the rename draft is App's, shared with
- * the settings sheet so the two surfaces cannot disagree about the name being
- * edited. The only state kept here is whether the create field is open, which
- * nothing outside the rail needs to know.
+ * handlers over the existing commands, and the rail's rename draft is the
+ * rail's alone, so a rename started in the settings sheet never opens a field
+ * on a row behind it. The only state kept here is whether the create field is
+ * open, which nothing outside the rail needs to know.
  */
 export function WorkspaceSection({
   workspaces,
@@ -31,8 +32,8 @@ export function WorkspaceSection({
   activeWorkspaceId: string | undefined
   /** The new-Workspace name draft, owned by App and cleared by it on commit. */
   name: string
-  /** The Workspace being renamed, shared with the settings sheet. */
-  renameDraft: { id: string; name: string } | null
+  /** The Workspace being renamed from a rail row, if any. */
+  renameDraft: WorkspaceRenameDraft | null
   onSelect: (workspaceId: string) => void
   onNameChange: (name: string) => void
   /** Commits the create and reports whether it committed, so the inline
@@ -46,6 +47,13 @@ export function WorkspaceSection({
   onOpenSettings: () => void
 }) {
   const [creating, setCreating] = useState(false)
+
+  /** Escape abandons the create: the field closes and the name goes with it,
+   *  so reopening it never resumes a name the thinker walked away from. */
+  function cancelCreate() {
+    setCreating(false)
+    onNameChange("")
+  }
 
   function create(event: FormEvent) {
     event.preventDefault()
@@ -63,8 +71,10 @@ export function WorkspaceSection({
             className={workspace.id === activeWorkspaceId ? "workspace-row active" : "workspace-row"}
           >
             {renameDraft?.id === workspace.id ? (
-              <RailRenameForm
+              <WorkspaceRenameForm
                 draft={renameDraft}
+                fieldLabel="Rename Thinking Workspace"
+                submitLabel="Save Workspace name"
                 onDraftChange={onRenameDraftChange}
                 onSubmit={onRename}
                 onCancel={onCancelRename}
@@ -93,7 +103,7 @@ export function WorkspaceSection({
       </ul>
       <div className="workspace-rail-footer">
         {creating ? (
-          <form onSubmit={create}>
+          <CreateWorkspaceForm onSubmit={create} onCancel={cancelCreate}>
             <input
               autoFocus
               aria-label="New Thinking Workspace name"
@@ -102,7 +112,7 @@ export function WorkspaceSection({
               placeholder="New Thinking Workspace"
             />
             <button type="submit">Create Workspace</button>
-          </form>
+          </CreateWorkspaceForm>
         ) : (
           <button onClick={() => setCreating(true)}>New Workspace</button>
         )}
@@ -118,30 +128,17 @@ export function WorkspaceSection({
   )
 }
 
-/** In-place rename on a rail row. Escape cancels through the shared escape
- *  stack, at the same priority as the settings sheet's rename form, so a
- *  cancel clears the one draft wherever it was started. */
-function RailRenameForm({
-  draft,
-  onDraftChange,
+/** The rail footer's create field. Escape dismisses it through the shared
+ *  escape stack, at the same priority as an inline rename. */
+function CreateWorkspaceForm({
   onSubmit,
   onCancel,
+  children,
 }: {
-  draft: { id: string; name: string }
-  onDraftChange: (name: string) => void
   onSubmit: (event: FormEvent) => void
   onCancel: () => void
+  children: ReactNode
 }) {
   useEscape(onCancel, ESCAPE_PRIORITY.dialog)
-  return (
-    <form onSubmit={onSubmit}>
-      <input
-        autoFocus
-        aria-label="Rename Thinking Workspace"
-        value={draft.name}
-        onChange={(event) => onDraftChange(event.target.value)}
-      />
-      <button type="submit">Save Workspace name</button>
-    </form>
-  )
+  return <form onSubmit={onSubmit}>{children}</form>
 }

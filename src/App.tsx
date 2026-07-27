@@ -21,6 +21,7 @@ import { useEscape, ESCAPE_PRIORITY } from "./escape-stack"
 import { useModalFocus } from "./modal-focus"
 import { CommandPalette, useCommandPaletteShortcut, type PaletteAction } from "./command-palette"
 import { WorkspaceSection } from "./workspace-section"
+import type { WorkspaceRenameDraft } from "./workspace-rename-form"
 import { CaptureBar } from "./capture-bar"
 import { SearchSection } from "./search-section"
 import { CommittedNotesSection } from "./committed-notes-section"
@@ -49,7 +50,12 @@ export function App() {
   const drafts = useNoteDrafts()
   const [workspaceName, setWorkspaceName] = useState("")
   const [noteMarkdown, setNoteMarkdown] = useState("")
-  const [renameDraft, setRenameDraft] = useState<{ id: string; name: string } | null>(null)
+  // Two rename drafts, one per surface, because an in-place rename is
+  // transient editing state and not a fact about the Workspace: the rail's
+  // draft opens a field on a row, the sheet's opens one inside the sheet, and
+  // both commit through the one `renameWorkspace`.
+  const [railRenameDraft, setRailRenameDraft] = useState<WorkspaceRenameDraft | null>(null)
+  const [renameDraft, setRenameDraft] = useState<WorkspaceRenameDraft | null>(null)
   const [pendingDelete, setPendingDelete] = useState<PendingDelete>(null)
   const [renameLabelDraft, setRenameLabelDraft] = useState<{ id: string; name: string } | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
@@ -219,14 +225,19 @@ export function App() {
     void submit(thinkingWorkspace.selectWorkspace(workspaceId))
   }
 
-  function renameWorkspace(event: FormEvent) {
-    event.preventDefault()
-    if (!renameDraft) return
-    void submit(thinkingWorkspace.renameWorkspace(renameDraft.id, renameDraft.name)).then(
-      (result) => {
-        if (result.committed) setRenameDraft(null)
-      },
-    )
+  /** The one rename commit. Each surface hands in its own draft and is told
+   *  to clear it, so a refused rename leaves the field open with the name. */
+  function renameWorkspace(
+    draft: WorkspaceRenameDraft | null,
+    clearDraft: () => void,
+  ): (event: FormEvent) => void {
+    return (event) => {
+      event.preventDefault()
+      if (!draft) return
+      void submit(thinkingWorkspace.renameWorkspace(draft.id, draft.name)).then((result) => {
+        if (result.committed) clearDraft()
+      })
+    }
   }
 
   function answerDeleteConfirmation(answer: "confirm" | "cancel") {
@@ -356,7 +367,7 @@ export function App() {
     selectWorkspace,
     canUndo,
     undo: undoLastChange,
-    renameWorkspace: () => setRenameDraft({ id: activeWorkspace!.id, name: activeWorkspace!.name }),
+    renameWorkspace: () => setRailRenameDraft({ id: activeWorkspace!.id, name: activeWorkspace!.name }),
     deleteWorkspace: () => setPendingDelete(requestDelete(activeWorkspace!)),
     exportMarkdown: exportWorkspace,
     exportArchive: exportWorkspaceArchive,
@@ -386,14 +397,14 @@ export function App() {
           workspaces={workspaces}
           activeWorkspaceId={activeWorkspace?.id}
           name={workspaceName}
-          renameDraft={renameDraft}
+          renameDraft={railRenameDraft}
           onSelect={selectWorkspace}
           onNameChange={setWorkspaceName}
           onCreate={createWorkspace}
-          onStartRename={(workspace) => setRenameDraft({ id: workspace.id, name: workspace.name })}
-          onRenameDraftChange={(name) => setRenameDraft((draft) => (draft ? { ...draft, name } : draft))}
-          onRename={renameWorkspace}
-          onCancelRename={() => setRenameDraft(null)}
+          onStartRename={(workspace) => setRailRenameDraft({ id: workspace.id, name: workspace.name })}
+          onRenameDraftChange={(name) => setRailRenameDraft((draft) => (draft ? { ...draft, name } : draft))}
+          onRename={renameWorkspace(railRenameDraft, () => setRailRenameDraft(null))}
+          onCancelRename={() => setRailRenameDraft(null)}
           onOpenSettings={() => setSettingsOpen(true)}
         />
       }
@@ -496,18 +507,12 @@ export function App() {
           selectedMissing={
             localDiscovery.selectedMissing || cloudDiscovery.selectedMissing
           }
-          /* Closing the sheet abandons an uncommitted rename with it, so the
-             one draft never outlives the surface the thinker dismissed and
-             lingers as an open field on the rail row. */
-          onClose={() => {
-            setSettingsOpen(false)
-            setRenameDraft(null)
-          }}
+          onClose={() => setSettingsOpen(false)}
           onStartRename={(workspace: ThinkingWorkspace) =>
             setRenameDraft({ id: workspace.id, name: workspace.name })
           }
           onRenameDraftChange={(name) => setRenameDraft((draft) => (draft ? { ...draft, name } : draft))}
-          onRename={renameWorkspace}
+          onRename={renameWorkspace(renameDraft, () => setRenameDraft(null))}
           onCancelRename={() => setRenameDraft(null)}
           onRequestDelete={(workspace) => setPendingDelete(requestDelete(workspace))}
           onAnswerDelete={answerDeleteConfirmation}

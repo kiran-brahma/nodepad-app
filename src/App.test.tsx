@@ -2061,6 +2061,46 @@ describe("R14 Workspace rail and switcher", () => {
       expect(screen.queryByLabelText("New Thinking Workspace name")).toBeNull(),
     )
     expect(await within(rail).findByRole("button", { name: "Fieldwork" })).toBeDefined()
+
+    // The name draft went with the commit: reopening offers an empty field.
+    await user.click(within(rail).getByRole("button", { name: "New Workspace" }))
+    expect(
+      (screen.getByLabelText("New Thinking Workspace name") as HTMLInputElement).value,
+    ).toBe("")
+  })
+
+  it("Escape abandons the create field and the name typed into it", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    const rail = await screen.findByRole("navigation", { name: "Workspaces" })
+
+    await user.click(within(rail).getByRole("button", { name: "New Workspace" }))
+    await user.type(screen.getByLabelText("New Thinking Workspace name"), "Abandoned")
+    await user.keyboard("{Escape}")
+
+    await waitFor(() =>
+      expect(screen.queryByLabelText("New Thinking Workspace name")).toBeNull(),
+    )
+    expect(createdWorkspaceNames).toEqual([])
+    await user.click(within(rail).getByRole("button", { name: "New Workspace" }))
+    expect(
+      (screen.getByLabelText("New Thinking Workspace name") as HTMLInputElement).value,
+    ).toBe("")
+  })
+
+  it("a rename started in the settings sheet leaves the rail rows alone", async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    const rail = await screen.findByRole("navigation", { name: "Workspaces" })
+
+    await openSettings(user)
+    await user.click(screen.getByRole("button", { name: "Rename" }))
+
+    // The sheet owns that draft: the rail row is still a name to select by,
+    // and only one rename field is on screen to type into.
+    expect(screen.getByLabelText("Thinking Workspace name")).toBeDefined()
+    expect(screen.queryByLabelText("Rename Thinking Workspace")).toBeNull()
+    expect(within(rail).getByRole("button", { name: "Research" })).toBeDefined()
   })
 
   it("renames a Workspace in place from a rail row and clears the draft", async () => {
